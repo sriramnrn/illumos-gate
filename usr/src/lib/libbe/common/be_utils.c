@@ -21,10 +21,9 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-
-/*
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 
@@ -53,9 +52,11 @@
 #include <deflt.h>
 #include <wait.h>
 #include <libdevinfo.h>
+#include <libgen.h>
 
 #include <libbe.h>
 #include <libbe_priv.h>
+#include <boot_utils.h>
 
 /* Private function prototypes */
 static int update_dataset(char *, int, char *, char *, char *);
@@ -203,7 +204,7 @@ be_get_defaults(struct be_defaults *defaults)
 		const char *res = defread_r(BE_DFLT_BENAME_STARTS, defp);
 		if (res != NULL && res[0] != NULL) {
 			(void) strlcpy(defaults->be_deflt_bename_starts_with,
-			    res, ZFS_MAXNAMELEN);
+			    res, ZFS_MAX_DATASET_NAME_LEN);
 			defaults->be_deflt_rpool_container = B_TRUE;
 		}
 		defclose_r(defp);
@@ -230,13 +231,30 @@ be_make_root_ds(const char *zpool, const char *be_name, char *be_root_ds,
 {
 	struct be_defaults be_defaults;
 	be_get_defaults(&be_defaults);
+	char	*root_ds = NULL;
 
-	if (be_defaults.be_deflt_rpool_container)
-		(void) snprintf(be_root_ds, be_root_ds_size, "%s/%s", zpool,
-		    be_name);
-	else
-		(void) snprintf(be_root_ds, be_root_ds_size, "%s/%s/%s", zpool,
-		    BE_CONTAINER_DS_NAME, be_name);
+	if (getzoneid() == GLOBAL_ZONEID) {
+		if (be_defaults.be_deflt_rpool_container) {
+			(void) snprintf(be_root_ds, be_root_ds_size,
+			    "%s/%s", zpool, be_name);
+		} else {
+			(void) snprintf(be_root_ds, be_root_ds_size,
+			    "%s/%s/%s", zpool, BE_CONTAINER_DS_NAME, be_name);
+		}
+	} else {
+		/*
+		 * In non-global zone we can use path from mounted root dataset
+		 * to generate BE's root dataset string.
+		 */
+		if ((root_ds = be_get_ds_from_dir("/")) != NULL) {
+			(void) snprintf(be_root_ds, be_root_ds_size, "%s/%s",
+			    dirname(root_ds), be_name);
+		} else {
+			be_print_err(gettext("be_make_root_ds: zone root "
+			    "dataset is not mounted\n"));
+			return;
+		}
+	}
 }
 
 /*
@@ -258,12 +276,26 @@ be_make_container_ds(const char *zpool,  char *container_ds,
 {
 	struct be_defaults be_defaults;
 	be_get_defaults(&be_defaults);
+	char	*root_ds = NULL;
 
-	if (be_defaults.be_deflt_rpool_container)
-		(void) snprintf(container_ds, container_ds_size, "%s", zpool);
-	else
-		(void) snprintf(container_ds, container_ds_size, "%s/%s", zpool,
-		    BE_CONTAINER_DS_NAME);
+	if (getzoneid() == GLOBAL_ZONEID) {
+		if (be_defaults.be_deflt_rpool_container) {
+			(void) snprintf(container_ds, container_ds_size,
+			    "%s", zpool);
+		} else {
+			(void) snprintf(container_ds, container_ds_size,
+			    "%s/%s", zpool, BE_CONTAINER_DS_NAME);
+		}
+	} else {
+		if ((root_ds = be_get_ds_from_dir("/")) != NULL) {
+			(void) strlcpy(container_ds, dirname(root_ds),
+			    container_ds_size);
+		} else {
+			be_print_err(gettext("be_make_container_ds: zone root "
+			    "dataset is not mounted\n"));
+			return;
+		}
+	}
 }
 
 /*
@@ -284,7 +316,7 @@ be_make_container_ds(const char *zpool,  char *container_ds,
 char *
 be_make_name_from_ds(const char *dataset, char *rc_loc)
 {
-	char	ds[ZFS_MAXNAMELEN];
+	char	ds[ZFS_MAX_DATASET_NAME_LEN];
 	char	*tok = NULL;
 	char	*name = NULL;
 	struct be_defaults be_defaults;
@@ -2436,11 +2468,25 @@ be_zpool_find_current_be_callback(zpool_handle_t *zlp, void *data)
 	zfs_handle_t		*zhp = NULL;
 	const char		*zpool =  zpool_get_name(zlp);
 	char			be_container_ds[MAXPATHLEN];
+	char			*zpath = NULL;
 
 	/*
 	 * Generate string for BE container dataset
 	 */
-	be_make_container_ds(zpool, be_container_ds, sizeof (be_container_ds));
+	if (getzoneid() != GLOBAL_ZONEID) {
+		if ((zpath = be_get_ds_from_dir("/")) != NULL) {
+			(void) strlcpy(be_container_ds, dirname(zpath),
+			    sizeof (be_container_ds));
+		} else {
+			be_print_err(gettext(
+			    "be_zpool_find_current_be_callback: "
+			    "zone root dataset is not mounted\n"));
+			return (0);
+		}
+	} else {
+		be_make_container_ds(zpool, be_container_ds,
+		    sizeof (be_container_ds));
+	}
 
 	/*
 	 * Check if a BE container dataset exists in this pool.
@@ -2930,6 +2976,33 @@ be_get_default_isa(void)
 }
 
 /*
+ * Function: be_get_platform
+ * Description:
+ *      Returns the platfom name
+ * Parameters:
+ *		none
+ * Returns:
+ *		NULL - the platform name returned by sysinfo() was too
+ *			long for local variables
+ *		char * - pointer to a string containing the platform name
+ * Scope:
+ *		Semi-private (library wide use only)
+ */
+char *
+be_get_platform(void)
+{
+	int	i;
+	static char	default_inst[ARCH_LENGTH] = "";
+
+	if (default_inst[0] == '\0') {
+		i = sysinfo(SI_PLATFORM, default_inst, ARCH_LENGTH);
+		if (i < 0 || i > ARCH_LENGTH)
+			return (NULL);
+	}
+	return (default_inst);
+}
+
+/*
  * Function: be_run_cmd
  * Description:
  *	Runs a command in a separate subprocess.  Splits out stdout from stderr
@@ -2990,7 +3063,7 @@ be_run_cmd(char *command, char *stderr_buf, int stderr_bufsize,
 	    (stderr_bufsize <= 0) || (stdout_bufsize <  0) ||
 	    ((stdout_buf != NULL) ^ (stdout_bufsize != 0))) {
 		return (BE_ERR_INVAL);
-}
+	}
 
 	/* Set up command so popen returns stderr, not stdout */
 	if (snprintf(cmdline, BUFSIZ, "%s 2> %s", command,
@@ -3041,7 +3114,11 @@ be_run_cmd(char *command, char *stderr_buf, int stderr_bufsize,
 		rval = BE_ERR_EXTCMD;
 	} else if (WIFEXITED(exit_status)) {
 		exit_status = (int)((char)WEXITSTATUS(exit_status));
-		if (exit_status != 0) {
+		/*
+		 * error code BC_NOUPDT means more recent version
+		 * is installed
+		 */
+		if (exit_status != BC_SUCCESS && exit_status != BC_NOUPDT) {
 			(void) snprintf(oneline, BUFSIZ, gettext("be_run_cmd: "
 			    "command terminated with error status: %d\n"),
 			    exit_status);

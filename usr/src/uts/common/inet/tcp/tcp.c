@@ -23,6 +23,8 @@
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011, Joyent Inc. All rights reserved.
  * Copyright (c) 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2013,2014 by Delphix. All rights reserved.
+ * Copyright 2014, OmniTI Computer Consulting, Inc. All rights reserved.
  */
 /* Copyright (c) 1990 Mentat Inc. */
 
@@ -231,11 +233,6 @@ int tcp_squeue_flag;
  * to 1% of available memory / number of cpus
  */
 uint_t tcp_free_list_max_cnt = 0;
-
-#define	TCP_XMIT_LOWATER	4096
-#define	TCP_XMIT_HIWATER	49152
-#define	TCP_RECV_LOWATER	2048
-#define	TCP_RECV_HIWATER	128000
 
 #define	TIDUSZ	4096	/* transport interface data unit size */
 
@@ -1587,8 +1584,11 @@ tcp_connect_ipv4(tcp_t *tcp, ipaddr_t *dstaddrp, in_port_t dstport,
 
 	/* Handle __sin6_src_id if socket not bound to an IP address */
 	if (srcid != 0 && connp->conn_laddr_v4 == INADDR_ANY) {
-		ip_srcid_find_id(srcid, &connp->conn_laddr_v6,
-		    IPCL_ZONEID(connp), tcps->tcps_netstack);
+		if (!ip_srcid_find_id(srcid, &connp->conn_laddr_v6,
+		    IPCL_ZONEID(connp), B_TRUE, tcps->tcps_netstack)) {
+			/* Mismatch - conn_laddr_v6 would be v6 address. */
+			return (EADDRNOTAVAIL);
+		}
 		connp->conn_saddr_v6 = connp->conn_laddr_v6;
 	}
 
@@ -1669,8 +1669,11 @@ tcp_connect_ipv6(tcp_t *tcp, in6_addr_t *dstaddrp, in_port_t dstport,
 
 	/* Handle __sin6_src_id if socket not bound to an IP address */
 	if (srcid != 0 && IN6_IS_ADDR_UNSPECIFIED(&connp->conn_laddr_v6)) {
-		ip_srcid_find_id(srcid, &connp->conn_laddr_v6,
-		    IPCL_ZONEID(connp), tcps->tcps_netstack);
+		if (!ip_srcid_find_id(srcid, &connp->conn_laddr_v6,
+		    IPCL_ZONEID(connp), B_FALSE, tcps->tcps_netstack)) {
+			/* Mismatch - conn_laddr_v6 would be v4-mapped. */
+			return (EADDRNOTAVAIL);
+		}
 		connp->conn_saddr_v6 = connp->conn_laddr_v6;
 	}
 
@@ -2413,7 +2416,6 @@ tcp_init_values(tcp_t *tcp, tcp_t *parent)
 	tcp->tcp_last_recv_time = ddi_get_lbolt();
 	tcp->tcp_cwnd_max = tcps->tcps_cwnd_max_;
 	tcp->tcp_cwnd_ssthresh = TCP_MAX_LARGEWIN;
-	tcp->tcp_snd_burst = TCP_CWND_INFINITE;
 
 	tcp->tcp_maxpsz_multiplier = tcps->tcps_maxpsz_multiplier;
 
@@ -2718,7 +2720,12 @@ tcp_create_common(cred_t *credp, boolean_t isv6, boolean_t issocket,
 
 	connp->conn_rcvbuf = tcps->tcps_recv_hiwat;
 	connp->conn_sndbuf = tcps->tcps_xmit_hiwat;
-	connp->conn_sndlowat = tcps->tcps_xmit_lowat;
+	if (tcps->tcps_snd_lowat_fraction != 0) {
+		connp->conn_sndlowat = connp->conn_sndbuf /
+		    tcps->tcps_snd_lowat_fraction;
+	} else {
+		connp->conn_sndlowat = tcps->tcps_xmit_lowat;
+	}
 	connp->conn_so_type = SOCK_STREAM;
 	connp->conn_wroff = connp->conn_ht_iphc_allocated +
 	    tcps->tcps_wroff_xtra;
@@ -3792,7 +3799,8 @@ tcp_stack_init(netstackid_t stackid, netstack_t *ns)
 	ASSERT(error == 0);
 	tcps->tcps_ixa_cleanup_mp = allocb_wait(0, BPRI_MED, STR_NOSIG, NULL);
 	ASSERT(tcps->tcps_ixa_cleanup_mp != NULL);
-	cv_init(&tcps->tcps_ixa_cleanup_cv, NULL, CV_DEFAULT, NULL);
+	cv_init(&tcps->tcps_ixa_cleanup_ready_cv, NULL, CV_DEFAULT, NULL);
+	cv_init(&tcps->tcps_ixa_cleanup_done_cv, NULL, CV_DEFAULT, NULL);
 	mutex_init(&tcps->tcps_ixa_cleanup_lock, NULL, MUTEX_DEFAULT, NULL);
 
 	mutex_init(&tcps->tcps_reclaim_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -3857,7 +3865,8 @@ tcp_stack_fini(netstackid_t stackid, void *arg)
 
 	freeb(tcps->tcps_ixa_cleanup_mp);
 	tcps->tcps_ixa_cleanup_mp = NULL;
-	cv_destroy(&tcps->tcps_ixa_cleanup_cv);
+	cv_destroy(&tcps->tcps_ixa_cleanup_ready_cv);
+	cv_destroy(&tcps->tcps_ixa_cleanup_done_cv);
 	mutex_destroy(&tcps->tcps_ixa_cleanup_lock);
 
 	/*

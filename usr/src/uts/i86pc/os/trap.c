@@ -32,7 +32,7 @@
 /*								*/
 
 /*
- * Copyright 2011 Joyent, Inc. All rights reserved.
+ * Copyright 2012 Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -470,6 +470,7 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 	proc_t *p = ttoproc(ct);
 	klwp_t *lwp = ttolwp(ct);
 	uintptr_t lofault;
+	label_t *onfault;
 	faultcode_t pagefault(), res, errcode;
 	enum fault_type fault_type;
 	k_siginfo_t siginfo;
@@ -624,15 +625,44 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 		}
 
 		/*
-		 * See if we can handle as pagefault. Save lofault
-		 * across this. Here we assume that an address
-		 * less than KERNELBASE is a user fault.
-		 * We can do this as copy.s routines verify that the
-		 * starting address is less than KERNELBASE before
-		 * starting and because we know that we always have
-		 * KERNELBASE mapped as invalid to serve as a "barrier".
+		 * If we have an Instruction fault in kernel mode, then that
+		 * means we've tried to execute a user page (SMEP) or both of
+		 * PAE and NXE are enabled. In either case, given that it's a
+		 * kernel fault, we should panic immediately and not try to make
+		 * any more forward progress. This indicates a bug in the
+		 * kernel, which if execution continued, could be exploited to
+		 * wreak havoc on the system.
+		 */
+		if (errcode & PF_ERR_EXEC) {
+			(void) die(type, rp, addr, cpuid);
+		}
+
+		/*
+		 * We need to check if SMAP is in play. If SMAP is in play, then
+		 * any access to a user page will show up as a protection
+		 * violation. To see if SMAP is enabled we first check if it's a
+		 * user address and whether we have the feature flag set. If we
+		 * do and the interrupted registers do not allow for user
+		 * accesses (PS_ACHK is not enabled), then we need to die
+		 * immediately.
+		 */
+		if (addr < (caddr_t)kernelbase &&
+		    is_x86_feature(x86_featureset, X86FSET_SMAP) == B_TRUE &&
+		    (rp->r_ps & PS_ACHK) == 0) {
+			(void) die(type, rp, addr, cpuid);
+		}
+
+		/*
+		 * See if we can handle as pagefault. Save lofault and onfault
+		 * across this. Here we assume that an address less than
+		 * KERNELBASE is a user fault.  We can do this as copy.s
+		 * routines verify that the starting address is less than
+		 * KERNELBASE before starting and because we know that we
+		 * always have KERNELBASE mapped as invalid to serve as a
+		 * "barrier".
 		 */
 		lofault = ct->t_lofault;
+		onfault = ct->t_onfault;
 		ct->t_lofault = 0;
 
 		mstate = new_mstate(ct, LMS_KFAULT);
@@ -651,10 +681,11 @@ trap(struct regs *rp, caddr_t addr, processorid_t cpuid)
 		(void) new_mstate(ct, mstate);
 
 		/*
-		 * Restore lofault. If we resolved the fault, exit.
+		 * Restore lofault and onfault. If we resolved the fault, exit.
 		 * If we didn't and lofault wasn't set, die.
 		 */
 		ct->t_lofault = lofault;
+		ct->t_onfault = onfault;
 		if (res == 0)
 			goto cleanup;
 

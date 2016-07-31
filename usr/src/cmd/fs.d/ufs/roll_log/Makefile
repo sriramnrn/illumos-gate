@@ -20,20 +20,18 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright (c) 1996,1997 by Sun Microsystems, Inc.
 # All rights reserved.
 #
-# cmd/fs.d/ufs/roll_log
 
 include		../../Makefile.fstype
 
 INCLUDES=	roll_log.h
 SRCS=		roll_log.c
 OBJS=		$(SRCS:%.c=$(MACH)/%.o)
+POFILE=		roll_log.po
 
-CLOBBERFILES=	$(OBJS)
+CERRWARN +=	-_gcc=-Wno-switch
 
 .KEEP_STATE:
 
@@ -49,4 +47,4 @@ $(MACH)/%.o:	%.c
 
 lint:	lint_SRCS
 
-clean clobber:
+clean:

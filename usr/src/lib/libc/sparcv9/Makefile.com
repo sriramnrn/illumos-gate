@@ -19,7 +19,11 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2016 Gary Mills
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2015, Joyent, Inc.  All rights reserved.
+# Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2013 Garrett D'Amore <garrett@damore.org>
 #
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Use is subject to license terms.
@@ -114,6 +118,9 @@ $(__GNUC)FPASMOBJS +=		\
 ATOMICOBJS=			\
 	atomic.o
 
+CHACHAOBJS=			\
+	chacha.o
+
 XATTROBJS=			\
 	xattr_common.o
 
@@ -134,10 +141,13 @@ GENOBJS=			\
 	_xregs_clrptr.o		\
 	abs.o			\
 	alloca.o		\
+	arc4random.o		\
+	arc4random_uniform.o	\
 	ascii_strcasecmp.o	\
 	byteorder.o		\
 	cuexit.o		\
 	ecvt.o			\
+	endian.o		\
 	getctxt.o		\
 	lock.o			\
 	makectxt.o		\
@@ -226,6 +236,7 @@ COMSYSOBJS=			\
 	getpid.o		\
 	getpmsg.o		\
 	getppid.o		\
+	getrandom.o		\
 	getrlimit.o		\
 	getuid.o		\
 	gtty.o			\
@@ -250,8 +261,10 @@ COMSYSOBJS=			\
 	pathconf.o		\
 	pause.o			\
 	pcsample.o		\
+	pipe2.o			\
 	pollsys.o		\
 	pread.o			\
+	preadv.o		\
 	priocntlset.o		\
 	processor_bind.o	\
 	processor_info.o	\
@@ -259,6 +272,7 @@ COMSYSOBJS=			\
 	putmsg.o		\
 	putpmsg.o		\
 	pwrite.o		\
+	pwritev.o		\
 	read.o			\
 	readv.o			\
 	resolvepath.o		\
@@ -303,7 +317,6 @@ SYSOBJS=			\
 	forkx.o			\
 	forkallx.o		\
 	gettimeofday.o		\
-	pipe.o			\
 	sparc_utrap_install.o	\
 	syscall.o		\
 	tls_get_addr.o		\
@@ -393,10 +406,12 @@ PORTGEN=			\
 	euclen.o		\
 	event_port.o		\
 	execvp.o		\
+	explicit_bzero.o	\
 	fattach.o		\
 	fdetach.o		\
 	fdopendir.o		\
 	ffs.o			\
+	flock.o			\
 	fls.o			\
 	fmtmsg.o		\
 	ftime.o			\
@@ -407,6 +422,7 @@ PORTGEN=			\
 	getcwd.o		\
 	getdate_err.o		\
 	getdtblsize.o		\
+	getentropy.o		\
 	getenv.o		\
 	getexecname.o		\
 	getgrnam.o		\
@@ -493,6 +509,7 @@ PORTGEN=			\
 	pfmt.o			\
 	pfmt_data.o		\
 	pfmt_print.o		\
+	pipe.o			\
 	plock.o			\
 	poll.o			\
 	posix_fadvise.o		\
@@ -573,6 +590,7 @@ PORTGEN=			\
 	tfind.o			\
 	time_data.o		\
 	time_gdata.o		\
+	timespec_get.o		\
 	tls_data.o		\
 	truncate.o		\
 	tsdalloc.o		\
@@ -676,16 +694,12 @@ PORTI18N=			\
 	getwchar.o		\
 	putwchar.o		\
 	putws.o			\
-	strcasecmp.o		\
-	strcasestr.o		\
-	strncasecmp.o		\
 	strtows.o		\
 	wcsnlen.o		\
 	wcstoimax.o		\
 	wcstol.o		\
 	wcstoul.o		\
 	wcswcs.o		\
-	wscasecmp.o		\
 	wscat.o			\
 	wschr.o			\
 	wscmp.o			\
@@ -693,7 +707,6 @@ PORTI18N=			\
 	wscspn.o		\
 	wsdup.o			\
 	wslen.o			\
-	wsncasecmp.o		\
 	wsncat.o		\
 	wsncmp.o		\
 	wsncpy.o		\
@@ -721,7 +734,6 @@ PORTI18N=			\
 	wdresolve.o		\
 	_ctype.o		\
 	isascii.o		\
-	isdigit.o		\
 	toascii.o
 
 PORTI18N_COND=			\
@@ -745,12 +757,14 @@ PORTLOCALE=			\
 	gb2312.o		\
 	gbk.o			\
 	getdate.o		\
+	isdigit.o		\
 	iswctype.o		\
 	ldpart.o		\
 	lmessages.o		\
 	lnumeric.o		\
 	lmonetary.o		\
 	localeconv.o		\
+	localeimpl.o		\
 	mbftowc.o		\
 	mblen.o			\
 	mbrlen.o		\
@@ -772,9 +786,12 @@ PORTLOCALE=			\
 	runetype.o		\
 	setlocale.o		\
 	setrunelocale.o		\
+	strcasecmp.o		\
+	strcasestr.o		\
 	strcoll.o		\
 	strfmon.o		\
 	strftime.o		\
+	strncasecmp.o		\
 	strptime.o		\
 	strxfrm.o		\
 	table.o			\
@@ -784,6 +801,7 @@ PORTLOCALE=			\
 	ungetwc.o		\
 	utf8.o			\
 	wcrtomb.o		\
+	wcscasecmp.o		\
 	wcscoll.o		\
 	wcsftime.o		\
 	wcsnrtombs.o		\
@@ -818,8 +836,10 @@ TPOOLOBJS=			\
 THREADSOBJS=			\
 	alloc.o			\
 	assfail.o		\
+	c11_thr.o		\
 	cancel.o		\
 	door_calls.o		\
+	tmem.o			\
 	pthr_attr.o		\
 	pthr_barrier.o		\
 	pthr_cond.o		\
@@ -866,6 +886,8 @@ PORTSYS=			\
 	chmod.o			\
 	chown.o			\
 	corectl.o		\
+	eventfd.o		\
+	epoll.o			\
 	exacctsys.o		\
 	execl.o			\
 	execle.o		\
@@ -903,6 +925,7 @@ PORTSYS=			\
 	sidsys.o		\
 	siginterrupt.o		\
 	signal.o		\
+	signalfd.o		\
 	sigpending.o		\
 	sigstack.o		\
 	stat.o			\
@@ -910,6 +933,7 @@ PORTSYS=			\
 	tasksys.o		\
 	time.o			\
 	time_util.o		\
+	timerfd.o		\
 	ucontext.o		\
 	unlink.o		\
 	ustat.o			\
@@ -932,6 +956,7 @@ MOSTOBJS=			\
 	$(FPOBJS64)		\
 	$(FPASMOBJS)		\
 	$(ATOMICOBJS)		\
+	$(CHACHAOBJS)		\
 	$(XATTROBJS)		\
 	$(COMOBJS)		\
 	$(GENOBJS)		\
@@ -993,6 +1018,18 @@ CFLAGS64 += $(CCVERBOSE)
 # This is necessary to avoid problems with calling _ex_unwind().
 # We probably don't want any inlining anyway.
 CFLAGS64 += -xinline=
+
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-switch
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-unused-value
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-type-limits
+CERRWARN += -_gcc=-Wno-char-subscripts
+CERRWARN += -_gcc=-Wno-clobbered
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-address
 
 # Setting THREAD_DEBUG = -DTHREAD_DEBUG (make THREAD_DEBUG=-DTHREAD_DEBUG ...)
 # enables ASSERT() checking in the threads portion of the library.
@@ -1082,6 +1119,7 @@ SRCS=							\
 	$(LIBCBASE)/crt/_ftou.c				\
 	$(LIBCBASE)/gen/_xregs_clrptr.c			\
 	$(LIBCBASE)/gen/byteorder.c			\
+	$(LIBCBASE)/gen/endian.c			\
 	$(LIBCBASE)/gen/ecvt.c				\
 	$(LIBCBASE)/gen/getctxt.c			\
 	$(LIBCBASE)/gen/makectxt.c			\
@@ -1135,9 +1173,6 @@ TIL=				\
 	unwind.o
 
 $(TIL:%=pics/%) := CFLAGS64 += $(LIBCBASE)/threads/sparcv9.il
-
-# This hack is needed until the sparc gcc is fixed for TLS
-pics/tls_data.o := CC = env 'CW_NO_SHADOW=1' $(ONBLD_TOOLS)/bin/$(MACH)/cw -_cc
 
 # Files in fp, port/fp subdirectories that need base.il inline template
 IL=				\
@@ -1198,6 +1233,8 @@ $(PORTPRINT_W:%=pics/%) := \
 
 $(PORTI18N_COND:%=pics/%) := \
 	CPPFLAGS += -D_WCS_LONGLONG
+
+pics/arc4random.o :=	CPPFLAGS += -I$(SRC)/common/crypto/chacha
 
 # Files which need extra optimization
 pics/getenv.o := sparcv9_COPTFLAG = -xO4
@@ -1267,7 +1304,7 @@ assym.h := CFLAGS64 += -g
 GENASSYM_C = $(LIBCDIR)/$(MACH)/genassym.c
 
 genassym: $(GENASSYM_C)
-	$(NATIVECC) -I$(LIBCBASE)/inc -I$(LIBCDIR)/inc \
+	$(NATIVECC) $(NATIVE_CFLAGS) -I$(LIBCBASE)/inc -I$(LIBCDIR)/inc \
 		$(CPPFLAGS.native) -o $@ $(GENASSYM_C)
 
 OFFSETS = $(LIBCDIR)/$(MACH)/offsets.in

@@ -19,8 +19,6 @@
 # CDDL HEADER END
 #
 #
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -44,6 +42,13 @@ YFLAGS =	"-d"
 LINTFLAGS +=	-erroff=E_STATIC_UNUSED
 LINTFLAGS64 +=	-erroff=E_STATIC_UNUSED
 
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-value
+CERRWARN +=	-_gcc=-Wno-unused-function
+
 SRCS=	fsdb.c ud_lib.c
 
 fsdb : fsdb_yacc.o fsdb_lex.o ud_lib.o fsdb.o $(MAPFILES)
@@ -55,13 +60,17 @@ fsdb.o : fsdb.c
 	$(COMPILE.c) -o $@ fsdb.c
 	$(POST_PROCESS_O)
 
-ud_lib.o : ../fstyp/ud_lib.c
-	$(RM) ud_lib.c
-	$(CP) ../fstyp/ud_lib.c ud_lib.c
-	$(RM) ud_lib.h
-	$(CP) ../fstyp/ud_lib.h ud_lib.h
+ud_lib.o : ud_lib.c ud_lib.h
 	$(COMPILE.c) -o $@ ud_lib.c
 	$(POST_PROCESS_O)
+
+ud_lib.c : ../fstyp/ud_lib.c
+	$(RM) $@
+	$(CP) ../fstyp/ud_lib.c $@
+
+ud_lib.h : ../fstyp/ud_lib.h
+	$(RM) $@
+	$(CP) ../fstyp/ud_lib.h $@
 
 y.tab.c : fsdb_yacc.y
 	$(YACC.y) fsdb_yacc.y
@@ -98,11 +107,7 @@ $(POFILE):      $(CATSRCS)
 	$(SED) "/^domain/d" messages.po >  $@
 	$(RM) $(POFILE).i messages.po
 
-lint: y.tab.c lex.yy.c
-	$(RM) ud_lib.h
-	$(CP) ../fstyp/ud_lib.h ud_lib.h
-	$(RM) ud_lib.c
-	$(CP) ../fstyp/ud_lib.c ud_lib.c
+lint: y.tab.c lex.yy.c ud_lib.c ud_lib.h
 	$(LINT.c) -mu $(SRCS)
 
 putback :

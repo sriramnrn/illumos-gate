@@ -21,10 +21,13 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
+
+/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
 #define	_SYSCALL32	/* make 32-bit compat headers visible */
 
@@ -80,6 +83,7 @@
 #include <sys/rctl_impl.h>
 #include <sys/fork.h>
 #include <sys/task.h>
+#include <sys/random.h>
 #include "ramdata.h"
 #include "print.h"
 #include "proto.h"
@@ -365,6 +369,48 @@ prt_ioa(private_t *pri, int raw, long val)	/* print ioctl argument */
 	default:
 		prt_hex(pri, 0, val);
 		break;
+	}
+}
+
+void
+prt_pip(private_t *pri, int raw, long val)	/* print pipe code */
+{
+	const char *s = NULL;
+
+	if (!raw) {
+		switch (val) {
+		case O_CLOEXEC:
+			s = "O_CLOEXEC";
+			break;
+		case O_NONBLOCK:
+			s = "O_NONBLOCK";
+			break;
+		case O_CLOEXEC|O_NONBLOCK:
+			s = "O_CLOEXEC|O_NONBLOCK";
+			break;
+		}
+	}
+
+	if (s == NULL)
+		prt_dex(pri, 0, val);
+	else
+		outstring(pri, s);
+}
+
+void
+prt_pfd(private_t *pri, int raw, long val)	/* print pipe code */
+{
+	int fds[2];
+	char str[32];
+
+	/* the fds only have meaning if the return value is 0 */
+	if (!raw &&
+	    pri->Rval1 >= 0 &&
+	    Pread(Proc, fds, sizeof (fds), (long)val) == sizeof (fds)) {
+		(void) snprintf(str, sizeof (str), "[%d,%d]", fds[0], fds[1]);
+		outstring(pri, str);
+	} else {
+		prt_hex(pri, 0, val);
 	}
 }
 
@@ -690,7 +736,7 @@ mmap_type(private_t *pri, long arg)
 	arg &= ~(_MAP_NEW|MAP_TYPE);
 
 	if (arg & ~(MAP_FIXED|MAP_RENAME|MAP_NORESERVE|MAP_ANON|MAP_ALIGN|
-	    MAP_TEXT|MAP_INITDATA))
+	    MAP_TEXT|MAP_INITDATA|MAP_32BIT))
 		(void) snprintf(str + used, sizeof (pri->code_buf) - used,
 		    "|0x%lX", arg);
 	else {
@@ -708,6 +754,8 @@ mmap_type(private_t *pri, long arg)
 			(void) strlcat(str, "|MAP_TEXT", CBSIZE);
 		if (arg & MAP_INITDATA)
 			(void) strlcat(str, "|MAP_INITDATA", CBSIZE);
+		if (arg & MAP_32BIT)
+			(void) strlcat(str, "|MAP_32BIT", CBSIZE);
 	}
 
 	return ((const char *)str);
@@ -797,6 +845,7 @@ prt_mad(private_t *pri, int raw, long val)	/* print madvise() argument */
 		case MADV_ACCESS_DEFAULT: s = "MADV_ACCESS_DEFAULT";	break;
 		case MADV_ACCESS_LWP:	s = "MADV_ACCESS_LWP";	break;
 		case MADV_ACCESS_MANY:	s = "MADV_ACCESS_MANY";	break;
+		case MADV_PURGE:	s = "MADV_PURGE";	break;
 		}
 	}
 
@@ -1684,11 +1733,17 @@ void
 prt_skt(private_t *pri, int raw, long val)
 {
 	const char *s;
+	long type = val & SOCK_TYPE_MASK;
 
-	if ((ulong_t)val <= MAX_SOCKTYPES && (s = socktype_codes[val]) != NULL)
+	if ((ulong_t)type <= MAX_SOCKTYPES &&
+	    (s = socktype_codes[type]) != NULL) {
 		outstring(pri, s);
-	else
+		if ((val & SOCK_CLOEXEC) != 0) {
+			outstring(pri, "|SOCK_CLOEXEC");
+		}
+	} else {
 		prt_dec(pri, 0, val);
+	}
 }
 
 
@@ -1730,6 +1785,32 @@ prt_skv(private_t *pri, int raw, long val)
 	case SOV_SOCKBSD:	outstring(pri, "SOV_SOCKBSD");	break;
 	case SOV_XPG4_2:	outstring(pri, "SOV_XPG4_2");	break;
 	default:		prt_dec(pri, 0, val);		break;
+	}
+}
+
+/*
+ * Print accept4() flags argument.
+ */
+void
+prt_acf(private_t *pri, int raw, long val)
+{
+	int first = 1;
+	if (raw || !val ||
+	    (val & ~(SOCK_CLOEXEC|SOCK_NDELAY|SOCK_NONBLOCK))) {
+		prt_dex(pri, 0, val);
+		return;
+	}
+
+	if (val & SOCK_CLOEXEC) {
+		outstring(pri, "|SOCK_CLOEXEC" + first);
+		first = 0;
+	}
+	if (val & SOCK_NDELAY) {
+		outstring(pri, "|SOCK_NDELAY" + first);
+		first = 0;
+	}
+	if (val & SOCK_NONBLOCK) {
+		outstring(pri, "|SOCK_NONBLOCK" + first);
 	}
 }
 
@@ -1862,6 +1943,9 @@ tcp_optname(private_t *pri, long val)
 	case TCP_RTO_MIN:		return ("TCP_RTO_MIN");
 	case TCP_RTO_MAX:		return ("TCP_RTO_MAX");
 	case TCP_LINGER2:		return ("TCP_LINGER2");
+	case TCP_KEEPIDLE:		return ("TCP_KEEPIDLE");
+	case TCP_KEEPCNT:		return ("TCP_KEEPCNT");
+	case TCP_KEEPINTVL:		return ("TCP_KEEPINTVL");
 
 	default:			(void) snprintf(pri->code_buf,
 					    sizeof (pri->code_buf),
@@ -2663,6 +2747,27 @@ prt_snf(private_t *pri, int raw, long val)
 		prt_hex(pri, 0, val);
 }
 
+void
+prt_grf(private_t *pri, int raw, long val)
+{
+	int first = 1;
+
+	if (raw != 0 || val == 0 ||
+	    (val & ~(GRND_NONBLOCK | GRND_RANDOM)) != 0) {
+		outstring(pri, "0");
+		return;
+	}
+
+	if (val & GRND_NONBLOCK) {
+		outstring(pri, "|GRND_NONBLOCK" + first);
+		first = 0;
+	}
+	if (val & GRND_RANDOM) {
+		outstring(pri, "|GRND_RANDOM" + first);
+		first = 0;
+	}
+}
+
 /*
  * Array of pointers to print functions, one for each format.
  */
@@ -2691,7 +2796,7 @@ void (* const Print[])() = {
 	prt_rst,	/* RST -- print string returned by syscall */
 	prt_smf,	/* SMF -- print streams message flags */
 	prt_ioa,	/* IOA -- print ioctl argument */
-	prt_nov,	/* Was SIX, now available for reuse */
+	prt_pip,	/* PIP -- print pipe flags */
 	prt_mtf,	/* MTF -- print mount flags */
 	prt_mft,	/* MFT -- print mount file system type */
 	prt_iob,	/* IOB -- print contents of I/O buffer */
@@ -2766,5 +2871,8 @@ void (* const Print[])() = {
 	prt_mob,	/* MOB -- print mmapobj() flags */
 	prt_snf,	/* SNF -- print AT_SYMLINK_[NO]FOLLOW flag */
 	prt_skc,	/* SKC -- print sockconfig() subcode */
+	prt_acf,	/* ACF -- print accept4 flags */
+	prt_pfd,	/* PFD -- print pipe fds */
+	prt_grf,	/* GRF -- print getrandom flags */
 	prt_dec,	/* HID -- hidden argument, make this the last one */
 };

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _RDSV3_IMPL_H
@@ -120,9 +121,6 @@ uint_t	rdsv3_one_sec_in_hz;
 
 #define	jiffies	100
 #define	HZ	(drv_hztousec(1))
-#define	container_of(m, s, name)			\
-	(void *)((uintptr_t)(m) - (uintptr_t)offsetof(s, name))
-#define	ARRAY_SIZE(x)	(sizeof (x) / sizeof (x[0]))
 /* setting this to PAGESIZE throws build errors */
 #define	PAGE_SIZE	4096 /* xxx - fix this */
 #define	BITS_PER_LONG	(sizeof (unsigned long) * 8)
@@ -137,8 +135,6 @@ uint_t	rdsv3_one_sec_in_hz;
 #define	PTR_ERR(ptr)	(int)(uintptr_t)ptr
 
 #define	MAX_SCHEDULE_TIMEOUT	(~0UL>>1)
-
-#define	RDMA_CM_EVENT_ADDR_CHANGE	14
 
 /* list */
 /* copied and modified list_remove_node */
@@ -379,7 +375,7 @@ void rdsv3_ib_dma_unmap_sg(ib_device_t *dev, struct rdsv3_scatterlist *scat,
 static inline void
 rdsv3_sk_sock_hold(struct rsock *sk)
 {
-	atomic_add_32(&sk->sk_refcount, 1);
+	atomic_inc_32(&sk->sk_refcount);
 }
 static inline void
 rdsv3_sk_sock_put(struct rsock *sk)

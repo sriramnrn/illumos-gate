@@ -18,7 +18,9 @@
  *
  * CDDL HEADER END
  */
+
 /*
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -43,6 +45,7 @@
 #include <sys/isa_defs.h>
 #endif /* _ASM */
 
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -131,7 +134,6 @@ extern "C" {
 
 /*
  * NGROUPS_MAX_DEFAULT: *MUST* match NGROUPS_MAX value in limits.h.
- * Remember that the NFS protocol must rev. before this can be increased
  */
 #define	NGROUPS_MAX_DEFAULT	16
 
@@ -145,14 +147,6 @@ extern "C" {
  */
 
 #define	NBPW	sizeof (int)	/* number of bytes in an integer */
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL    0L
-#else
-#define	NULL	0
-#endif
-#endif
 
 #define	CMASK	022		/* default mask for file creation */
 #define	CDLIMIT	(1L<<11)	/* default max write address */

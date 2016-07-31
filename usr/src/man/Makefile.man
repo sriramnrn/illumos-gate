@@ -9,36 +9,59 @@
 # at http://www.illumos.org/license/CDDL.
 #
 
+#
 # Copyright 2011, Richard Lowe
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+#
 
-ROOTMAN			= $(ROOT)/usr/share/man
-ROOTHASMAN		= $(ROOT)/usr/has/man
-
-FILEMODE= 0444
+MANDOC=		$(ONBLD_TOOLS)/bin/${MACH}/mandoc
+ROOTMAN=	$(ROOT)/usr/share/man
+ROOTHASMAN=	$(ROOT)/usr/has/man
+FILEMODE=	0444
 
 # The manual section being built, client Makefiles must set this to, for e.g.
 # "3perl", with case matching that of the section name as installed.
 #
 # MANSECT=
 
-ROOTMANFILES = 	$(MANFILES:%=$(ROOTMAN)/man$(MANSECT)/%)
+MANCHECKS=	$(MANFILES:%=%.check)
+ROOTMANFILES= 	$(MANFILES:%=$(ROOTMAN)/man$(MANSECT)/%)
+ROOTMANLINKS=	$(MANLINKS:%=$(ROOTMAN)/man$(MANSECT)/%)
 
-CLOBBERFILES = $(MANSOFILES)
+$(ROOTMAN)/man$(MANSECT) $(ROOTHASMAN)/man$(MANSECT):
+		$(INS.dir)
 
-$(ROOTMAN)/man$(MANSECT)/% $(ROOTHASMAN)/man$(MANSECT)/%: %
-	$(INS.file)
+$(ROOTHASMAN)/man$(MANSECT)/%: % $(ROOTHASMAN)/man$(MANSECT)
+		$(INS.file)
 
-$(MANSOFILES):
-	$(RM) $@; $(ECHO) ".so $(SOSRC)" > $@
+$(ROOTMAN)/man$(MANSECT)/% : % $(ROOTMAN)/man$(MANSECT)
+		$(INS.file)
+
+#
+# Note that new mandoc adds some checks for lots of extra whitespace.
+# We don't want to check our legacy pages for that.  There are thousands
+# and thousands of them in our man pages.  Please still check them
+# manually when editing (git pbchk will do so for you.)
+#
+$(MANCHECKS):
+		@$(EGREP) -q "^.TH" $(@:%.check=%) || \
+		( $(ECHO) "checking $(@:%.check=%)"; \
+		$(MANDOC) -Tlint $(@:%.check=%) )
+
+$(MANLINKS):
+		$(RM) $@; $(SYMLINK) $(LINKSRC) $@
+
+$(ROOTMANLINKS): $(MANLINKS) $(ROOTMAN)/man$(MANSECT)
+		$(RM) $@; $(CP) -RP $(@F) $(@D)
 
 all:
+
+check:		$(MANCHECKS)
 
 clean:
 
 clobber:
-	$(RM) $(CLOBBERFILES)
-
-lint:
+		$(RM) $(MANLINKS)
 
 .PARALLEL:
 

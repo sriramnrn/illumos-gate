@@ -397,9 +397,8 @@ autos3_monitor(void)
 	fd = open(SRN, O_RDWR|O_EXCL|O_NDELAY);
 	if (fd == -1) {
 		logerror("Unable to open %s: %s", SRN, strerror(errno));
-		thr_exit((void *) errno);
+		thr_exit((void *)(intptr_t)errno);
 	}
-	logerror("Able to open %s", SRN);
 
 	/*
 	 * Tell device we want the special sauce
@@ -408,7 +407,7 @@ autos3_monitor(void)
 	if (ret == -1) {
 		logerror("Ioctl SRN_IOC_AUTOSX failed: %s", strerror(errno));
 		(void) close(fd);
-		thr_exit((void *) errno);
+		thr_exit((void *)(intptr_t)errno);
 	}
 	poll_fd.fd = fd;
 	/*CONSTCOND*/
@@ -423,7 +422,7 @@ autos3_monitor(void)
 			default:
 				logerror("Poll error: %s", strerror(errno));
 				(void) close(fd);
-				thr_exit((void *) errno);
+				thr_exit((void *)(intptr_t)errno);
 			}
 		}
 
@@ -431,7 +430,7 @@ autos3_monitor(void)
 		if (ret == -1) {
 			logerror("ioctl error: %s", strerror(errno));
 			(void) close(fd);
-			thr_exit((void *) errno);
+			thr_exit((void *)(intptr_t)errno);
 		}
 		switch (srn_event.ae_type) {
 		case 3:			/* S3 */

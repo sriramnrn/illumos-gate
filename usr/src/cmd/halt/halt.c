@@ -22,6 +22,10 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
+ */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved	*/
@@ -716,7 +720,7 @@ validate_zfs_err_out:
  */
 static int
 get_zfs_bootfs_arg(const char *arg, const char ** fpth, int *is_zfs,
-		char *bootfs_arg)
+    char *bootfs_arg)
 {
 	zfs_handle_t *zhp = NULL;
 	zpool_handle_t *zpoolp = NULL;
@@ -724,8 +728,8 @@ get_zfs_bootfs_arg(const char *arg, const char ** fpth, int *is_zfs,
 	struct mnttab mnt;
 	char *poolname = NULL;
 	char physpath[MAXPATHLEN];
-	char mntsp[ZPOOL_MAXNAMELEN];
-	char bootfs[ZPOOL_MAXNAMELEN];
+	char mntsp[ZFS_MAX_DATASET_NAME_LEN];
+	char bootfs[ZFS_MAX_DATASET_NAME_LEN];
 	int rc = 0;
 	size_t mntlen = 0;
 	size_t msz;
@@ -1207,8 +1211,13 @@ parse_fastboot_args(char *bootargs_buf, size_t buf_size,
 	}
 
 	if (is_zfs && (buflen != 0 || bename != NULL))	{
-		/* LINTED E_SEC_SPRINTF_UNBOUNDED_COPY */
-		off += sprintf(bootargs_buf + off, "%s ", bootfs_arg);
+		/* do not copy existing zfs boot args */
+		if (strstr(&bootargs_saved[rootlen], "-B") == NULL ||
+		    strstr(&bootargs_saved[rootlen], "zfs-bootfs=") == NULL ||
+		    (strstr(&bootargs_saved[rootlen], "bootpath=") == NULL &&
+		    strstr(&bootargs_saved[rootlen], "diskdevid=") == NULL))
+			/* LINTED E_SEC_SPRINTF_UNBOUNDED_COPY */
+			off += sprintf(bootargs_buf + off, "%s ", bootfs_arg);
 	}
 
 	/*
@@ -1251,8 +1260,6 @@ do_archives_update(int do_fast_reboot)
 int
 main(int argc, char *argv[])
 {
-	char *ttyn = ttyname(STDERR_FILENO);
-
 	int qflag = 0, needlog = 1, nosync = 0;
 	int fast_reboot = 0;
 	int prom_reboot = 0;
@@ -1324,7 +1331,9 @@ main(int argc, char *argv[])
 			qflag = 1;
 			break;
 		case 'y':
-			ttyn = NULL;
+			/*
+			 * Option ignored for backwards compatibility.
+			 */
 			break;
 		case 'f':
 			fast_reboot = 1;
@@ -1447,19 +1456,6 @@ main(int argc, char *argv[])
 	if (mdep != NULL)
 		(void) fprintf(stderr, "mdep = %s\n", (char *)mdep);
 #endif
-
-	if (fcn != AD_BOOT && ttyn != NULL &&
-	    strncmp(ttyn, "/dev/term/", strlen("/dev/term/")) == 0) {
-		/*
-		 * TRANSLATION_NOTE
-		 * Don't translate ``halt -y''
-		 */
-		(void) fprintf(stderr,
-		    gettext("%s: dangerous on a dialup;"), cmdname);
-		(void) fprintf(stderr,
-		    gettext("use ``%s -y'' if you are really sure\n"), cmdname);
-		goto fail;
-	}
 
 	if (needlog) {
 		char *user = getlogin();

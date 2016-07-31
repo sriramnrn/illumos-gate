@@ -32,6 +32,8 @@ CFLAGS += -I$(SRC)/uts/common
 LINTFLAGS += -I$(SRC)/uts/common
 C99MODE= $(C99_ENABLE)
 CFLAGS += $(CCVERBOSE)
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-uninitialized
 
 SRCS = $(PROG:%=%.c)
 OBJECTS = $(SRCS:%.c=%.o)
@@ -41,7 +43,7 @@ th_manage := LDLIBS += -ldevice
 
 ROOTPROG = $(PROG:%=$(ROOTUSRSBIN)/%)
 
-CLOBBERFILES = $(PROG) $(SHFILE)
+CLOBBERFILES = $(PROG) $(SHFILES)
 
 $(ROOTPROG) := FILEMODE = 0555
 
@@ -50,13 +52,13 @@ $(ROOTPROG) := FILEMODE = 0555
 all: $(PROG) $(SHFILES)
 
 $(SHFILES): $(SHFILES).sh
-	-$(RM) $(SHFILES)
+	$(RM) $(SHFILES)
 	$(CP) $(SHFILES).sh $(SHFILES)
 
 install: all $(ROOTUSRSBINPROG) $(ROOTLIBSHFILES)
 
 clean:
-	$(RM) $(OBJECTS) core
+	$(RM) $(OBJECTS)
 
 lint:
 	$(LINT.c) th_define.c $(LDLIBS)

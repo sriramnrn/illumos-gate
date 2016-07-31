@@ -22,7 +22,6 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
 #
 #	This makefile drives the production of assym.h through
 #	compile time intialized data.
@@ -59,7 +58,7 @@ DSF_DIR		= .
 #	Overrides
 #
 CLEANFILES	= $(GENASSYM) Nothing_to_remove
-CLOBBERFILES	= $(ASSYM_H) $(KDI_ASSYM.H) $(CLEANFILES) Nothing_to_remove
+CLOBBERFILES	= $(ASSYM_H) $(KDI_ASSYM_H) $(CLEANFILES) Nothing_to_remove
 
 #
 #	Default build targets.
@@ -84,8 +83,8 @@ CPPFLAGS += -I../../i86pc/io/ppm
 # Create assym.h
 #
 $(GENASSYM): $(GENASSYM_SRC)
-	$(NATIVECC) $(ALWAYS_DEFS) $(GENASSYM_DEFS) $(NATIVE_INC_PATH) \
-	   -o $@ $(GENASSYM_SRC)
+	$(NATIVECC) $(NATIVE_CFLAGS) $(ALWAYS_DEFS) $(GENASSYM_DEFS) \
+	   $(NATIVE_INC_PATH) -o $@ $(GENASSYM_SRC)
 
 $(ASSYM_H): $(OFFSETS_SRC) $(PLATFORM_OFFSETS_SRC) $(GENASSYM)
 	$(OFFSETS_CREATE) <$(OFFSETS_SRC) >$@

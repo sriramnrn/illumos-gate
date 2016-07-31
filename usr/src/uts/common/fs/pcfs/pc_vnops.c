@@ -24,6 +24,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 #include <sys/param.h>
 #include <sys/t_lock.h>
 #include <sys/systm.h>
@@ -772,8 +777,12 @@ pcfs_setattr(
 			goto out;
 		}
 		error = pc_truncate(pcp, (uint_t)vap->va_size);
+
 		if (error)
 			goto out;
+
+		if (vap->va_size == 0)
+			vnevent_truncate(vp, ct);
 	}
 	/*
 	 * Change file modified times.
@@ -1418,8 +1427,8 @@ pcfs_readdir(
 
 
 /*
- * Called from pvn_getpages or pcfs_getpage to get a particular page.
- * When we are called the pcfs is already locked.
+ * Called from pvn_getpages to get a particular page.  When we are called
+ * the pcfs is already locked.
  */
 /*ARGSUSED*/
 static int
@@ -1593,13 +1602,9 @@ pcfs_getpage(
 		*protp = PROT_ALL;
 
 	ASSERT((off & PAGEOFFSET) == 0);
-	if (len <= PAGESIZE) {
-		err = pcfs_getapage(vp, off, len, protp, pl,
-		    plsz, seg, addr, rw, cr);
-	} else {
-		err = pvn_getpages(pcfs_getapage, vp, off,
-		    len, protp, pl, plsz, seg, addr, rw, cr);
-	}
+	err = pvn_getpages(pcfs_getapage, vp, off, len, protp, pl, plsz,
+	    seg, addr, rw, cr);
+
 	pc_unlockfs(fsp);
 	return (err);
 }

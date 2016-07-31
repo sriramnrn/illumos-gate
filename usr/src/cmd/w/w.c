@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright (c) 2013 Gary Mills
+ *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -69,19 +71,15 @@
 #include <priv_utils.h>
 
 /*
- * utmpx defines wider fields for user and line.  For compatibility of output,
- * we are limiting these to the old maximums in utmp. Define UTMPX_NAMELEN
- * to use the full lengths.
+ * Use the full lengths from utmpx for user and line.
  */
-#ifndef UTMPX_NAMELEN
-/* XXX - utmp - fix name length */
-#define	NMAX		(_POSIX_LOGIN_NAME_MAX - 1)
-#define	LMAX		12
-#else	/* UTMPX_NAMELEN */
 static struct utmpx dummy;
 #define	NMAX		(sizeof (dummy.ut_user))
 #define	LMAX		(sizeof (dummy.ut_line))
-#endif /* UTMPX_NAMELEN */
+
+/* Print minimum field widths. */
+#define	LOGIN_WIDTH	8
+#define	LINE_WIDTH	8
 
 #define	DIV60(t)	((t+30)/60)	/* x/60 rounded */
 
@@ -129,9 +127,8 @@ static time_t  	findidle(char *);
 static void	clnarglist(char *);
 static void	showtotals(struct uproc *);
 static void	calctotals(struct uproc *);
-static void	prttime(time_t, char *);
+static void	prttime(time_t, int);
 static void	prtat(time_t *time);
-static void	checkampm(char *str);
 
 static char	*prog;		/* pointer to invocation name */
 static int	header = 1;	/* true if -h flag: don't print heading */
@@ -236,7 +233,7 @@ main(int argc, char *argv[])
 	}
 
 	/*
-	 * read the UTMP_FILE (contains information about each logged in user)
+	 * read the UTMPX_FILE (contains information about each logged in user)
 	 */
 	if (stat(UTMPX_FILE, &sbuf) == ERR) {
 		(void) fprintf(stderr, gettext("%s: stat error of %s: %s\n"),
@@ -267,7 +264,7 @@ main(int argc, char *argv[])
 		prtat(&now);
 		for (ut = utmpbegin; ut < utmpend; ut++) {
 			if (ut->ut_type == USER_PROCESS) {
-				if (!nonuser(*ut))
+				if (!nonuserx(*ut))
 					nusers++;
 			} else if (ut->ut_type == BOOT_TIME) {
 				uptime = now - ut->ut_xtime;
@@ -278,7 +275,7 @@ main(int argc, char *argv[])
 				uptime %= (60*60);
 				mins = uptime / 60;
 
-				PRINTF((gettext("  up")));
+				PRINTF((gettext("up")));
 				if (days > 0)
 					PRINTF((gettext(
 					    " %d day(s),"), days));
@@ -310,11 +307,13 @@ main(int argc, char *argv[])
 			exit(0);
 
 		if (lflag) {
-			PRINTF((dcgettext(NULL, "User     tty           "
-			    "login@  idle   JCPU   PCPU  what\n", LC_TIME)));
+			PRINTF((dcgettext(NULL, "User     tty      "
+			    "login@         idle    JCPU    PCPU what\n",
+			    LC_TIME)));
 		} else {
 			PRINTF((dcgettext(NULL,
-			    "User     tty           idle   what\n", LC_TIME)));
+			    "User     tty         idle what\n",
+			    LC_TIME)));
 		}
 
 		if (fflush(stdout) == EOF) {
@@ -483,17 +482,19 @@ retry:
 			continue;	/* we're looking for somebody else */
 
 		/* print login name of the user */
-		PRINTF(("%-*.*s ", NMAX, NMAX, ut->ut_name));
+		PRINTF(("%-*.*s ", LOGIN_WIDTH, NMAX, ut->ut_name));
 
 		/* print tty user is on */
 		if (lflag) {
-			PRINTF(("%-*.*s", LMAX, LMAX, ut->ut_line));
+			PRINTF(("%-*.*s ", LINE_WIDTH, LMAX, ut->ut_line));
 		} else {
 			if (ut->ut_line[0] == 'p' && ut->ut_line[1] == 't' &&
 			    ut->ut_line[2] == 's' && ut->ut_line[3] == '/') {
-				PRINTF(("%-*.3s", LMAX, &ut->ut_line[4]));
+				PRINTF(("%-*.*s ", LINE_WIDTH, LMAX,
+				    &ut->ut_line[4]));
 			} else {
-				PRINTF(("%-*.*s", LMAX, LMAX, ut->ut_line));
+				PRINTF(("%-*.*s ", LINE_WIDTH, LMAX,
+				    ut->ut_line));
 			}
 		}
 
@@ -505,11 +506,7 @@ retry:
 
 		/* print idle time */
 		idle = findidle(ut->ut_line);
-		if (idle >= 36 * 60) {
-			PRINTF((dcgettext(NULL, "%2ddays ", LC_TIME),
-			    (idle + 12 * 60) / (24 * 60)));
-		} else
-			prttime(idle, " ");
+		prttime(idle, 8);
 		showtotals(findhash(ut->ut_pid));
 	}
 	if (fclose(stdout) == EOF) {
@@ -538,14 +535,14 @@ showtotals(struct uproc *up)
 	if (lflag) {
 		/* print CPU time for all processes & children */
 		/* and need to convert clock ticks to seconds first */
-		prttime((time_t)jobtime, " ");
+		prttime((time_t)jobtime, 8);
 
 		/* print cpu time for interesting process */
 		/* and need to convert clock ticks to seconds first */
-		prttime((time_t)proctime, " ");
+		prttime((time_t)proctime, 8);
 	}
 	/* what user is doing, current process */
-	PRINTF((" %-.32s\n", doing));
+	PRINTF(("%-.32s\n", doing));
 }
 
 /*
@@ -647,26 +644,35 @@ findhash(pid_t pid)
 #define	MON	(30 * DAY)
 
 /*
- * prttime prints a time in hours and minutes or minutes and seconds.
- * The character string tail is printed at the end, obvious
- * strings to pass are "", " ", or "am".
+ * Prttime prints an elapsed time in hours, minutes, or seconds,
+ * right-justified with the rightmost column always blank.
+ * The second argument is the minimum field width.
  */
 static void
-prttime(time_t tim, char *tail)
+prttime(time_t tim, int width)
 {
-	if (tim >= 60) {
-		PRINTF((dcgettext(NULL, "%3d:%02d", LC_TIME),
-		    (int)tim/60, (int)tim%60));
+	char value[36];
+
+	if (tim >= 36 * 60) {
+		(void) snprintf(value, sizeof (value), "%d:%02d:%02d",
+		    (int)tim / HR, (int)(tim % HR) / 60, (int)tim % 60);
+	} else if (tim >= 60) {
+		(void) snprintf(value, sizeof (value), "%d:%02d",
+		    (int)tim / 60, (int)tim % 60);
 	} else if (tim > 0) {
-		PRINTF((dcgettext(NULL, "    %2d", LC_TIME), (int)tim));
+		(void) snprintf(value, sizeof (value), "%d", (int)tim);
 	} else {
-		PRINTF(("      "));
+		(void) strcpy(value, "0");
 	}
-	PRINTF(("%s", tail));
+	width = (width > 2) ? width - 1 : 1;
+	PRINTF(("%*s ", width, value));
 }
 
 /*
- * prints a 12 hour time given a pointer to a time of day
+ * Prints the ISO date or time given a pointer to a time of day,
+ * left-justfied in a 12-character expanding field with the
+ * rightmost column always blank.
+ * Includes a dcgettext() override in case a message catalog is needed.
  */
 static void
 prtat(time_t *time)
@@ -676,23 +682,22 @@ prtat(time_t *time)
 	p = localtime(time);
 	if (now - *time <= 18 * HR) {
 		char timestr[50];
+
 		(void) strftime(timestr, sizeof (timestr),
-		    dcgettext(NULL, "%l:%M""%p", LC_TIME), p);
-		checkampm(timestr);
-		PRINTF((" %s", timestr));
+		    dcgettext(NULL, "%T", LC_TIME), p);
+		PRINTF(("%-11s ", timestr));
 	} else if (now - *time <= 7 * DAY) {
 		char weekdaytime[20];
 
 		(void) strftime(weekdaytime, sizeof (weekdaytime),
-		    dcgettext(NULL, "%a%l%p", LC_TIME), p);
-		checkampm(weekdaytime);
-		PRINTF((" %s", weekdaytime));
+		    dcgettext(NULL, "%a %H:%M", LC_TIME), p);
+		PRINTF(("%-11s ", weekdaytime));
 	} else {
 		char monthtime[20];
 
 		(void) strftime(monthtime, sizeof (monthtime),
-		    dcgettext(NULL, "%e%b%y", LC_TIME), p);
-		PRINTF((" %s", monthtime));
+		    dcgettext(NULL, "%F", LC_TIME), p);
+		PRINTF(("%-11s ", monthtime));
 	}
 }
 
@@ -737,17 +742,5 @@ clnarglist(char *arglist)
 			}
 			*c = '?';
 		}
-	}
-}
-
-/* replaces all occurences of AM/PM with am/pm */
-static void
-checkampm(char *str)
-{
-	char *ampm;
-	while ((ampm = strstr(str, "AM")) != NULL ||
-	    (ampm = strstr(str, "PM")) != NULL) {
-		*ampm = tolower(*ampm);
-		*(ampm+1) = tolower(*(ampm+1));
 	}
 }

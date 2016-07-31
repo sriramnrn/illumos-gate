@@ -25,6 +25,9 @@
 /*
  * Copyright (c) 2011 by Delphix. All rights reserved.
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
 
 /*
  * DTrace print() action
@@ -93,6 +96,7 @@
  * Print structure passed down recursively through printing algorithm.
  */
 typedef struct dt_printarg {
+	dtrace_hdl_t	*pa_dtp;	/* libdtrace handle */
 	caddr_t		pa_addr;	/* base address of trace data */
 	ctf_file_t	*pa_ctfp;	/* CTF container */
 	int		pa_depth;	/* member depth */
@@ -303,8 +307,8 @@ dt_print_float(ctf_id_t base, ulong_t off, dt_printarg_t *pap)
 }
 
 /*
- * A pointer is printed as a fixed-size integer.  This is used both for
- * pointers and functions.
+ * A pointer is generally printed as a fixed-size integer.  If we have a
+ * function pointer, we try to look up its name.
  */
 static void
 dt_print_ptr(ctf_id_t base, ulong_t off, dt_printarg_t *pap)
@@ -313,8 +317,23 @@ dt_print_ptr(ctf_id_t base, ulong_t off, dt_printarg_t *pap)
 	ctf_file_t *ctfp = pap->pa_ctfp;
 	caddr_t addr = pap->pa_addr + off / NBBY;
 	size_t size = ctf_type_size(ctfp, base);
+	ctf_id_t bid = ctf_type_reference(ctfp, base);
+	uint64_t pc;
+	dtrace_syminfo_t dts;
+	GElf_Sym sym;
 
-	dt_print_hex(fp, addr, size);
+	if (bid == CTF_ERR || ctf_type_kind(ctfp, bid) != CTF_K_FUNCTION) {
+		dt_print_hex(fp, addr, size);
+	} else {
+		/* LINTED - alignment */
+		pc = *((uint64_t *)addr);
+		if (dtrace_lookup_by_addr(pap->pa_dtp, pc, &sym, &dts) != 0) {
+			dt_print_hex(fp, addr, size);
+		} else {
+			(void) fprintf(fp, "%s`%s", dts.dts_object,
+			    dts.dts_name);
+		}
+	}
 }
 
 /*
@@ -459,7 +478,32 @@ dt_print_enum(ctf_id_t base, ulong_t off, dt_printarg_t *pap)
 	FILE *fp = pap->pa_file;
 	ctf_file_t *ctfp = pap->pa_ctfp;
 	const char *ename;
+	ssize_t size;
+	caddr_t addr = pap->pa_addr + off / NBBY;
 	int value = 0;
+
+	/*
+	 * The C standard says that an enum will be at most the sizeof (int).
+	 * But if all the values are less than that, the compiler can use a
+	 * smaller size. Thanks standards.
+	 */
+	size = ctf_type_size(ctfp, base);
+	switch (size) {
+	case sizeof (uint8_t):
+		value = *(uint8_t *)addr;
+		break;
+	case sizeof (uint16_t):
+		/* LINTED - alignment */
+		value = *(uint16_t *)addr;
+		break;
+	case sizeof (int32_t):
+		/* LINTED - alignment */
+		value = *(int32_t *)addr;
+		break;
+	default:
+		(void) fprintf(fp, "<invalid enum size %u>", (uint_t)size);
+		return;
+	}
 
 	if ((ename = ctf_enum_name(ctfp, base, value)) != NULL)
 		(void) fprintf(fp, "%s", ename);
@@ -605,12 +649,16 @@ dtrace_print(dtrace_hdl_t *dtp, FILE *fp, const char *typename,
 	dt_printarg_t pa;
 	ctf_id_t id;
 	dt_module_t *dmp;
+	ctf_file_t *ctfp;
+	int libid;
 
 	/*
 	 * Split the fully-qualified type ID (module`id).  This should
 	 * always be the format, but if for some reason we don't find the
 	 * expected value, return 0 to fall back to the generic trace()
-	 * behavior.
+	 * behavior. In the case of userland CTF modules this will actually be
+	 * of the format (module`lib`id). This is due to the fact that those
+	 * modules have multiple CTF containers which `lib` identifies.
 	 */
 	for (s = typename; *s != '\0' && *s != '`'; s++)
 		;
@@ -621,6 +669,20 @@ dtrace_print(dtrace_hdl_t *dtp, FILE *fp, const char *typename,
 	object = alloca(s - typename + 1);
 	bcopy(typename, object, s - typename);
 	object[s - typename] = '\0';
+	dmp = dt_module_lookup_by_name(dtp, object);
+	if (dmp == NULL)
+		return (0);
+
+	if (dmp->dm_pid != 0) {
+		libid = atoi(s + 1);
+		s = strchr(s + 1, '`');
+		if (s == NULL || libid > dmp->dm_nctflibs)
+			return (0);
+		ctfp = dmp->dm_libctfp[libid];
+	} else {
+		ctfp = dt_module_getctf(dtp, dmp);
+	}
+
 	id = atoi(s + 1);
 
 	/*
@@ -628,15 +690,13 @@ dtrace_print(dtrace_hdl_t *dtp, FILE *fp, const char *typename,
 	 * wrong and we can't resolve the ID, bail out and let trace() do the
 	 * work.
 	 */
-	dmp = dt_module_lookup_by_name(dtp, object);
-	if (dmp == NULL || ctf_type_kind(dt_module_getctf(dtp, dmp),
-	    id) == CTF_ERR) {
+	if (ctfp == NULL || ctf_type_kind(ctfp, id) == CTF_ERR)
 		return (0);
-	}
 
 	/* setup the print structure and kick off the main print routine */
+	pa.pa_dtp = dtp;
 	pa.pa_addr = addr;
-	pa.pa_ctfp = dt_module_getctf(dtp, dmp);
+	pa.pa_ctfp = ctfp;
 	pa.pa_nest = 0;
 	pa.pa_depth = 0;
 	pa.pa_file = fp;

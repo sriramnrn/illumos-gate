@@ -19,8 +19,8 @@
 # CDDL HEADER END
 #
 #
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 #
 
 LIBRARY =	libmlsvc.a
@@ -83,10 +83,15 @@ include ../../Makefile.lib
 INCS += -I$(SRC)/common/smbsrv
 
 LDLIBS +=	$(MACH_LDLIBS)
-LDLIBS += -lmlrpc -lsmb -lsmbns -lshare -lsmbfs -lresolv -lnsl -lpkcs11 \
+LDLIBS += -lmlrpc -lsmb -lsmbns -lshare -lsmbfs -lnsl -lpkcs11 \
 	-lscf -lcmdutils -lsec -lavl -lnvpair -luutil -luuid -lgen -lzfs -lc
 
 CPPFLAGS += $(INCS) -D_REENTRANT
+CPPFLAGS += -Dsyslog=smb_syslog
+$(ENABLE_SMB_PRINTING) CPPFLAGS += -DHAVE_CUPS
+
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-uninitialized
 
 SRCS=   $(OBJS_COMMON:%.o=$(SRCDIR)/%.c)
 

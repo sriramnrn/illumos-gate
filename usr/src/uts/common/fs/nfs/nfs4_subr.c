@@ -22,6 +22,9 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ */
 
 /*
  *  	Copyright (c) 1983,1984,1985,1986,1987,1988,1989  AT&T.
@@ -713,33 +716,33 @@ utf8_compare(const utf8string *a, const utf8string *b)
 /*
  * utf8_dir_verify - checks that the utf8 string is valid
  */
-int
+nfsstat4
 utf8_dir_verify(utf8string *str)
 {
 	char *nm;
 	int len;
 
 	if (str == NULL)
-		return (0);
+		return (NFS4ERR_INVAL);
 
 	nm = str->utf8string_val;
 	len = str->utf8string_len;
 	if (nm == NULL || len == 0) {
-		return (0);
+		return (NFS4ERR_INVAL);
 	}
 
 	if (len == 1 && nm[0] == '.')
-		return (0);
+		return (NFS4ERR_BADNAME);
 	if (len == 2 && nm[0] == '.' && nm[1] == '.')
-		return (0);
+		return (NFS4ERR_BADNAME);
 
 	if (utf8_strchr(str, '/') != NULL)
-		return (0);
+		return (NFS4ERR_BADNAME);
 
 	if (utf8_strchr(str, '\0') != NULL)
-		return (0);
+		return (NFS4ERR_BADNAME);
 
-	return (1);
+	return (NFS4_OK);
 }
 
 /*
@@ -931,7 +934,7 @@ top:
 	 * a new one and use that.
 	 */
 #ifdef DEBUG
-	atomic_add_64(&nfscl->nfscl_stat.clalloc.value.ui64, 1);
+	atomic_inc_64(&nfscl->nfscl_stat.clalloc.value.ui64);
 #endif
 	mutex_exit(&nfscl->nfscl_chtable4_lock);
 
@@ -952,7 +955,7 @@ top:
 	if (error != 0) {
 		kmem_cache_free(chtab4_cache, cp);
 #ifdef DEBUG
-		atomic_add_64(&nfscl->nfscl_stat.clalloc.value.ui64, -1);
+		atomic_dec_64(&nfscl->nfscl_stat.clalloc.value.ui64);
 #endif
 		/*
 		 * Warning is unnecessary if error is EINTR.
@@ -974,7 +977,7 @@ top:
 		CLNT_DESTROY(cp->ch_client);
 		kmem_cache_free(chtab4_cache, cp);
 #ifdef DEBUG
-		atomic_add_64(&nfscl->nfscl_stat.clalloc.value.ui64, -1);
+		atomic_dec_64(&nfscl->nfscl_stat.clalloc.value.ui64);
 #endif
 		return ((error != 0) ? error : EINTR);
 	}
@@ -2643,7 +2646,7 @@ rddir4_cache_alloc(int flags)
 		mutex_init(&rdip->lock, NULL, MUTEX_DEFAULT, NULL);
 		rdip->count = 1;
 #ifdef DEBUG
-		atomic_add_64(&clstat4_debug.dirent.value.ui64, 1);
+		atomic_inc_64(&clstat4_debug.dirent.value.ui64);
 #endif
 	}
 	return (rc);
@@ -2700,7 +2703,7 @@ rddir4_cache_free(rddir4_cache_impl *rdip)
 	rddir4_cache *rc = &rdip->rc;
 
 #ifdef DEBUG
-	atomic_add_64(&clstat4_debug.dirent.value.ui64, -1);
+	atomic_dec_64(&clstat4_debug.dirent.value.ui64);
 #endif
 	if (rc->entries != NULL)
 		kmem_free(rc->entries, rc->buflen);

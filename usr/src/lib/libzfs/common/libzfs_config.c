@@ -26,6 +26,8 @@
 
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2015 by Syneto S.R.L. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 /*
@@ -246,8 +248,9 @@ zpool_get_features(zpool_handle_t *zhp)
 		config = zpool_get_config(zhp, NULL);
 	}
 
-	verify(nvlist_lookup_nvlist(config, ZPOOL_CONFIG_FEATURE_STATS,
-	    &features) == 0);
+	if (nvlist_lookup_nvlist(config, ZPOOL_CONFIG_FEATURE_STATS,
+	    &features) != 0)
+		return (NULL);
 
 	return (features);
 }
@@ -316,8 +319,7 @@ zpool_refresh_stats(zpool_handle_t *zhp, boolean_t *missing)
 		verify(nvlist_lookup_uint64(config,
 		    ZPOOL_CONFIG_POOL_TXG, &newtxg) == 0);
 
-		if (zhp->zpool_old_config != NULL)
-			nvlist_free(zhp->zpool_old_config);
+		nvlist_free(zhp->zpool_old_config);
 
 		if (oldtxg != newtxg) {
 			nvlist_free(zhp->zpool_config);
@@ -334,6 +336,62 @@ zpool_refresh_stats(zpool_handle_t *zhp, boolean_t *missing)
 		zhp->zpool_state = POOL_STATE_ACTIVE;
 
 	return (0);
+}
+
+/*
+ * The following environment variables are undocumented
+ * and should be used for testing purposes only:
+ *
+ * __ZFS_POOL_EXCLUDE - don't iterate over the pools it lists
+ * __ZFS_POOL_RESTRICT - iterate only over the pools it lists
+ *
+ * This function returns B_TRUE if the pool should be skipped
+ * during iteration.
+ */
+boolean_t
+zpool_skip_pool(const char *poolname)
+{
+	static boolean_t initialized = B_FALSE;
+	static const char *exclude = NULL;
+	static const char *restricted = NULL;
+
+	const char *cur, *end;
+	int len;
+	int namelen = strlen(poolname);
+
+	if (!initialized) {
+		initialized = B_TRUE;
+		exclude = getenv("__ZFS_POOL_EXCLUDE");
+		restricted = getenv("__ZFS_POOL_RESTRICT");
+	}
+
+	if (exclude != NULL) {
+		cur = exclude;
+		do {
+			end = strchr(cur, ' ');
+			len = (NULL == end) ? strlen(cur) : (end - cur);
+			if (len == namelen && 0 == strncmp(cur, poolname, len))
+				return (B_TRUE);
+			cur += (len + 1);
+		} while (NULL != end);
+	}
+
+	if (NULL == restricted)
+		return (B_FALSE);
+
+	cur = restricted;
+	do {
+		end = strchr(cur, ' ');
+		len = (NULL == end) ? strlen(cur) : (end - cur);
+
+		if (len == namelen && 0 == strncmp(cur, poolname, len)) {
+			return (B_FALSE);
+		}
+
+		cur += (len + 1);
+	} while (NULL != end);
+
+	return (B_TRUE);
 }
 
 /*
@@ -358,6 +416,9 @@ zpool_iter(libzfs_handle_t *hdl, zpool_iter_f func, void *data)
 	hdl->libzfs_pool_iter++;
 	for (cn = uu_avl_first(hdl->libzfs_ns_avl); cn != NULL;
 	    cn = uu_avl_next(hdl->libzfs_ns_avl, cn)) {
+
+		if (zpool_skip_pool(cn->cn_name))
+			continue;
 
 		if (zpool_open_silent(hdl, cn->cn_name, &zhp) != 0) {
 			hdl->libzfs_pool_iter--;
@@ -393,6 +454,9 @@ zfs_iter_root(libzfs_handle_t *hdl, zfs_iter_f func, void *data)
 
 	for (cn = uu_avl_first(hdl->libzfs_ns_avl); cn != NULL;
 	    cn = uu_avl_next(hdl->libzfs_ns_avl, cn)) {
+
+		if (zpool_skip_pool(cn->cn_name))
+			continue;
 
 		if ((zhp = make_dataset_handle(hdl, cn->cn_name)) == NULL)
 			continue;

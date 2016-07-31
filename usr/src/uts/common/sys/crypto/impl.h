@@ -396,7 +396,7 @@ typedef struct kcf_policy_desc {
  * by the policy table has a reference count of one.
  */
 #define	KCF_POLICY_REFHOLD(desc) {		\
-	atomic_add_32(&(desc)->pd_refcnt, 1);	\
+	atomic_inc_32(&(desc)->pd_refcnt);	\
 	ASSERT((desc)->pd_refcnt != 0);		\
 }
 
@@ -407,7 +407,7 @@ typedef struct kcf_policy_desc {
 #define	KCF_POLICY_REFRELE(desc) {				\
 	ASSERT((desc)->pd_refcnt != 0);				\
 	membar_exit();						\
-	if (atomic_add_32_nv(&(desc)->pd_refcnt, -1) == 0)	\
+	if (atomic_dec_32_nv(&(desc)->pd_refcnt) == 0)	\
 		kcf_policy_free_desc(desc);			\
 }
 
@@ -1344,7 +1344,6 @@ extern int kcf_rnd_get_pseudo_bytes(uint8_t *, size_t);
 extern int kcf_rnd_get_bytes(uint8_t *, size_t, boolean_t);
 extern int random_add_pseudo_entropy(uint8_t *, size_t, uint_t);
 extern void kcf_rnd_chpoll(short, int, short *, struct pollhead **);
-extern void kcf_rnd_schedule_timeout(boolean_t);
 extern int crypto_uio_data(crypto_data_t *, uchar_t *, int, cmd_type_t,
     void *, void (*update)());
 extern int crypto_mblk_data(crypto_data_t *, uchar_t *, int, cmd_type_t,

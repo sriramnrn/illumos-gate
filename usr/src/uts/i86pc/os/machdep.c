@@ -283,7 +283,7 @@ mdboot(int cmd, int fcn, char *mdep, boolean_t invoke_cb)
 	(void) spl6();
 	if (!panicstr) {
 		mutex_enter(&cpu_lock);
-		pause_cpus(NULL);
+		pause_cpus(NULL, NULL);
 		mutex_exit(&cpu_lock);
 	}
 
@@ -465,6 +465,8 @@ reset(void)
 		if (options_dip != NULL &&
 		    ddi_prop_exists(DDI_DEV_T_ANY, ddi_root_node(), 0,
 		    "efi-systab")) {
+			if (bootops == NULL)
+				acpi_reset_system();
 			efi_reset();
 		}
 
@@ -535,9 +537,7 @@ impl_obmem_pfnum(pfn_t pf)
 #ifdef	NM_DEBUG
 int nmi_test = 0;	/* checked in intentry.s during clock int */
 int nmtest = -1;
-nmfunc1(arg, rp)
-int	arg;
-struct regs *rp;
+nmfunc1(int arg, struct regs *rp)
 {
 	printf("nmi called with arg = %x, regs = %x\n", arg, rp);
 	nmtest += 50;

@@ -20,6 +20,7 @@
  */
 
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -39,8 +40,10 @@
 #include <locale.h>
 #include <strings.h>
 #include <sharefs/share.h>
+#include <stdlib.h>
+#include "../lib/sharetab.h"
+#include "mountd.h"
 
-extern struct share *findentry(char *);
 /*
  * The following codesets must match what is in libshare_nfs.c until we can
  * request them from the kernel.
@@ -99,48 +102,28 @@ charmap_search(struct netbuf *nbuf, char *opts)
 	char *name;
 	char *result = NULL;
 	char *netid;
-	struct netconfig *nconf;
-	struct nd_hostservlist  *hl = NULL;
 	struct sockaddr *sa;
 
-	/* eventually charopts should be dynamically setup */
-	if (charopts == NULL) {
-		free(copts);
-		return (NULL);
-	}
+	struct cln cln;
 
 	sa = (struct sockaddr *)nbuf->buf;
 
 	switch (sa->sa_family) {
 	case AF_INET:
-		nconf = getnetconfigent("tcp");
+		netid = "tcp";
 		break;
 	case AF_INET6:
-		nconf = getnetconfigent("tcp6");
+		netid = "tcp6";
 		break;
 	default:
 		return (NULL);
 	}
 
-	if (nconf == NULL) {
-		return (NULL);
-	}
-
-	/*
-	 * Use the this API instead of the netdir_getbyaddr()
-	 * to avoid service lookup.
-	 */
-	if (__netdir_getbyaddr_nosrv(nconf, &hl, nbuf)) {
-		syslog(LOG_ERR, "netdir: %s\n", netdir_sperror());
-		freenetconfigent(nconf);
-		return (NULL);
-	}
-
 	copts = strdup(opts);
-	if (copts == NULL) {
-		freenetconfigent(nconf);
+	if (copts == NULL)
 		return (NULL);
-	}
+
+	cln_init_lazy(&cln, netid, nbuf);
 
 	next = copts;
 	while (*next != '\0') {
@@ -156,7 +139,7 @@ charmap_search(struct netbuf *nbuf, char *opts)
 			cp = strchr(name, '=');
 			if (cp != NULL)
 				*cp = '\0';
-			if (in_access_list(NULL, &nbuf, &hl, val)) {
+			if (in_access_list(&cln, val) > 0) {
 				result = name;
 				break;
 			}
@@ -166,8 +149,8 @@ charmap_search(struct netbuf *nbuf, char *opts)
 	if (result != NULL)
 		result = strdup(result);
 
+	cln_fini(&cln);
 	free(copts);
-	freenetconfigent(nconf);
 
 	return (result);
 }
@@ -186,7 +169,6 @@ nfscmd_charmap_lookup(door_desc_t *dp, nfscmd_arg_t *args)
 	struct netbuf nb;
 	struct sockaddr sa;
 	struct share *sh = NULL;
-	char *opts;
 	char *name;
 
 	memset(&res, '\0', sizeof (res));

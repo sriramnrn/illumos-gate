@@ -20,7 +20,8 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+# Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 
 LIBRARY= libzfs.a
@@ -69,8 +70,11 @@ INCS += -I../../libc/inc
 C99MODE=	-xc99=%all
 C99LMODE=	-Xc99=%all
 LDLIBS +=	-lc -lm -ldevid -lgen -lnvpair -luutil -lavl -lefi \
-	-ladm -lidmap -ltsol -lmd -lumem
+	-ladm -lidmap -ltsol -lmd -lumem -lzfs_core
 CPPFLAGS +=	$(INCS) -D_LARGEFILE64_SOURCE=1 -D_REENTRANT
+
+# There's no lint library for zlib, so only include this when building
+$(DYNLIB) := LDLIBS +=	-lz
 
 SRCS=	$(OBJS_COMMON:%.o=$(SRCDIR)/%.c)	\
 	$(OBJS_SHARED:%.o=$(SRC)/common/zfs/%.c)

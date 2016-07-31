@@ -46,7 +46,7 @@ WLCMD_DIR       = $(UTSBASE)/common/io/warlock
 #
 # 	Kernel Module Dependencies
 #
-LDFLAGS += -dy -Nmisc/scsi -Ndrv/scsi_vhci
+LDFLAGS += -dy -Nmisc/scsi -Ndrv/scsi_vhci -Nmisc/sata
 
 #
 #	Define targets
@@ -64,6 +64,10 @@ include $(UTSBASE)/sparc/Makefile.sparc
 # lint pass one enforcement 
 # 
 CFLAGS += $(CCVERBOSE)
+
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= -_gcc=-Wno-switch
 
 #
 #	Default build targets.

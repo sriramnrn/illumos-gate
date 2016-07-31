@@ -1783,8 +1783,7 @@ nfs4_async_putapage(vnode_t *vp, page_t *pp, u_offset_t off, size_t len,
 
 noasync:
 
-	if (curproc == proc_pageout || curproc == proc_fsflush ||
-	    nfs_zone() == mi->mi_zone) {
+	if (curproc == proc_pageout || curproc == proc_fsflush) {
 		/*
 		 * If we get here in the context of the pageout/fsflush,
 		 * or we have run out of memory or we're attempting to
@@ -1804,18 +1803,20 @@ noasync:
 		return (0);
 	}
 
-	/*
-	 * We'll get here only if (nfs_zone() != mi->mi_zone)
-	 * which means that this was a cross-zone sync putpage.
-	 *
-	 * We pass in B_ERROR to pvn_write_done() to re-mark the pages
-	 * as dirty and unlock them.
-	 *
-	 * We don't want to clear B_FORCE here as the caller presumably
-	 * knows what they're doing if they set it.
-	 */
-	pvn_write_done(pp, flags | B_ERROR);
-	return (EPERM);
+	if (nfs_zone() != mi->mi_zone) {
+		/*
+		 * So this was a cross-zone sync putpage.
+		 *
+		 * We pass in B_ERROR to pvn_write_done() to re-mark the pages
+		 * as dirty and unlock them.
+		 *
+		 * We don't want to clear B_FORCE here as the caller presumably
+		 * knows what they're doing if they set it.
+		 */
+		pvn_write_done(pp, flags | B_ERROR);
+		return (EPERM);
+	}
+	return ((*putapage)(vp, pp, off, len, flags, cr));
 }
 
 int
@@ -3147,7 +3148,7 @@ nfs_free_mi4(mntinfo4_t *mi)
 void
 mi_hold(mntinfo4_t *mi)
 {
-	atomic_add_32(&mi->mi_count, 1);
+	atomic_inc_32(&mi->mi_count);
 	ASSERT(mi->mi_count != 0);
 }
 
@@ -3155,7 +3156,7 @@ void
 mi_rele(mntinfo4_t *mi)
 {
 	ASSERT(mi->mi_count != 0);
-	if (atomic_add_32_nv(&mi->mi_count, -1) == 0) {
+	if (atomic_dec_32_nv(&mi->mi_count) == 0) {
 		nfs_free_mi4(mi);
 	}
 }
@@ -4110,7 +4111,7 @@ again:
 void
 fn_hold(nfs4_fname_t *fnp)
 {
-	atomic_add_32(&fnp->fn_refcnt, 1);
+	atomic_inc_32(&fnp->fn_refcnt);
 	NFS4_DEBUG(nfs4_fname_debug, (CE_NOTE,
 	    "fn_hold %p:%s, new refcnt=%d",
 	    (void *)fnp, fnp->fn_name, fnp->fn_refcnt));
@@ -4136,7 +4137,7 @@ recur:
 	parent = fnp->fn_parent;
 	if (parent != NULL)
 		mutex_enter(&parent->fn_lock);	/* prevent new references */
-	newref = atomic_add_32_nv(&fnp->fn_refcnt, -1);
+	newref = atomic_dec_32_nv(&fnp->fn_refcnt);
 	if (newref > 0) {
 		NFS4_DEBUG(nfs4_fname_debug, (CE_NOTE,
 		    "fn_rele %p:%s, new refcnt=%d",

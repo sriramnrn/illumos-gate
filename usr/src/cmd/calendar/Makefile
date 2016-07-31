@@ -20,16 +20,16 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright (c) 1989 by Sun Microsystems, Inc.
 #
 
 PROG= calprog
 SHFILES= calendar
-CLOBBERFILES = $(SHFILE)
 
 include ../Makefile.cmd
+
+CERRWARN += -_gcc=-Wno-implicit-function-declaration
+CLOBBERFILES = $(SHFILES)
 
 .KEEP_STATE:
 

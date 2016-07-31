@@ -22,8 +22,10 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
+ *
  * Copyright 1997-2003 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -31,7 +33,7 @@
 #ifndef _MON_H
 #define	_MON_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -67,19 +69,7 @@ typedef unsigned short WORD;
 #define	MPROGS0	(150 * sizeof (WORD))	/* 300 for pdp11, 600 for 32-bits */
 #define	MSCALE0	4
 
-#ifndef NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
-
-#if defined(__STDC__)
 extern void monitor(int (*)(void), int (*)(void), WORD *, size_t, size_t);
-#else
-extern void monitor();
-#endif
 
 #ifdef	__cplusplus
 }

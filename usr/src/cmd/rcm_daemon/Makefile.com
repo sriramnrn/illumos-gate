@@ -112,13 +112,18 @@ RCM_DIR = rcm
 MOD_DIR = modules
 SCRIPT_DIR = scripts
 
-CLOBBERFILES = $(COMMON_RCM_MODS) $($(MACH)_RCM_MODS) $(RCM_DAEMON)
+CLOBBERFILES += $(COMMON_RCM_MODS) $($(MACH)_RCM_MODS) $(RCM_DAEMON)
 
 LINT_MODULES = $(COMMON_MOD_SRC:.c=.ln) $($(MACH)_MOD_SRC:.c=.ln)
 
 CPPFLAGS += -I..
 CPPFLAGS += -D_POSIX_PTHREAD_SEMANTICS -D_REENTRANT
 CFLAGS += $(CCVERBOSE) $(C_PICFLAGS)
+
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-unused-function
 
 MAPFILES = ../common/mapfile-intf $(MAPFILE.NGB)
 rcm_daemon := LDFLAGS += $(MAPFILES:%=-M%)

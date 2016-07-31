@@ -24,7 +24,8 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright (c) 2013 by Delphix. All rights reserved.
+#
 
 MODULE = genunix.so
 MDBTGT = kvm
@@ -51,7 +52,7 @@ include ../../../../Makefile.cmd.64
 include ../../Makefile.amd64
 include ../../../Makefile.module
 
-dmod/$(MODULE) := LDLIBS += -lm
+dmod/$(MODULE) := LDLIBS += -lm -lproc
 
 #
 # We are not actually hardwiring some dependency on i86pc, we just need to
@@ -67,3 +68,13 @@ CPPFLAGS += -I$(SRC)/uts/common
 
 # Needed to find include file mutex_impl.h
 CPPFLAGS += -I$(SRC)/uts/intel
+
+CERRWARN += -_gcc=-Wno-char-subscripts
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-type-limits
+
+LINTFLAGS64 += -erroff=E_EMPTY_TRANSLATION_UNIT
+
+MODSRCS_DIR = ../../../intel/modules/genunix

@@ -50,6 +50,7 @@ LINKMOD_DIR = linkmod
 DEVFSADM_DIR = devfsadm
 
 CLOBBERFILES = $(MODS) $(DEVLINKTAB) $(DEVFSCOMPATLINKS) $(DEVFSADM_DAEMON)
+CLOBBERFILES += $(POFILE) $(POFILES) ../plcysubr.c
 
 LINK_OBJS_CMN =			\
 	disk_link.o		\
@@ -94,6 +95,10 @@ CFLAGS += $(CCVERBOSE) $(C_PICFLAGS)
 LINTFLAGS += -erroff=E_NAME_USED_NOT_DEF2
 LINTFLAGS += -erroff=E_NAME_DEF_NOT_USED2
 LINTFLAGS += -erroff=E_NAME_MULTIPLY_DEF2
+
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-char-subscripts
+CERRWARN += -_gcc=-Wno-parentheses
 
 # Define the dependencies required by devfsadm and all shared objects.
 LDLIBS +=		-ldevinfo

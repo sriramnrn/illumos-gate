@@ -22,8 +22,9 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -42,9 +43,6 @@
 
 #ifndef _ISO_SETJMP_ISO_H
 #define	_ISO_SETJMP_ISO_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-/* SVr4.0 1.9.2.9 */
 
 #include <sys/feature_tests.h>
 
@@ -90,25 +88,12 @@ typedef int	jmp_buf[_JBLEN];
 #error "ISA not supported"
 #endif
 
-#if defined(__STDC__)
-
-extern int setjmp(jmp_buf);
+extern int setjmp(jmp_buf) __RETURNS_TWICE;
 #pragma unknown_control_flow(setjmp)
-extern int _setjmp(jmp_buf);
+extern int _setjmp(jmp_buf) __RETURNS_TWICE;
 #pragma unknown_control_flow(_setjmp)
 extern void longjmp(jmp_buf, int) __NORETURN;
 extern void _longjmp(jmp_buf, int) __NORETURN;
-
-#else
-
-extern int setjmp();
-#pragma unknown_control_flow(setjmp)
-extern int _setjmp();
-#pragma unknown_control_flow(_setjmp)
-extern void longjmp();
-extern void _longjmp();
-
-#endif  /* __STDC__ */
 
 #if __cplusplus >= 199711L
 }

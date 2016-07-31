@@ -26,6 +26,9 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
+/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
+/* Copyright 2015 Joyent, Inc. */
+
 #ifndef _SYS_FILE_H
 #define	_SYS_FILE_H
 
@@ -52,7 +55,7 @@ extern "C" {
  */
 /*
  * One file structure is allocated for each open/creat/pipe call.
- * Main use is to hold the read/write pointer associated with
+ * Main use is to hold the read/write pointer (and OFD locks) associated with
  * each open file.
  */
 typedef struct file {
@@ -64,6 +67,7 @@ typedef struct file {
 	struct cred	*f_cred;	/* credentials of user who opened it */
 	struct f_audit_data	*f_audit_data;	/* file audit data */
 	int		f_count;	/* reference count */
+	struct filock *f_filock;	/* ptr to single lock_descriptor_t */
 } file_t;
 
 /*
@@ -113,7 +117,14 @@ typedef struct fpollinfo {
 #define	FSEARCH		0x200000	/* O_SEARCH = 0x200000 */
 #define	FEXEC		0x400000	/* O_EXEC = 0x400000 */
 
+#define	FCLOEXEC	0x800000	/* O_CLOEXEC = 0x800000 */
+
 #ifdef _KERNEL
+
+/*
+ * This is a flag that is set on f_flag2, but is never user-visible
+ */
+#define	FEPOLLED	0x8000
 
 /*
  * Fake flags for driver ioctl calls to inform them of the originating
@@ -163,6 +174,19 @@ typedef struct fpollinfo {
 #ifndef L_SET
 #define	L_SET	0	/* for lseek */
 #endif /* L_SET */
+
+/*
+ * For flock(3C).  These really don't belong here but for historical reasons
+ * the interface defines them to be here.
+ */
+#define	LOCK_SH	1
+#define	LOCK_EX	2
+#define	LOCK_NB	4
+#define	LOCK_UN	8
+
+#if !defined(_STRICT_SYMBOLS)
+extern int flock(int, int);
+#endif
 
 #if defined(_KERNEL)
 

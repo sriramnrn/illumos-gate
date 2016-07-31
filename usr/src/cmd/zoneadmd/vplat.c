@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Joyent Inc. All rights reserved.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -156,6 +158,8 @@ static void tsol_unmounts(zlog_t *, char *);
 static m_label_t *zlabel = NULL;
 static m_label_t *zid_label = NULL;
 static priv_set_t *zprivs = NULL;
+
+static const char *DFLT_FS_ALLOWED = "hsfs,smbfs,nfs,nfs3,nfs4,nfsdyn";
 
 /* from libsocket, not in any header file */
 extern int getnetmaskbyaddr(struct in_addr, struct in_addr *);
@@ -1730,7 +1734,7 @@ mount_filesystems(zlog_t *zlogp, zone_mnt_t mount_cmd)
 	cb.pgcd_zlogp = zlogp;
 	cb.pgcd_fs_tab = &fs_ptr;
 	cb.pgcd_num_fs = &num_fs;
-	if (brand_platform_iter_gmounts(bh, zonepath,
+	if (brand_platform_iter_gmounts(bh, zone_name, zonepath,
 	    plat_gmount_cb, &cb) != 0) {
 		zerror(zlogp, B_FALSE, "unable to mount filesystems");
 		brand_close(bh);
@@ -3476,8 +3480,7 @@ out:
 	zonecfg_free_rctl_value_list(rctltab.zone_rctl_valptr);
 	if (error && nvl_packed != NULL)
 		free(nvl_packed);
-	if (nvl != NULL)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 	if (nvlv != NULL)
 		free(nvlv);
 	if (handle != NULL)
@@ -4289,7 +4292,8 @@ remove_mlps(zlog_t *zlogp, zoneid_t zoneid)
 }
 
 int
-prtmount(const struct mnttab *fs, void *x) {
+prtmount(const struct mnttab *fs, void *x)
+{
 	zerror((zlog_t *)x, B_FALSE, "  %s", fs->mnt_mountp);
 	return (0);
 }
@@ -4589,26 +4593,42 @@ setup_zone_hostid(zone_dochandle_t handle, zlog_t *zlogp, zoneid_t zoneid)
 static int
 setup_zone_fs_allowed(zone_dochandle_t handle, zlog_t *zlogp, zoneid_t zoneid)
 {
-	char fsallowedp[ZONE_FS_ALLOWED_MAX];
+	char fsallowed[ZONE_FS_ALLOWED_MAX];
+	char *fsallowedp = fsallowed;
+	int len = sizeof (fsallowed);
 	int res;
 
-	res = zonecfg_get_fs_allowed(handle, fsallowedp, sizeof (fsallowedp));
+	res = zonecfg_get_fs_allowed(handle, fsallowed, len);
 
 	if (res == Z_BAD_PROPERTY) {
-		return (Z_OK);
+		/* No value, set the defaults */
+		(void) strlcpy(fsallowed, DFLT_FS_ALLOWED, len);
 	} else if (res != Z_OK) {
-		report_prop_err(zlogp, "fs-allowed", fsallowedp, res);
+		report_prop_err(zlogp, "fs-allowed", fsallowed, res);
 		return (res);
+	} else if (fsallowed[0] == '-') {
+		/* dropping default privs - use remaining list */
+		if (fsallowed[1] != ',')
+			return (Z_OK);
+		fsallowedp += 2;
+		len -= 2;
+	} else {
+		/* Has a value, append the defaults */
+		if (strlcat(fsallowed, ",", len) >= len ||
+		    strlcat(fsallowed, DFLT_FS_ALLOWED, len) >= len) {
+			report_prop_err(zlogp, "fs-allowed", fsallowed,
+			    Z_TOO_BIG);
+			return (Z_TOO_BIG);
+		}
 	}
 
-	if (zone_setattr(zoneid, ZONE_ATTR_FS_ALLOWED, &fsallowedp,
-	    sizeof (fsallowedp)) != 0) {
+	if (zone_setattr(zoneid, ZONE_ATTR_FS_ALLOWED, fsallowedp, len) != 0) {
 		zerror(zlogp, B_TRUE,
 		    "fs-allowed couldn't be set: %s: %d", fsallowedp, res);
 		return (Z_SYSTEM);
 	}
 
-	return (res);
+	return (Z_OK);
 }
 
 static int

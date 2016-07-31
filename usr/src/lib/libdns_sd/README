@@ -21,8 +21,8 @@
 #
 # CDDL HEADER END
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
+Updated from upstream version mDNSResponder-625.41.2
+Updated from upstream version mDNSResponder-576.30.4
 
 Multicast DNS and Service Discovery support in Solaris using the
 Apple Bonjour source code (v107.6). Apple Bonjour source can be 

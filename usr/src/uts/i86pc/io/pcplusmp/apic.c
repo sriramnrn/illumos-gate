@@ -26,7 +26,14 @@
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
 
+/*
+ * To understand how the pcplusmp module interacts with the interrupt subsystem
+ * read the theory statement in uts/i86pc/os/intr.c.
+ */
 
 /*
  * PSMI 1.1 extensions are supported only in 2.6 and later versions.
@@ -69,6 +76,7 @@
 #include <sys/pci_intr_lib.h>
 #include <sys/spl.h>
 #include <sys/clock.h>
+#include <sys/cyclic.h>
 #include <sys/dditypes.h>
 #include <sys/sunddi.h>
 #include <sys/x_call.h>
@@ -134,10 +142,6 @@ uchar_t apic_vectortoipl[APIC_AVAIL_VECTOR / APIC_VECTOR_PER_IPL] = {
 
 uchar_t	apic_ipltopri[MAXIPL + 1];	/* unix ipl to apic pri	*/
 	/* The taskpri to be programmed into apic to mask given ipl */
-
-#if defined(__amd64)
-uchar_t	apic_cr8pri[MAXIPL + 1];	/* unix ipl to cr8 pri	*/
-#endif
 
 /*
  * Correlation of the hardware vector to the IPL in use, initialized
@@ -210,14 +214,6 @@ static struct	psm_info apic_psm_info = {
 };
 
 static void *apic_hdlp;
-
-/*
- * apic_let_idle_redistribute can have the following values:
- * 0 - If clock decremented it from 1 to 0, clock has to call redistribute.
- * apic_redistribute_lock prevents multiple idle cpus from redistributing
- */
-int	apic_num_idle_redistributions = 0;
-static	int apic_let_idle_redistribute = 0;
 
 /* to gather intr data and redistribute */
 static void apic_redistribute_compute(void);
@@ -292,17 +288,11 @@ apic_init(void)
 		/* fill up any empty ipltopri slots */
 		apic_ipltopri[j] = (i << APIC_IPL_SHIFT) + APIC_BASE_VECT;
 	apic_init_common();
-#if defined(__amd64)
-	/*
-	 * Make cpu-specific interrupt info point to cr8pri vector
-	 */
-	for (i = 0; i <= MAXIPL; i++)
-		apic_cr8pri[i] = apic_ipltopri[i] >> APIC_IPL_SHIFT;
-	CPU->cpu_pri_data = apic_cr8pri;
-#else
+
+#if !defined(__amd64)
 	if (cpuid_have_cr8access(CPU))
 		apic_have_32bit_cr8 = 1;
-#endif	/* __amd64 */
+#endif
 }
 
 static void
@@ -573,23 +563,9 @@ apic_intr_enter(int ipl, int *vectorp)
 		nipl = apic_ipls[vector];
 
 		*vectorp = apic_vector_to_irq[vector + APIC_BASE_VECT];
-		if (apic_mode == LOCAL_APIC) {
-#if defined(__amd64)
-			setcr8((ulong_t)(apic_ipltopri[nipl] >>
-			    APIC_IPL_SHIFT));
-#else
-			if (apic_have_32bit_cr8)
-				setcr8((ulong_t)(apic_ipltopri[nipl] >>
-				    APIC_IPL_SHIFT));
-			else
-				LOCAL_APIC_WRITE_REG(APIC_TASK_REG,
-				    (uint32_t)apic_ipltopri[nipl]);
-#endif
-			LOCAL_APIC_WRITE_REG(APIC_EOI_REG, 0);
-		} else {
-			X2APIC_WRITE(APIC_TASK_REG, apic_ipltopri[nipl]);
-			X2APIC_WRITE(APIC_EOI_REG, 0);
-		}
+
+		apic_reg_ops->apic_write_task_reg(apic_ipltopri[nipl]);
+		apic_reg_ops->apic_send_eoi(0);
 
 		return (nipl);
 	}
@@ -620,20 +596,7 @@ apic_intr_enter(int ipl, int *vectorp)
 	nipl = apic_ipls[vector];
 	*vectorp = irq = apic_vector_to_irq[vector + APIC_BASE_VECT];
 
-	if (apic_mode == LOCAL_APIC) {
-#if defined(__amd64)
-		setcr8((ulong_t)(apic_ipltopri[nipl] >> APIC_IPL_SHIFT));
-#else
-		if (apic_have_32bit_cr8)
-			setcr8((ulong_t)(apic_ipltopri[nipl] >>
-			    APIC_IPL_SHIFT));
-		else
-			LOCAL_APIC_WRITE_REG(APIC_TASK_REG,
-			    (uint32_t)apic_ipltopri[nipl]);
-#endif
-	} else {
-		X2APIC_WRITE(APIC_TASK_REG, apic_ipltopri[nipl]);
-	}
+	apic_reg_ops->apic_write_task_reg(apic_ipltopri[nipl]);
 
 	cpu_infop->aci_current[nipl] = (uchar_t)irq;
 	cpu_infop->aci_curipl = (uchar_t)nipl;
@@ -645,11 +608,7 @@ apic_intr_enter(int ipl, int *vectorp)
 	 * cache usage. So, we leave it as is.
 	 */
 	if (!apic_level_intr[irq]) {
-		if (apic_mode == LOCAL_APIC) {
-			LOCAL_APIC_WRITE_REG(APIC_EOI_REG, 0);
-		} else {
-			X2APIC_WRITE(APIC_EOI_REG, 0);
-		}
+		apic_reg_ops->apic_send_eoi(0);
 	}
 
 #ifdef	DEBUG
@@ -689,14 +648,7 @@ apic_intr_exit(int prev_ipl, int irq)
 {
 	apic_cpus_info_t *cpu_infop;
 
-#if defined(__amd64)
-	setcr8((ulong_t)apic_cr8pri[prev_ipl]);
-#else
-	if (apic_have_32bit_cr8)
-		setcr8((ulong_t)(apic_ipltopri[prev_ipl] >> APIC_IPL_SHIFT));
-	else
-		apicadr[APIC_TASK_REG] = apic_ipltopri[prev_ipl];
-#endif
+	apic_reg_ops->apic_write_task_reg(apic_ipltopri[prev_ipl]);
 
 	APIC_INTR_EXIT();
 }
@@ -731,14 +683,7 @@ psm_intr_exit_fn(void)
 static void
 apic_setspl(int ipl)
 {
-#if defined(__amd64)
-	setcr8((ulong_t)apic_cr8pri[ipl]);
-#else
-	if (apic_have_32bit_cr8)
-		setcr8((ulong_t)(apic_ipltopri[ipl] >> APIC_IPL_SHIFT));
-	else
-		apicadr[APIC_TASK_REG] = apic_ipltopri[ipl];
-#endif
+	apic_reg_ops->apic_write_task_reg(apic_ipltopri[ipl]);
 
 	/* interrupts at ipl above this cannot be in progress */
 	apic_cpus[psm_get_cpu_id()].aci_ISR_in_progress &= (2 << ipl) - 1;
@@ -845,7 +790,7 @@ apic_get_ipivect(int ipl, int type)
 	int irq;
 
 	if ((irq = apic_allocate_irq(APIC_VECTOR(ipl))) != -1) {
-		if (vector = apic_allocate_vector(ipl, irq, 1)) {
+		if ((vector = apic_allocate_vector(ipl, irq, 1))) {
 			apic_irq_table[irq]->airq_mps_intr_index =
 			    RESERVE_INDEX;
 			apic_irq_table[irq]->airq_vector = vector;
@@ -990,6 +935,10 @@ static void
 apic_post_cyclic_setup(void *arg)
 {
 _NOTE(ARGUNUSED(arg))
+
+	cyc_handler_t cyh;
+	cyc_time_t cyt;
+
 	/* cpu_lock is held */
 	/* set up a periodic handler for intr redistribution */
 
@@ -999,14 +948,22 @@ _NOTE(ARGUNUSED(arg))
 	 */
 	if (!apic_oneshot)
 		return;
+
 	/*
 	 * Register a periodical handler for the redistribution processing.
-	 * On X86, CY_LOW_LEVEL is mapped to the level 2 interrupt, so
-	 * DDI_IPL_2 should be passed to ddi_periodic_add() here.
+	 * Though we would generally prefer to use the DDI interface for
+	 * periodic handler invocation, ddi_periodic_add(9F), we are
+	 * unfortunately already holding cpu_lock, which ddi_periodic_add will
+	 * attempt to take for us.  Thus, we add our own cyclic directly:
 	 */
-	apic_periodic_id = ddi_periodic_add(
-	    (void (*)(void *))apic_redistribute_compute, NULL,
-	    apic_redistribute_sample_interval, DDI_IPL_2);
+	cyh.cyh_func = (void (*)(void *))apic_redistribute_compute;
+	cyh.cyh_arg = NULL;
+	cyh.cyh_level = CY_LOW_LEVEL;
+
+	cyt.cyt_when = 0;
+	cyt.cyt_interval = apic_redistribute_sample_interval;
+
+	apic_cyclic_id = cyclic_add(&cyh, &cyt);
 }
 
 static void

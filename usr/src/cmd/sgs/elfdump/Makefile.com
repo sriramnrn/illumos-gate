@@ -31,7 +31,7 @@ include		$(SRC)/cmd/sgs/Makefile.com
 COMOBJ =	main.o			corenote.o \
 		dwarf.o			struct_layout.o \
 		struct_layout_i386.o 	struct_layout_amd64.o \
- 		struct_layout_sparc.o 	struct_layout_sparcv9.o
+		struct_layout_sparc.o 	struct_layout_sparcv9.o
 
 COMOBJ32 =	elfdump32.o fake_shdr32.o
 
@@ -57,6 +57,8 @@ LDLIBS +=	$(ELFLIBDIR) -lelf $(LDDBGLIBDIR) $(LDDBG_LIB) \
 
 LINTFLAGS +=	-x
 LINTFLAGS64 +=	-x
+
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 BLTDEFS =	msg.h
 BLTDATA =	msg.c

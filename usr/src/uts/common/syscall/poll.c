@@ -24,9 +24,13 @@
  * Use is subject to license terms.
  */
 
-/* Copyright (c) 2011 by Delphix. All rights reserved. */
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
+
+/*
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
+ */
 
 /*
  * Portions of this source code were derived from Berkeley 4.3 BSD
@@ -73,11 +77,13 @@ static struct {
 	kstat_named_t	pollcachehit;	/* list matched 100% w/ cached one */
 	kstat_named_t	pollcachephit;	/* list matched < 100% w/ cached one */
 	kstat_named_t	pollcachemiss;	/* every list entry is dif from cache */
+	kstat_named_t	pollunlockfail;	/* failed to perform pollunlock */
 } pollstats = {
 	{ "polllistmiss",	KSTAT_DATA_UINT64 },
 	{ "pollcachehit",	KSTAT_DATA_UINT64 },
 	{ "pollcachephit",	KSTAT_DATA_UINT64 },
-	{ "pollcachemiss",	KSTAT_DATA_UINT64 }
+	{ "pollcachemiss",	KSTAT_DATA_UINT64 },
+	{ "pollunlockfail",	KSTAT_DATA_UINT64 }
 };
 
 kstat_named_t *pollstats_ptr = (kstat_named_t *)&pollstats;
@@ -91,6 +97,10 @@ struct pplock	{
 };
 
 static struct pplock plocks[NPHLOCKS];	/* Hash array of pollhead locks */
+
+/* Contention lock & list for preventing deadlocks in recursive /dev/poll. */
+static	kmutex_t	pollstate_contenders_lock;
+static	pollstate_t	*pollstate_contenders = NULL;
 
 #ifdef DEBUG
 static int pollchecksanity(pollstate_t *, nfds_t);
@@ -219,19 +229,35 @@ static int plist_chkdupfd(file_t *, polldat_t *, pollstate_t *, pollfd_t *, int,
  * (which hold poll locks on entry to xx_poll(), then acquire foo)
  * and pollwakeup() threads (which hold foo, then acquire poll locks).
  *
- * pollunlock(void) releases whatever poll locks the current thread holds,
- *	returning a cookie for use by pollrelock();
+ * pollunlock(*cookie) releases whatever poll locks the current thread holds,
+ *	setting a cookie for use by pollrelock();
  *
  * pollrelock(cookie) reacquires previously dropped poll locks;
  *
  * polllock(php, mutex) does the common case: pollunlock(),
  *	acquire the problematic mutex, pollrelock().
+ *
+ * If polllock() or pollunlock() return non-zero, it indicates that a recursive
+ * /dev/poll is in progress and pollcache locks cannot be dropped.  Callers
+ * must handle this by indicating a POLLNVAL in the revents of the VOP_POLL.
  */
 int
-pollunlock(void)
+pollunlock(int *lockstate)
 {
+	pollstate_t *ps = curthread->t_pollstate;
 	pollcache_t *pcp;
-	int lockstate = 0;
+
+	ASSERT(lockstate != NULL);
+
+	/*
+	 * There is no way to safely perform a pollunlock() while in the depths
+	 * of a recursive /dev/poll operation.
+	 */
+	if (ps != NULL && ps->ps_depth > 1) {
+		ps->ps_flags |= POLLSTATE_ULFAIL;
+		pollstats.pollunlockfail.value.ui64++;
+		return (-1);
+	}
 
 	/*
 	 * t_pollcache is set by /dev/poll and event ports (port_fd.c).
@@ -239,21 +265,28 @@ pollunlock(void)
 	 * the t_pollcache should be NULL.
 	 */
 	if (curthread->t_pollcache == NULL)
-		pcp = curthread->t_pollstate->ps_pcache;
+		pcp = ps->ps_pcache;
 	else
 		pcp = curthread->t_pollcache;
 
-	if (mutex_owned(&pcp->pc_lock)) {
-		lockstate = 1;
+	if (!mutex_owned(&pcp->pc_lock)) {
+		*lockstate = 0;
+	} else {
+		*lockstate = 1;
 		mutex_exit(&pcp->pc_lock);
 	}
-	return (lockstate);
+	return (0);
 }
 
 void
 pollrelock(int lockstate)
 {
+	pollstate_t *ps = curthread->t_pollstate;
 	pollcache_t *pcp;
+
+	/* Skip this whole ordeal if the pollcache was not locked to begin */
+	if (lockstate == 0)
+		return;
 
 	/*
 	 * t_pollcache is set by /dev/poll and event ports (port_fd.c).
@@ -261,23 +294,27 @@ pollrelock(int lockstate)
 	 * the t_pollcache should be NULL.
 	 */
 	if (curthread->t_pollcache == NULL)
-		pcp = curthread->t_pollstate->ps_pcache;
+		pcp = ps->ps_pcache;
 	else
 		pcp = curthread->t_pollcache;
 
-	if (lockstate > 0)
-		mutex_enter(&pcp->pc_lock);
+	mutex_enter(&pcp->pc_lock);
 }
 
 /* ARGSUSED */
-void
+int
 polllock(pollhead_t *php, kmutex_t *lp)
 {
-	if (!mutex_tryenter(lp)) {
-		int lockstate = pollunlock();
+	if (mutex_tryenter(lp) == 0) {
+		int state;
+
+		if (pollunlock(&state) != 0) {
+			return (-1);
+		}
 		mutex_enter(lp);
-		pollrelock(lockstate);
+		pollrelock(state);
 	}
+	return (0);
 }
 
 static int
@@ -288,9 +325,7 @@ poll_common(pollfd_t *fds, nfds_t nfds, timespec_t *tsp, k_sigset_t *ksetp)
 	proc_t *p = ttoproc(t);
 	int fdcnt = 0;
 	int i;
-	int imm_timeout = 0;
-	clock_t *deltap = NULL;
-	clock_t delta;
+	hrtime_t deadline; /* hrtime value when we want to return */
 	pollfd_t *pollfdp;
 	pollstate_t *ps;
 	pollcache_t *pcp;
@@ -301,24 +336,15 @@ poll_common(pollfd_t *fds, nfds_t nfds, timespec_t *tsp, k_sigset_t *ksetp)
 	/*
 	 * Determine the precise future time of the requested timeout, if any.
 	 */
-	if (tsp != NULL) {
-		if (tsp->tv_sec == 0 && tsp->tv_nsec == 0) {
-			imm_timeout = 1;
-		} else {
-			/*
-			 * cv_relwaituntil_sig operates at
-			 * the tick granularity, which by default is 10 ms.
-			 * Convert the specified timespec to ticks, rounding
-			 * up to at least 1 tick to avoid flooding the
-			 * system with small high resolution timers.
-			 */
-			delta = SEC_TO_TICK(tsp->tv_sec) +
-			    NSEC_TO_TICK(tsp->tv_nsec);
-			if (delta < 1) {
-				delta = 1;
-			}
-			deltap = &delta;
-		}
+	if (tsp == NULL) {
+		deadline = -1;
+	} else if (tsp->tv_sec == 0 && tsp->tv_nsec == 0) {
+		deadline = 0;
+	} else {
+		/* They must wait at least a tick. */
+		deadline = ((hrtime_t)tsp->tv_sec * NANOSEC) + tsp->tv_nsec;
+		deadline = MAX(deadline, nsec_per_tick);
+		deadline += gethrtime();
 	}
 
 	/*
@@ -351,16 +377,15 @@ poll_common(pollfd_t *fds, nfds_t nfds, timespec_t *tsp, k_sigset_t *ksetp)
 		/*
 		 * Sleep until we have passed the requested future
 		 * time or until interrupted by a signal.
-		 * Do not check for signals if we have a zero timeout.
+		 * Do not check for signals if we do not want to wait.
 		 */
-		if (!imm_timeout) {
+		if (deadline != 0) {
 			mutex_enter(&t->t_delay_lock);
-			while ((delta = cv_relwaituntil_sig(&t->t_delay_cv,
-			    &t->t_delay_lock, deltap, TR_MILLISEC)) > 0)
+			while ((error = cv_timedwait_sig_hrtime(&t->t_delay_cv,
+			    &t->t_delay_lock, deadline)) > 0)
 				continue;
 			mutex_exit(&t->t_delay_lock);
-			if (delta == 0)
-				error = EINTR;
+			error = (error == 0) ? EINTR : 0;
 		}
 		goto pollout;
 	}
@@ -378,10 +403,7 @@ poll_common(pollfd_t *fds, nfds_t nfds, timespec_t *tsp, k_sigset_t *ksetp)
 	 * Need to allocate memory for pollstate before anything because
 	 * the mutex and cv are created in this space
 	 */
-	if ((ps = t->t_pollstate) == NULL) {
-		t->t_pollstate = pollstate_create();
-		ps = t->t_pollstate;
-	}
+	ps = pollstate_create();
 
 	if (ps->ps_pcache == NULL)
 		ps->ps_pcache = pcache_alloc();
@@ -534,13 +556,13 @@ poll_common(pollfd_t *fds, nfds_t nfds, timespec_t *tsp, k_sigset_t *ksetp)
 		}
 
 		/*
-		 * If T_POLLWAKE is set, a pollwakeup() was performed on
+		 * If PC_POLLWAKE is set, a pollwakeup() was performed on
 		 * one of the file descriptors.  This can happen only if
 		 * one of the VOP_POLL() functions dropped pcp->pc_lock.
 		 * The only current cases of this is in procfs (prpoll())
 		 * and STREAMS (strpoll()).
 		 */
-		if (pcp->pc_flag & T_POLLWAKE)
+		if (pcp->pc_flag & PC_POLLWAKE)
 			continue;
 
 		/*
@@ -550,20 +572,19 @@ poll_common(pollfd_t *fds, nfds_t nfds, timespec_t *tsp, k_sigset_t *ksetp)
 		 * Do not check for signals if we have a zero timeout.
 		 */
 		mutex_exit(&ps->ps_lock);
-		if (imm_timeout) {
-			delta = -1;
+		if (deadline == 0) {
+			error = -1;
 		} else {
-			delta = cv_relwaituntil_sig(&pcp->pc_cv, &pcp->pc_lock,
-			    deltap, TR_MILLISEC);
+			error = cv_timedwait_sig_hrtime(&pcp->pc_cv,
+			    &pcp->pc_lock, deadline);
 		}
 		mutex_exit(&pcp->pc_lock);
 		/*
 		 * If we have received a signal or timed out
 		 * then break out and return.
 		 */
-		if (delta <= 0) {
-			if (delta == 0)
-				error = EINTR;
+		if (error <= 0) {
+			error = (error == 0) ? EINTR : 0;
 			break;
 		}
 		/*
@@ -896,9 +917,9 @@ retry:
 }
 
 /*
- * This function is called to inform a thread that
- * an event being polled for has occurred.
- * The pollstate lock on the thread should be held on entry.
+ * This function is called to inform a thread (or threads) that an event being
+ * polled on has occurred.  The pollstate lock on the thread should be held
+ * on entry.
  */
 void
 pollnotify(pollcache_t *pcp, int fd)
@@ -906,8 +927,9 @@ pollnotify(pollcache_t *pcp, int fd)
 	ASSERT(fd < pcp->pc_mapsize);
 	ASSERT(MUTEX_HELD(&pcp->pc_lock));
 	BT_SET(pcp->pc_bitmap, fd);
-	pcp->pc_flag |= T_POLLWAKE;
-	cv_signal(&pcp->pc_cv);
+	pcp->pc_flag |= PC_POLLWAKE;
+	cv_broadcast(&pcp->pc_cv);
+	pcache_wake_parents(pcp);
 }
 
 /*
@@ -2034,7 +2056,7 @@ retry:
 				 */
 				if ((pdp->pd_php != NULL) &&
 				    (pollfdp[entry].events == pdp->pd_events) &&
-				    ((pcp->pc_flag & T_POLLWAKE) == 0)) {
+				    ((pcp->pc_flag & PC_POLLWAKE) == 0)) {
 					BT_CLEAR(pcp->pc_bitmap, fd);
 				}
 				/*
@@ -2230,20 +2252,47 @@ pcache_clean_entry(pollstate_t *ps, int fd)
 	}
 }
 
+void
+pcache_wake_parents(pollcache_t *pcp)
+{
+	pcachelink_t *pl, *pln;
+
+	ASSERT(MUTEX_HELD(&pcp->pc_lock));
+
+	for (pl = pcp->pc_parents; pl != NULL; pl = pln) {
+		mutex_enter(&pl->pcl_lock);
+		if (pl->pcl_state == PCL_VALID) {
+			ASSERT(pl->pcl_parent_pc != NULL);
+			cv_broadcast(&pl->pcl_parent_pc->pc_cv);
+		}
+		pln = pl->pcl_parent_next;
+		mutex_exit(&pl->pcl_lock);
+	}
+}
+
 /*
- * This is the first time this thread has ever polled,
- * so we have to create its pollstate structure.
- * This will persist for the life of the thread,
- * until it calls pollcleanup().
+ * Initialize thread pollstate structure.
+ * It will persist for the life of the thread, until it calls pollcleanup().
  */
 pollstate_t *
-pollstate_create(void)
+pollstate_create()
 {
-	pollstate_t *ps;
+	pollstate_t *ps = curthread->t_pollstate;
 
-	ps = kmem_zalloc(sizeof (pollstate_t), KM_SLEEP);
-	ps->ps_nsets = POLLFDSETS;
-	ps->ps_pcacheset = pcacheset_create(ps->ps_nsets);
+	if (ps == NULL) {
+		/*
+		 * This is the first time this thread has ever polled, so we
+		 * have to create its pollstate structure.
+		 */
+		ps = kmem_zalloc(sizeof (pollstate_t), KM_SLEEP);
+		ps->ps_nsets = POLLFDSETS;
+		ps->ps_pcacheset = pcacheset_create(ps->ps_nsets);
+		curthread->t_pollstate = ps;
+	} else {
+		ASSERT(ps->ps_depth == 0);
+		ASSERT(ps->ps_flags == 0);
+		ASSERT(ps->ps_pc_stack[0] == 0);
+	}
 	return (ps);
 }
 
@@ -2261,12 +2310,192 @@ pollstate_destroy(pollstate_t *ps)
 	pcacheset_destroy(ps->ps_pcacheset, ps->ps_nsets);
 	ps->ps_pcacheset = NULL;
 	if (ps->ps_dpbuf != NULL) {
-		kmem_free(ps->ps_dpbuf, ps->ps_dpbufsize * sizeof (pollfd_t));
+		kmem_free(ps->ps_dpbuf, ps->ps_dpbufsize);
 		ps->ps_dpbuf = NULL;
 	}
 	mutex_destroy(&ps->ps_lock);
 	kmem_free(ps, sizeof (pollstate_t));
 }
+
+static int
+pollstate_contend(pollstate_t *ps, pollcache_t *pcp)
+{
+	pollstate_t *rem, *next;
+	pollcache_t *desired_pc;
+	int result = 0, depth_total;
+
+	mutex_enter(&pollstate_contenders_lock);
+	/*
+	 * There is a small chance that the pollcache of interest became
+	 * available while we were waiting on the contenders lock.
+	 */
+	if (mutex_tryenter(&pcp->pc_lock) != 0) {
+		goto out;
+	}
+
+	/*
+	 * Walk the list of contended pollstates, searching for evidence of a
+	 * deadlock condition.
+	 */
+	depth_total = ps->ps_depth;
+	desired_pc = pcp;
+	for (rem = pollstate_contenders; rem != NULL; rem = next) {
+		int i, j;
+		next = rem->ps_contend_nextp;
+
+		/* Is this pollstate holding the pollcache of interest? */
+		for (i = 0; i < rem->ps_depth; i++) {
+			if (rem->ps_pc_stack[i] != desired_pc) {
+				continue;
+			}
+
+			/*
+			 * The remote pollstate holds the pollcache lock we
+			 * desire.  If it is waiting on a pollcache we hold,
+			 * then we can report the obvious deadlock.
+			 */
+			ASSERT(rem->ps_contend_pc != NULL);
+			for (j = 0; j < ps->ps_depth; j++) {
+				if (rem->ps_contend_pc == ps->ps_pc_stack[j]) {
+					rem->ps_flags |= POLLSTATE_STALEMATE;
+					result = -1;
+					goto out;
+				}
+			}
+
+			/*
+			 * The remote pollstate is not blocking on a pollcache
+			 * which would deadlock against us.  That pollcache
+			 * may, however, be held by a pollstate which would
+			 * result in a deadlock.
+			 *
+			 * To detect such a condition, we continue walking
+			 * through the list using the pollcache blocking the
+			 * remote thread as our new search target.
+			 *
+			 * Return to the front of pollstate_contenders since it
+			 * is not ordered to guarantee complete dependency
+			 * traversal.  The below depth tracking places an upper
+			 * bound on iterations.
+			 */
+			desired_pc = rem->ps_contend_pc;
+			next = pollstate_contenders;
+
+			/*
+			 * The recursion depth of the remote pollstate is used
+			 * to calculate a final depth for the local /dev/poll
+			 * recursion, since those locks will be acquired
+			 * eventually.  If that value exceeds the defined
+			 * limit, we can report the failure now instead of
+			 * recursing to that failure depth.
+			 */
+			depth_total += (rem->ps_depth - i);
+			if (depth_total >= POLLMAXDEPTH) {
+				result = -1;
+				goto out;
+			}
+		}
+	}
+
+	/*
+	 * No deadlock partner was found.  The only course of action is to
+	 * record ourself as a contended pollstate and wait for the pollcache
+	 * mutex to become available.
+	 */
+	ps->ps_contend_pc = pcp;
+	ps->ps_contend_nextp = pollstate_contenders;
+	ps->ps_contend_pnextp = &pollstate_contenders;
+	if (pollstate_contenders != NULL) {
+		pollstate_contenders->ps_contend_pnextp =
+		    &ps->ps_contend_nextp;
+	}
+	pollstate_contenders = ps;
+
+	mutex_exit(&pollstate_contenders_lock);
+	mutex_enter(&pcp->pc_lock);
+	mutex_enter(&pollstate_contenders_lock);
+
+	/*
+	 * Our acquisition of the pollcache mutex may be due to another thread
+	 * giving up in the face of deadlock with us.  If that is the case,
+	 * we too should report the failure.
+	 */
+	if ((ps->ps_flags & POLLSTATE_STALEMATE) != 0) {
+		result = -1;
+		ps->ps_flags &= ~POLLSTATE_STALEMATE;
+		mutex_exit(&pcp->pc_lock);
+	}
+
+	/* Remove ourself from the contenders list. */
+	if (ps->ps_contend_nextp != NULL) {
+		ps->ps_contend_nextp->ps_contend_pnextp =
+		    ps->ps_contend_pnextp;
+	}
+	*ps->ps_contend_pnextp = ps->ps_contend_nextp;
+	ps->ps_contend_pc = NULL;
+	ps->ps_contend_nextp = NULL;
+	ps->ps_contend_pnextp = NULL;
+
+out:
+	mutex_exit(&pollstate_contenders_lock);
+	return (result);
+}
+
+int
+pollstate_enter(pollcache_t *pcp)
+{
+	pollstate_t *ps = curthread->t_pollstate;
+	int i;
+
+	if (ps == NULL) {
+		/*
+		 * The thread pollstate may not be initialized if VOP_POLL is
+		 * called on a recursion-enabled /dev/poll handle from outside
+		 * the poll() or /dev/poll codepaths.
+		 */
+		return (PSE_FAIL_POLLSTATE);
+	}
+	if (ps->ps_depth >= POLLMAXDEPTH) {
+		return (PSE_FAIL_DEPTH);
+	}
+	/*
+	 * Check the desired pollcache against pollcaches we already have
+	 * locked.  Such a loop is the most simple deadlock scenario.
+	 */
+	for (i = 0; i < ps->ps_depth; i++) {
+		if (ps->ps_pc_stack[i] == pcp) {
+			return (PSE_FAIL_LOOP);
+		}
+	}
+	ASSERT(ps->ps_pc_stack[i] == NULL);
+
+	if (ps->ps_depth == 0) {
+		/* Locking initial the pollcache requires no caution */
+		mutex_enter(&pcp->pc_lock);
+	} else if (mutex_tryenter(&pcp->pc_lock) == 0) {
+		if (pollstate_contend(ps, pcp) != 0) {
+			/* This pollcache cannot safely be locked. */
+			return (PSE_FAIL_DEADLOCK);
+		}
+	}
+
+	ps->ps_pc_stack[ps->ps_depth++] = pcp;
+	return (PSE_SUCCESS);
+}
+
+void
+pollstate_exit(pollcache_t *pcp)
+{
+	pollstate_t *ps = curthread->t_pollstate;
+
+	VERIFY(ps != NULL);
+	VERIFY(ps->ps_pc_stack[ps->ps_depth - 1] == pcp);
+
+	mutex_exit(&pcp->pc_lock);
+	ps->ps_pc_stack[--ps->ps_depth] = NULL;
+	VERIFY(ps->ps_depth >= 0);
+}
+
 
 /*
  * We are holding the appropriate uf_lock entering this routine.

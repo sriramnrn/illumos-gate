@@ -20,6 +20,10 @@
  */
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -116,9 +120,10 @@
 #include <sys/smbios.h>
 #include <sys/debug_info.h>
 #include <sys/bootinfo.h>
-#include <sys/ddi_timer.h>
+#include <sys/ddi_periodic.h>
 #include <sys/systeminfo.h>
 #include <sys/multiboot.h>
+#include <sys/ramdisk.h>
 
 #ifdef	__xpv
 
@@ -144,6 +149,7 @@ extern void progressbar_init(void);
 extern void brand_init(void);
 extern void pcf_init(void);
 extern void pg_init(void);
+extern void ssp_init(void);
 
 extern int size_pse_array(pgcnt_t, int);
 
@@ -279,6 +285,12 @@ int segzio_fromheap = 1;
 #endif
 
 /*
+ * Give folks an escape hatch for disabling SMAP via kmdb. Doesn't work
+ * post-boot.
+ */
+int disable_smap = 0;
+
+/*
  * new memory fragmentations are possible in startup() due to BOP_ALLOCs. this
  * depends on number of BOP_ALLOC calls made and requested size, memory size
  * combination and whether boot.bin memory needs to be freed.
@@ -393,9 +405,9 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
  *		|---       GDT       ---|- GDT page (GDT_VA)
  *		|---    debug info   ---|- debug info (DEBUG_INFO_VA)
  *		|			|
- * 		|   page_t structures	|
- * 		|   memsegs, memlists, 	|
- * 		|   page hash, etc.	|
+ *		|   page_t structures	|
+ *		|   memsegs, memlists,	|
+ *		|   page hash, etc.	|
  * ---	       -|-----------------------|- ekernelheap, valloc_base (floating)
  *		|			|  (segkp is just an arena in the heap)
  *		|			|
@@ -403,7 +415,7 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
  *		|			|
  *		|			|
  * ---         -|-----------------------|- kernelheap (floating)
- * 		|        Segkmap	|
+ *		|        Segkmap	|
  * 0xC3002000  -|-----------------------|- segmap_start (floating)
  *		|	Red Zone	|
  * 0xC3000000  -|-----------------------|- kernelbase / userlimit (floating)
@@ -427,7 +439,7 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
  * 0xFFFFFFFF.FFC00000  |-----------------------|- ARGSBASE
  *			|	debugger (?)	|
  * 0xFFFFFFFF.FF800000  |-----------------------|- SEGDEBUGBASE
- *			|      unused    	|
+ *			|      unused		|
  *			+-----------------------+
  *			|      Kernel Data	|
  * 0xFFFFFFFF.FBC00000  |-----------------------|
@@ -436,7 +448,7 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
  *			|---       GDT       ---|- GDT page (GDT_VA)
  *			|---    debug info   ---|- debug info (DEBUG_INFO_VA)
  *			|			|
- * 			|      Core heap	| (used for loadable modules)
+ *			|      Core heap	| (used for loadable modules)
  * 0xFFFFFFFF.C0000000  |-----------------------|- core_base / ekernelheap
  *			|	 Kernel		|
  *			|	  heap		|
@@ -449,23 +461,23 @@ static pgcnt_t kphysm_init(page_t *, pgcnt_t);
  * 0xFFFFFXXX.XXX00000  |-----------------------|- segzio_base (floating)
  *			|	  segkp		|
  * ---                  |-----------------------|- segkp_base (floating)
- * 			|   page_t structures	|  valloc_base + valloc_sz
- * 			|   memsegs, memlists, 	|
- * 			|   page hash, etc.	|
- * 0xFFFFFF00.00000000  |-----------------------|- valloc_base (lower if > 1TB)
+ *			|   page_t structures	|  valloc_base + valloc_sz
+ *			|   memsegs, memlists,	|
+ *			|   page hash, etc.	|
+ * 0xFFFFFF00.00000000  |-----------------------|- valloc_base (lower if >256GB)
  *			|	 segkpm		|
  * 0xFFFFFE00.00000000  |-----------------------|
  *			|	Red Zone	|
- * 0xFFFFFD80.00000000  |-----------------------|- KERNELBASE (lower if > 1TB)
+ * 0xFFFFFD80.00000000  |-----------------------|- KERNELBASE (lower if >256GB)
  *			|     User stack	|- User space memory
- * 			|			|
- * 			| shared objects, etc	|	(grows downwards)
+ *			|			|
+ *			| shared objects, etc	|	(grows downwards)
  *			:			:
- * 			|			|
+ *			|			|
  * 0xFFFF8000.00000000  |-----------------------|
- * 			|			|
- * 			| VA Hole / unused	|
- * 			|			|
+ *			|			|
+ *			| VA Hole / unused	|
+ *			|			|
  * 0x00008000.00000000  |-----------------------|
  *			|			|
  *			|			|
@@ -668,6 +680,60 @@ perform_allocations(void)
 }
 
 /*
+ * Set up and enable SMAP now before we start other CPUs, but after the kernel's
+ * VM has been set up so we can use hot_patch_kernel_text().
+ *
+ * We can only patch 1, 2, or 4 bytes, but not three bytes. So instead, we
+ * replace the four byte word at the patch point. See uts/intel/ia32/ml/copy.s
+ * for more information on what's going on here.
+ */
+static void
+startup_smap(void)
+{
+	int i;
+	uint32_t inst;
+	uint8_t *instp;
+	char sym[128];
+
+	extern int _smap_enable_patch_count;
+	extern int _smap_disable_patch_count;
+
+	if (disable_smap != 0)
+		remove_x86_feature(x86_featureset, X86FSET_SMAP);
+
+	if (is_x86_feature(x86_featureset, X86FSET_SMAP) == B_FALSE)
+		return;
+
+	for (i = 0; i < _smap_enable_patch_count; i++) {
+		int sizep;
+
+		VERIFY3U(i, <, _smap_enable_patch_count);
+		VERIFY(snprintf(sym, sizeof (sym), "_smap_enable_patch_%d", i) <
+		    sizeof (sym));
+		instp = (uint8_t *)(void *)kobj_getelfsym(sym, NULL, &sizep);
+		VERIFY(instp != 0);
+		inst = (instp[3] << 24) | (SMAP_CLAC_INSTR & 0x00ffffff);
+		hot_patch_kernel_text((caddr_t)instp, inst, 4);
+	}
+
+	for (i = 0; i < _smap_disable_patch_count; i++) {
+		int sizep;
+
+		VERIFY(snprintf(sym, sizeof (sym), "_smap_disable_patch_%d",
+		    i) < sizeof (sym));
+		instp = (uint8_t *)(void *)kobj_getelfsym(sym, NULL, &sizep);
+		VERIFY(instp != 0);
+		inst = (instp[3] << 24) | (SMAP_STAC_INSTR & 0x00ffffff);
+		hot_patch_kernel_text((caddr_t)instp, inst, 4);
+	}
+
+	hot_patch_kernel_text((caddr_t)smap_enable, SMAP_CLAC_INSTR, 4);
+	hot_patch_kernel_text((caddr_t)smap_disable, SMAP_STAC_INSTR, 4);
+	setcr4(getcr4() | CR4_SMAP);
+	smap_enable();
+}
+
+/*
  * Our world looks like this at startup time.
  *
  * In a 32-bit OS, boot loads the kernel text at 0xfe800000 and kernel data
@@ -707,6 +773,7 @@ startup(void)
 		segvn_use_regions = 0;
 	}
 #endif
+	ssp_init();
 	progressbar_init();
 	startup_init();
 #if defined(__xpv)
@@ -721,6 +788,7 @@ startup(void)
 	 * the irq routing table (used for pci labels).
 	 */
 	startup_pci_bios();
+	startup_smap();
 #endif
 #if defined(__xpv)
 	startup_xen_mca();
@@ -1176,20 +1244,45 @@ startup_memlist(void)
 
 	/*
 	 * The default values of VALLOC_BASE and SEGKPM_BASE should work
-	 * for values of physmax up to 1 Terabyte. They need adjusting when
-	 * memory is at addresses above 1 TB. When adjusted, segkpm_base must
+	 * for values of physmax up to 256GB (1/4 TB). They need adjusting when
+	 * memory is at addresses above 256GB. When adjusted, segkpm_base must
 	 * be aligned on KERNEL_REDZONE_SIZE boundary (span of top level pte).
+	 *
+	 * In the general case (>256GB), we use (4 * physmem) for the
+	 * kernel's virtual addresses, which is divided approximately
+	 * as follows:
+	 *  - 1 * physmem for segkpm
+	 *  - 1.5 * physmem for segzio
+	 *  - 1.5 * physmem for heap
+	 * Total: 4.0 * physmem
+	 *
+	 * Note that the segzio and heap sizes are more than physmem so that
+	 * VA fragmentation does not prevent either of them from being
+	 * able to use nearly all of physmem.  The value of 1.5x is determined
+	 * experimentally and may need to change if the workload changes.
 	 */
-	if (physmax + 1 > mmu_btop(TERABYTE) ||
-	    plat_dr_physmax > mmu_btop(TERABYTE)) {
+	if (physmax + 1 > mmu_btop(TERABYTE / 4) ||
+	    plat_dr_physmax > mmu_btop(TERABYTE / 4)) {
 		uint64_t kpm_resv_amount = mmu_ptob(physmax + 1);
 
 		if (kpm_resv_amount < mmu_ptob(plat_dr_physmax)) {
 			kpm_resv_amount = mmu_ptob(plat_dr_physmax);
 		}
 
-		segkpm_base = -(P2ROUNDUP((2 * kpm_resv_amount),
-		    KERNEL_REDZONE_SIZE));	/* down from top VA */
+		/*
+		 * This is what actually controls the KVA : UVA split.
+		 * The kernel uses high VA, and this is lowering the
+		 * boundary, thus increasing the amount of VA for the kernel.
+		 * This gives the kernel 4 * (amount of physical memory) VA.
+		 *
+		 * The maximum VA is UINT64_MAX and we are using
+		 * 64-bit 2's complement math, so e.g. if you have 512GB
+		 * of memory, segkpm_base = -(4 * 512GB) == -2TB ==
+		 * UINT64_MAX - 2TB (approximately).  So the kernel's
+		 * VA is [UINT64_MAX-2TB to UINT64_MAX].
+		 */
+		segkpm_base = -(P2ROUNDUP((4 * kpm_resv_amount),
+		    KERNEL_REDZONE_SIZE));
 
 		/* make sure we leave some space for user apps above hole */
 		segkpm_base = MAX(segkpm_base, AMD64_VA_HOLE_END + TERABYTE);
@@ -1533,7 +1626,7 @@ startup_modules(void)
 	 */
 	microfind();
 
-	if (get_hwenv() == HW_XEN_HVM)
+	if ((get_hwenv() & HW_XEN_HVM) != 0)
 		update_default_path();
 #endif
 
@@ -1586,23 +1679,6 @@ startup_modules(void)
 
 	dispinit();
 
-	/*
-	 * This is needed here to initialize hw_serial[] for cluster booting.
-	 */
-	if ((h = set_soft_hostid()) == HW_INVALID_HOSTID) {
-		cmn_err(CE_WARN, "Unable to set hostid");
-	} else {
-		for (v = h, cnt = 0; cnt < 10; cnt++) {
-			d[cnt] = (char)(v % 10);
-			v /= 10;
-			if (v == 0)
-				break;
-		}
-		for (cp = hw_serial; cnt >= 0; cnt--)
-			*cp++ = d[cnt] + '0';
-		*cp = 0;
-	}
-
 	/* Read cluster configuration data. */
 	clconf_init();
 
@@ -1622,13 +1698,56 @@ startup_modules(void)
 	if (DOMAIN_IS_INITDOMAIN(xen_info))
 #endif
 	{
+		id_t smid;
+		smbios_system_t smsys;
+		smbios_info_t sminfo;
+		char *mfg;
 		/*
 		 * Load the System Management BIOS into the global ksmbios
 		 * handle, if an SMBIOS is present on this system.
+		 * Also set "si-hw-provider" property, if not already set.
 		 */
 		ksmbios = smbios_open(NULL, SMB_VERSION, ksmbios_flags, NULL);
+		if (ksmbios != NULL &&
+		    ((smid = smbios_info_system(ksmbios, &smsys)) != SMB_ERR) &&
+		    (smbios_info_common(ksmbios, smid, &sminfo)) != SMB_ERR) {
+			mfg = (char *)sminfo.smbi_manufacturer;
+			if (BOP_GETPROPLEN(bootops, "si-hw-provider") < 0) {
+				extern char hw_provider[];
+				int i;
+				for (i = 0; i < SYS_NMLN; i++) {
+					if (isprint(mfg[i]))
+						hw_provider[i] = mfg[i];
+					else {
+						hw_provider[i] = '\0';
+						break;
+					}
+				}
+				hw_provider[SYS_NMLN - 1] = '\0';
+			}
+		}
 	}
 
+
+	/*
+	 * Originally clconf_init() apparently needed the hostid.  But
+	 * this no longer appears to be true - it uses its own nodeid.
+	 * By placing the hostid logic here, we are able to make use of
+	 * the SMBIOS UUID.
+	 */
+	if ((h = set_soft_hostid()) == HW_INVALID_HOSTID) {
+		cmn_err(CE_WARN, "Unable to set hostid");
+	} else {
+		for (v = h, cnt = 0; cnt < 10; cnt++) {
+			d[cnt] = (char)(v % 10);
+			v /= 10;
+			if (v == 0)
+				break;
+		}
+		for (cp = hw_serial; cnt >= 0; cnt--)
+			*cp++ = d[cnt] + '0';
+		*cp = 0;
+	}
 
 	/*
 	 * Set up the CPU module subsystem for the boot cpu in the native
@@ -1659,7 +1778,7 @@ startup_modules(void)
 	 * Initialize a handle for the boot cpu - others will initialize
 	 * as they startup.  Do not do this if we know we are in an HVM domU.
 	 */
-	if ((get_hwenv() != HW_XEN_HVM) &&
+	if ((get_hwenv() & HW_XEN_HVM) == 0 &&
 	    (hdl = cmi_init(CMI_HDL_NATIVE, cmi_ntv_hwchipid(CPU),
 	    cmi_ntv_hwcoreid(CPU), cmi_ntv_hwstrandid(CPU))) != NULL &&
 	    is_x86_feature(x86_featureset, X86FSET_MCA)) {
@@ -1813,8 +1932,9 @@ layout_kernel_va(void)
 	 * segment (from kernel heap) so that we can easily tell not to
 	 * include it in kernel crash dumps on 64 bit kernels. The trick is
 	 * to give it lots of VA, but not constrain the kernel heap.
-	 * We scale the size of segzio linearly with physmem up to
-	 * SEGZIOMAXSIZE. Above that amount it scales at 50% of physmem.
+	 * We can use 1.5x physmem for segzio, leaving approximately
+	 * another 1.5x physmem for heap.  See also the comment in
+	 * startup_memlist().
 	 */
 	segzio_base = segkp_base + mmu_ptob(segkpsize);
 	if (segzio_fromheap) {
@@ -1822,15 +1942,10 @@ layout_kernel_va(void)
 	} else {
 		size_t physmem_size = mmu_ptob(physmem);
 		size_t size = (segziosize == 0) ?
-		    physmem_size : mmu_ptob(segziosize);
+		    physmem_size * 3 / 2 : mmu_ptob(segziosize);
 
 		if (size < SEGZIOMINSIZE)
 			size = SEGZIOMINSIZE;
-		if (size > SEGZIOMAXSIZE) {
-			size = SEGZIOMAXSIZE;
-			if (physmem_size > size)
-				size += (physmem_size - size) / 2;
-		}
 		segziosize = mmu_btop(ROUND_UP_LPAGE(size));
 	}
 	PRM_DEBUG(segziosize);
@@ -2240,14 +2355,13 @@ startup_end(void)
 	    "softlevel1", NULL, NULL); /* XXX to be moved later */
 
 	/*
-	 * Register these software interrupts for ddi timer.
+	 * Register software interrupt handlers for ddi_periodic_add(9F).
 	 * Software interrupts up to the level 10 are supported.
 	 */
 	for (i = DDI_IPL_1; i <= DDI_IPL_10; i++) {
-		char name[sizeof ("timer_softintr") + 2];
-		(void) sprintf(name, "timer_softintr%02d", i);
 		(void) add_avsoftintr((void *)&softlevel_hdl[i-1], i,
-		    (avfunc)timer_softintr, name, (caddr_t)(uintptr_t)i, NULL);
+		    (avfunc)ddi_periodic_softintr, "ddi_periodic",
+		    (caddr_t)(uintptr_t)i, NULL);
 	}
 
 #if !defined(__xpv)
@@ -2294,7 +2408,7 @@ post_startup(void)
 		 * Startup the memory scrubber.
 		 * XXPV	This should be running somewhere ..
 		 */
-		if (get_hwenv() != HW_XEN_HVM)
+		if ((get_hwenv() & HW_VIRTUAL) == 0)
 			memscrub_init();
 #endif
 	}
@@ -2342,6 +2456,20 @@ pp_in_range(page_t *pp, uint64_t low_addr, uint64_t high_addr)
 	    (pp->p_pagenum < btopr(high_addr)));
 }
 
+static int
+pp_in_module(page_t *pp, const rd_existing_t *modranges)
+{
+	uint_t i;
+
+	for (i = 0; modranges[i].phys != 0; i++) {
+		if (pp_in_range(pp, modranges[i].phys,
+		    modranges[i].phys + modranges[i].size))
+			return (1);
+	}
+
+	return (0);
+}
+
 void
 release_bootstrap(void)
 {
@@ -2349,9 +2477,39 @@ release_bootstrap(void)
 	page_t *pp;
 	extern void kobj_boot_unmountroot(void);
 	extern dev_t rootdev;
+	uint_t i;
+	char propname[32];
+	rd_existing_t *modranges;
 #if !defined(__xpv)
 	pfn_t	pfn;
 #endif
+
+	/*
+	 * Save the bootfs module ranges so that we can reserve them below
+	 * for the real bootfs.
+	 */
+	modranges = kmem_alloc(sizeof (rd_existing_t) * MAX_BOOT_MODULES,
+	    KM_SLEEP);
+	for (i = 0; ; i++) {
+		uint64_t start, size;
+
+		modranges[i].phys = 0;
+
+		(void) snprintf(propname, sizeof (propname),
+		    "module-addr-%u", i);
+		if (do_bsys_getproplen(NULL, propname) <= 0)
+			break;
+		(void) do_bsys_getprop(NULL, propname, &start);
+
+		(void) snprintf(propname, sizeof (propname),
+		    "module-size-%u", i);
+		if (do_bsys_getproplen(NULL, propname) <= 0)
+			break;
+		(void) do_bsys_getprop(NULL, propname, &size);
+
+		modranges[i].phys = start;
+		modranges[i].size = size;
+	}
 
 	/* unmount boot ramdisk and release kmem usage */
 	kobj_boot_unmountroot();
@@ -2393,9 +2551,8 @@ release_bootstrap(void)
 			continue;
 		}
 
-
 		if (root_is_ramdisk && pp_in_range(pp, ramdisk_start,
-		    ramdisk_end)) {
+		    ramdisk_end) || pp_in_module(pp, modranges)) {
 			pp->p_next = rd_pages;
 			rd_pages = pp;
 			continue;
@@ -2406,6 +2563,8 @@ release_bootstrap(void)
 		page_free(pp, 1);
 	}
 	PRM_POINT("Boot pages released");
+
+	kmem_free(modranges, sizeof (rd_existing_t) * 99);
 
 #if !defined(__xpv)
 /* XXPV -- note this following bunch of code needs to be revisited in Xen 3.0 */
@@ -2721,12 +2880,79 @@ pat_sync(void)
  * /etc/hostid does not exist, we will attempt to get a serial number
  * using the legacy method (/kernel/misc/sysinit).
  *
+ * If that isn't present, we attempt to use an SMBIOS UUID, which is
+ * a hardware serial number.  Note that we don't automatically trust
+ * all SMBIOS UUIDs (some older platforms are defective and ship duplicate
+ * UUIDs in violation of the standard), we check against a blacklist.
+ *
  * In an attempt to make the hostid less prone to abuse
  * (for license circumvention, etc), we store it in /etc/hostid
  * in rot47 format.
  */
 extern volatile unsigned long tenmicrodata;
 static int atoi(char *);
+
+/*
+ * Set this to non-zero in /etc/system if you think your SMBIOS returns a
+ * UUID that is not unique. (Also report it so that the smbios_uuid_blacklist
+ * array can be updated.)
+ */
+int smbios_broken_uuid = 0;
+
+/*
+ * List of known bad UUIDs.  This is just the lower 32-bit values, since
+ * that's what we use for the host id.  If your hostid falls here, you need
+ * to contact your hardware OEM for a fix for your BIOS.
+ */
+static unsigned char
+smbios_uuid_blacklist[][16] = {
+
+	{	/* Reported bad UUID (Google search) */
+		0x00, 0x02, 0x00, 0x03, 0x00, 0x04, 0x00, 0x05,
+		0x00, 0x06, 0x00, 0x07, 0x00, 0x08, 0x00, 0x09,
+	},
+	{	/* Known bad DELL UUID */
+		0x4C, 0x4C, 0x45, 0x44, 0x00, 0x00, 0x20, 0x10,
+		0x80, 0x20, 0x80, 0xC0, 0x4F, 0x20, 0x20, 0x20,
+	},
+	{	/* Uninitialized flash */
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+		0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+	},
+	{	/* All zeros */
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+	},
+};
+
+static int32_t
+uuid_to_hostid(const uint8_t *uuid)
+{
+	/*
+	 * Although the UUIDs are 128-bits, they may not distribute entropy
+	 * evenly.  We would like to use SHA or MD5, but those are located
+	 * in loadable modules and not available this early in boot.  As we
+	 * don't need the values to be cryptographically strong, we just
+	 * generate 32-bit vaue by xor'ing the various sequences together,
+	 * which ensures that the entire UUID contributes to the hostid.
+	 */
+	uint32_t	id = 0;
+
+	/* first check against the blacklist */
+	for (int i = 0; i < (sizeof (smbios_uuid_blacklist) / 16); i++) {
+		if (bcmp(smbios_uuid_blacklist[0], uuid, 16) == 0) {
+			cmn_err(CE_CONT, "?Broken SMBIOS UUID. "
+			    "Contact BIOS manufacturer for repair.\n");
+			return ((int32_t)HW_INVALID_HOSTID);
+		}
+	}
+
+	for (int i = 0; i < 16; i++)
+		id ^= ((uuid[i]) << (8 * (i % sizeof (id))));
+
+	/* Make sure return value is positive */
+	return (id & 0x7fffffff);
+}
 
 static int32_t
 set_soft_hostid(void)
@@ -2740,6 +2966,7 @@ set_soft_hostid(void)
 	int32_t hostid = (int32_t)HW_INVALID_HOSTID;
 	unsigned char *c;
 	hrtime_t tsc;
+	smbios_system_t smsys;
 
 	/*
 	 * If /etc/hostid file not found, we'd like to get a pseudo
@@ -2763,6 +2990,24 @@ set_soft_hostid(void)
 				hostid = (int32_t)atoi(hw_serial);
 			(void) modunload(i);
 		}
+
+		/*
+		 * We try to use the SMBIOS UUID. But not if it is blacklisted
+		 * in /etc/system.
+		 */
+		if ((hostid == HW_INVALID_HOSTID) &&
+		    (smbios_broken_uuid == 0) &&
+		    (ksmbios != NULL) &&
+		    (smbios_info_system(ksmbios, &smsys) != SMB_ERR) &&
+		    (smsys.smbs_uuidlen >= 16)) {
+			hostid = uuid_to_hostid(smsys.smbs_uuid);
+		}
+
+		/*
+		 * Generate a "random" hostid using the clock.  These
+		 * hostids will change on each boot if the value is not
+		 * saved to a persistent /etc/hostid file.
+		 */
 		if (hostid == HW_INVALID_HOSTID) {
 			tsc = tsc_read();
 			if (tsc == 0)	/* tsc_read can return zero sometimes */

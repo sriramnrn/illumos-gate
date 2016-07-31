@@ -18,6 +18,8 @@
 #
 # CDDL HEADER END
 #
+# Copyright 2015 Gary Mills
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 #
@@ -30,7 +32,6 @@ include		$(SRC)/Makefile.master
 
 LORDER=		lorder
 TSORT=		tsort
-AWK=		awk
 
 #
 # By default, we define the source directory for libraries to be
@@ -155,17 +156,12 @@ SRCS=		$(OBJECTS:%.o=$(SRCDIR)/%.c)
 # default build of an archive and a shared object,
 # overridden locally when extra processing is needed
 BUILD.AR=	$(AR) $(ARFLAGS) $@ $(AROBJS)
-BUILD.SO=	$(CC) -o $@ $(GSHARED) $(DYNFLAGS) $(PICS) $(EXTPICS) $(LDLIBS)
-BUILDCCC.SO=	$(CCC) -o $@ $(GSHARED) $(DYNFLAGS) $(PICS) $(EXTPICS) $(LDLIBS)
+BUILD.SO=	$(CC) $(CFLAGS) -o $@ $(GSHARED) $(DYNFLAGS) \
+		$(PICS) $(EXTPICS) $(LDLIBS)
+BUILDCCC.SO=	$(CCC) $(CCFLAGS) -o $@ $(GSHARED) $(DYNFLAGS) \
+		$(PICS) $(EXTPICS) $(LDLIBS)
 
 # default dynamic library symlink
-# IMPORTANT:: If you change INS.liblink OR INS.liblink64 here, then you 
-# MUST also change the corresponding override definitions in
-# $CLOSED/Makefile.tonic.
-#
-# If you do not do this, then the closedbins build for the OpenSolaris
-# community will break. PS, the gatekeepers will be upset too.
-#
 INS.liblink=	-$(RM) $@; $(SYMLINK) $(LIBLINKPATH)$(LIBLINKS)$(VERS) $@
 INS.liblinkccc=	-$(RM) $@; $(SYMLINK) $(LIBLINKPATH)$(LIBLINKSCCC)$(VERS) $@
 
@@ -187,7 +183,7 @@ CTFMERGE_POST	= :
 POST_PROCESS_O += ; $(CTFCONVERT_POST)
 POST_PROCESS_SO += ; $(CTFMERGE_POST)
 
-CTFMERGE_LIB	= $(CTFMERGE) -t -f -L VERSION -o $@ $(PICS)
+CTFMERGE_LIB	= $(CTFMERGE) $(CTFMRGFLAGS) -t -f -L VERSION -o $@ $(PICS)
 
 # conditional assignments
 

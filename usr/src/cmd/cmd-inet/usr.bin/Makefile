@@ -23,15 +23,16 @@
 # Use is subject to license terms.
 #
 # Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 #
 
-PROG=		dns-sd finger rdate ruptime rwho whois
+PROG=		finger rdate ruptime rwho whois
 SUIDPROG=	rcp rlogin rsh
 ALL=		$(PROG) $(SUIDPROG)
 SRCS=		$(ALL:%=%.c)
 KCMDPROGS=	rcp rlogin rsh
 
-SUBDIRS=	chat ftp nc nca netstat \
+SUBDIRS=	chat dns-sd ftp nc nca netstat \
 		pppd pppdump pppstats rdist talk telnet tftp
 SUBDIR1=	talk 
 MSGSUBDIRS=	nca talk
@@ -56,6 +57,9 @@ COMMONSRCS=	$(CMDINETCOMMONDIR)/$(COMMONOBJS:.o=.c)
 POFILES=	rlogin.po rsh.po rcp.po $(COMMONPOFILES)
 POFILE=		usr.bin.po
 
+CLOBBERFILES +=	$(ALL)
+CLEANFILES +=	kcmd.o rcp.o rlogin.o rsh.o
+
 all:=		TARGET= all
 install:=	TARGET= install
 clean:=		TARGET= clean
@@ -67,17 +71,18 @@ ROOTSUIDPROG=	$(SUIDPROG:%=$(ROOTBIN)/%)
 $(ROOTSUIDPROG)	:=	FILEMODE=	04555
 
 CPPFLAGS +=	-DSYSV -DSTRNET -DBSD_COMP -I$(CMDINETCOMMONDIR)
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-function
 
 # Eventually just plain CFLAGS should be += -v, but not until all in
 # PROGS are lint clean.
 $(LINTCLEAN)	:=	CFLAGS += $(CCVERBOSE)
 
-dns-sd :=	CFLAGS += $(C99_ENABLE)
 finger :=	CFLAGS += $(CCVERBOSE)
 # Enable large file support for reading the lastlog file.
 finger :=	CPPFLAGS += -D_FILE_OFFSET_BITS=64
 
-dns-sd :=		LDLIBS += -lsocket -ldns_sd
 finger :=		LDLIBS += -lnsl -lcurses -lsocket
 rcp lint-rcp :=		LDLIBS += -lsocket -lsec -lsendfile
 rdate lint-rdate:=	LDLIBS += -lsocket
@@ -166,14 +171,13 @@ $(SUBDIRS): FRC
 
 FRC:
 
-clean: $(SUBDIRS)
+clean: $(SUBDIRS) clean_local
+clean_local:
+	$(RM) $(CLEANFILES)
 
 clobber: $(SUBDIRS) clobber_local
-
-clobber_local:
-	echo $(CLOBBERFILES)
-	$(RM) $(ALL)  $(CLOBBERFILES) 
-
+clobber_local: clean_local
+	$(RM) $(CLOBBERFILES) 
 
 LINTLOCALS=	$(LINTCLEAN:%.c=lint-%)
 

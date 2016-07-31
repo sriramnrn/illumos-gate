@@ -23,6 +23,9 @@
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015 EveryCity Ltd. All rights reserved.
+ */
 
 #ifndef	_SYS_CCOMPILE_H
 #define	_SYS_CCOMPILE_H
@@ -83,10 +86,20 @@ extern "C" {
  *
  * Should only be used on 'extern inline' definitions for GCC.
  */
-#if __GNUC_VERSION >= 40300
+#if __GNUC_VERSION >= 40200
 #define	__sun_attr___gnu_inline__	__attribute__((__gnu_inline__))
 #else
 #define	__sun_attr___gnu_inline__
+#endif
+
+/*
+ * The function has control flow such that it may return multiple times (in
+ * the manner of setjmp or vfork)
+ */
+#if __GNUC_VERSION >= 40100
+#define	__sun_attr___returns_twice__	__attribute__((__returns_twice__))
+#else
+#define	__sun_attr___returns_twice__
 #endif
 
 /*
@@ -107,6 +120,16 @@ extern "C" {
  */
 #define	__sun_attr___packed__	__attribute__((__packed__))
 
+/*
+ * This attribute, attached to a variable, means that the variable is meant to
+ * be possibly unused. GCC will not produce a warning for this variable.
+ */
+#if __GNUC_VERSION >= 20700
+#define	__sun_attr___unused__	__attribute__((__unused__))
+#else
+#define	__sun_attr___unused__
+#endif
+
 #define	___sun_attr_inner(__a)	__sun_attr_##__a
 #define	__sun_attr__(__a)	___sun_attr_inner __a
 
@@ -126,8 +149,10 @@ extern "C" {
 #define	__KVPRINTFLIKE(__n)	__sun_attr__((__KVPRINTFLIKE__(__n)))
 #define	__NORETURN		__sun_attr__((__noreturn__))
 #define	__GNU_INLINE		__inline__ __sun_attr__((__gnu_inline__))
+#define	__RETURNS_TWICE		__sun_attr__((__returns_twice__))
 #define	__CONST			__sun_attr__((__const__))
 #define	__PURE			__sun_attr__((__pure__))
+#define	__GNU_UNUSED		__sun_attr__((__unused__))
 
 #ifdef	__cplusplus
 }

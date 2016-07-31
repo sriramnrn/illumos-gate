@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -149,6 +150,7 @@ cfork(int isvfork, int isfork1, int flags)
 	 */
 	if ((flags & ~(FORK_NOSIGCHLD | FORK_WAITPID)) != 0) {
 		error = EINVAL;
+		atomic_inc_32(&curproc->p_zone->zone_ffmisc);
 		goto forkerr;
 	}
 
@@ -157,11 +159,14 @@ cfork(int isvfork, int isfork1, int flags)
 	 */
 	if (curthread == p->p_agenttp) {
 		error = ENOTSUP;
+		atomic_inc_32(&curproc->p_zone->zone_ffmisc);
 		goto forkerr;
 	}
 
-	if ((error = secpolicy_basic_fork(CRED())) != 0)
+	if ((error = secpolicy_basic_fork(CRED())) != 0) {
+		atomic_inc_32(&p->p_zone->zone_ffmisc);
 		goto forkerr;
+	}
 
 	/*
 	 * If the calling lwp is doing a fork1() then the
@@ -175,6 +180,7 @@ cfork(int isvfork, int isfork1, int flags)
 	if (!holdlwps(isfork1 ? SHOLDFORK1 : SHOLDFORK)) {
 		aston(curthread);
 		error = EINTR;
+		atomic_inc_32(&p->p_zone->zone_ffmisc);
 		goto forkerr;
 	}
 
@@ -225,13 +231,13 @@ cfork(int isvfork, int isfork1, int flags)
 		 */
 		as = p->p_as;
 		if (avl_numnodes(&as->a_wpage) != 0) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			as_clearwatch(as);
 			p->p_wpage = as->a_wpage;
 			avl_create(&as->a_wpage, wp_compare,
 			    sizeof (struct watched_page),
 			    offsetof(struct watched_page, wp_link));
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 		cp->p_as = as;
 		cp->p_flag |= SVFORK;
@@ -274,7 +280,7 @@ cfork(int isvfork, int isfork1, int flags)
 			tk = cp->p_task;
 			task_detach(cp);
 			ASSERT(cp->p_pool->pool_ref > 0);
-			atomic_add_32(&cp->p_pool->pool_ref, -1);
+			atomic_dec_32(&cp->p_pool->pool_ref);
 			mutex_exit(&cp->p_lock);
 			pid_exit(cp, tk);
 			mutex_exit(&pidlock);
@@ -290,6 +296,7 @@ cfork(int isvfork, int isfork1, int flags)
 			 * map all others to EAGAIN.
 			 */
 			error = (error == ENOMEM) ? ENOMEM : EAGAIN;
+			atomic_inc_32(&p->p_zone->zone_ffnomem);
 			goto forkerr;
 		}
 
@@ -424,8 +431,10 @@ cfork(int isvfork, int isfork1, int flags)
 	 * fork event (if requested) to whatever contract the child is
 	 * a member of.  Fails if the parent has been SIGKILLed.
 	 */
-	if (contract_process_fork(NULL, cp, p, B_TRUE) == NULL)
+	if (contract_process_fork(NULL, cp, p, B_TRUE) == NULL) {
+		atomic_inc_32(&p->p_zone->zone_ffmisc);
 		goto forklwperr;
+	}
 
 	/*
 	 * No fork failures occur beyond this point.
@@ -583,13 +592,13 @@ forklwperr:
 		if (avl_numnodes(&p->p_wpage) != 0) {
 			/* restore watchpoints to parent */
 			as = p->p_as;
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			as->a_wpage = p->p_wpage;
 			avl_create(&p->p_wpage, wp_compare,
 			    sizeof (struct watched_page),
 			    offsetof(struct watched_page, wp_link));
 			as_setwatch(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 	} else {
 		if (cp->p_segacct)
@@ -628,7 +637,7 @@ forklwperr:
 	tk = cp->p_task;
 	task_detach(cp);
 	ASSERT(cp->p_pool->pool_ref > 0);
-	atomic_add_32(&cp->p_pool->pool_ref, -1);
+	atomic_dec_32(&cp->p_pool->pool_ref);
 	mutex_exit(&cp->p_lock);
 
 	orphpp = &p->p_orphan;
@@ -931,8 +940,6 @@ getproc(proc_t **cpp, pid_t pid, uint_t flags)
 	zone_t		*zone;
 	int		rctlfail = 0;
 
-	if (!page_mem_avail(tune.t_minarmem))
-		return (-1);
 	if (zone_status_get(curproc->p_zone) >= ZONE_IS_SHUTTING_DOWN)
 		return (-1);	/* no point in starting new processes */
 
@@ -962,6 +969,7 @@ getproc(proc_t **cpp, pid_t pid, uint_t flags)
 		if (rctlfail) {
 			mutex_exit(&zone->zone_nlwps_lock);
 			mutex_exit(&pp->p_lock);
+			atomic_inc_32(&zone->zone_ffcap);
 			goto punish;
 		}
 	}
@@ -1130,7 +1138,7 @@ getproc(proc_t **cpp, pid_t pid, uint_t flags)
 	} else {
 		cp->p_pool = pp->p_pool;
 	}
-	atomic_add_32(&cp->p_pool->pool_ref, 1);
+	atomic_inc_32(&cp->p_pool->pool_ref);
 	mutex_exit(&pp->p_lock);
 
 	/*
@@ -1235,6 +1243,7 @@ bad:
 	proj->kpj_nprocs--;
 	zone->zone_nprocs--;
 	mutex_exit(&zone->zone_nlwps_lock);
+	atomic_inc_32(&zone->zone_ffnoproc);
 
 punish:
 	/*
@@ -1441,9 +1450,9 @@ vfwait(pid_t pid)
 	/* restore watchpoints to parent */
 	if (pr_watch_active(pp)) {
 		struct as *as = pp->p_as;
-		AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+		AS_LOCK_ENTER(as, RW_WRITER);
 		as_setwatch(as);
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 	}
 
 	mutex_enter(&pp->p_lock);

@@ -32,6 +32,8 @@ include ../Makefile.cmd
 
 CPPFLAGS += -D_EXTVTOC
 
+CERRWARN += -_gcc=-Wno-uninitialized
+
 .KEEP_STATE:
 
 all: $(PROG)
@@ -43,6 +45,7 @@ $(PROG):        $(OBJECTS)
 install: all $(ROOTPROG)
 
 clean:
+	$(RM) $(OBJECTS)
 
 lint:	lint_SRCS
 

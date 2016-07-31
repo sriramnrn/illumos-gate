@@ -21,6 +21,8 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
 set name=pkg.fmri value=pkg:/system/network/nis@$(PKGVERS)
@@ -70,8 +72,6 @@ file path=usr/lib/netsvc/yp/ypbind mode=0555
 file path=usr/lib/netsvc/yp/ypstart mode=0555
 file path=usr/lib/netsvc/yp/ypstop mode=0555
 file path=usr/lib/netsvc/yp/ypxfr mode=0555
-file path=usr/sbin/gettable mode=0555
-file path=usr/sbin/htable mode=0555
 file path=usr/sbin/ldapaddent mode=0555
 file path=usr/sbin/ldapclient mode=0555
 file path=usr/sbin/newkey group=sys mode=0555
@@ -86,8 +86,6 @@ file path=usr/share/man/man1/ypcat.1
 file path=usr/share/man/man1/ypmatch.1
 file path=usr/share/man/man1/yppasswd.1
 file path=usr/share/man/man1/ypwhich.1
-file path=usr/share/man/man1m/gettable.1m
-file path=usr/share/man/man1m/htable.1m
 file path=usr/share/man/man1m/idsconfig.1m
 file path=usr/share/man/man1m/ldap_cachemgr.1m
 file path=usr/share/man/man1m/ldapaddent.1m
@@ -98,11 +96,7 @@ file path=usr/share/man/man1m/ypinit.1m
 file path=usr/share/man/man1m/yppoll.1m
 file path=usr/share/man/man1m/ypset.1m
 file path=usr/share/man/man1m/ypstart.1m
-file path=usr/share/man/man1m/ypstop.1m
 file path=usr/share/man/man1m/ypxfr.1m
-file path=usr/share/man/man1m/ypxfr_1perday.1m
-file path=usr/share/man/man1m/ypxfr_1perhour.1m
-file path=usr/share/man/man1m/ypxfr_2perday.1m
 file path=usr/share/man/man4/defaultdomain.4
 file path=usr/share/man/man4/publickey.4
 file path=var/yp/aliases mode=0555 original_name=SUNWnis:var/yp/aliases \
@@ -117,4 +111,8 @@ legacy pkg=SUNWnisu desc="utilities for the Network Information System (NIS)" \
 license cr_Sun license=cr_Sun
 license lic_CDDL license=lic_CDDL
 link path=usr/lib/libnisdb.so target=./libnisdb.so.2
+link path=usr/share/man/man1m/ypstop.1m target=ypstart.1m
+link path=usr/share/man/man1m/ypxfr_1perday.1m target=ypxfr.1m
+link path=usr/share/man/man1m/ypxfr_1perhour.1m target=ypxfr.1m
+link path=usr/share/man/man1m/ypxfr_2perday.1m target=ypxfr.1m
 depend fmri=pkg:/developer/build/make type=require

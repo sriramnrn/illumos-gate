@@ -23,7 +23,10 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ */
 
 #include <sys/types.h>
 #include <sys/uio.h>
@@ -48,10 +51,11 @@
 static lwp_info_t *
 getlwpcore(struct ps_prochandle *P, lwpid_t lwpid)
 {
-	lwp_info_t *lwp = list_next(&P->core->core_lwp_head);
+	core_info_t *core = P->data;
+	lwp_info_t *lwp = list_next(&core->core_lwp_head);
 	uint_t i;
 
-	for (i = 0; i < P->core->core_nlwp; i++, lwp = list_next(lwp)) {
+	for (i = 0; i < core->core_nlwp; i++, lwp = list_next(lwp)) {
 		if (lwp->lwp_id == lwpid)
 			return (lwp);
 	}
@@ -116,7 +120,7 @@ getlwpstatus(struct ps_prochandle *P, lwpid_t lwpid, lwpstatus_t *lps)
 	 * If this is a core file, we need to iterate through our list of
 	 * cached lwp information and then copy out the status.
 	 */
-	if (P->core != NULL && (lwp = getlwpcore(P, lwpid)) != NULL) {
+	if (P->data != NULL && (lwp = getlwpcore(P, lwpid)) != NULL) {
 		(void) memcpy(lps, &lwp->lwp_status, sizeof (lwpstatus_t));
 		return (0);
 	}
@@ -344,6 +348,39 @@ Plwp_getpsinfo(struct ps_prochandle *P, lwpid_t lwpid, lwpsinfo_t *lps)
 		(void) memcpy(lps, &lwp->lwp_psinfo, sizeof (lwpsinfo_t));
 		return (0);
 	}
+
+	return (-1);
+}
+
+int
+Plwp_getspymaster(struct ps_prochandle *P, lwpid_t lwpid, psinfo_t *ps)
+{
+	lwpstatus_t lps;
+
+	if (P->state == PS_IDLE) {
+		errno = ENODATA;
+		return (-1);
+	}
+
+	if (getlwpstatus(P, lwpid, &lps) != 0)
+		return (-1);
+
+	if (!(lps.pr_flags & PR_AGENT)) {
+		errno = EINVAL;
+		return (-1);
+	}
+
+	if (P->state != PS_DEAD) {
+		return (getlwpfile(P, lwpid, "spymaster",
+		    ps, sizeof (psinfo_t)));
+	}
+
+	if (P->spymaster.pr_nlwp != 0) {
+		(void) memcpy(ps, &P->spymaster, sizeof (psinfo_t));
+		return (0);
+	}
+
+	errno = ENODATA;
 
 	return (-1);
 }

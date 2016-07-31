@@ -60,6 +60,7 @@
 #include <sys/archsystm.h>
 #include <sys/promif.h>
 #include <sys/pci_cfgspace.h>
+#include <sys/bootvfs.h>
 #ifdef __xpv
 #include <sys/hypervisor.h>
 #else
@@ -75,14 +76,6 @@ extern uint32_t cpuid_feature_ecx_include;
 extern uint32_t cpuid_feature_ecx_exclude;
 extern uint32_t cpuid_feature_edx_include;
 extern uint32_t cpuid_feature_edx_exclude;
-
-/*
- * Dummy spl priority masks
- */
-static unsigned char dummy_cpu_pri[MAXIPL + 1] = {
-	0xf, 0xf, 0xf, 0xf, 0xf, 0xf, 0xf, 0xf,
-	0xf, 0xf, 0xf, 0xf, 0xf, 0xf, 0xf, 0xf, 0xf
-};
 
 /*
  * Set console mode
@@ -127,13 +120,6 @@ mlsetup(struct regs *rp)
 	 */
 	cpu[0]->cpu_m.mcpu_vcpu_info = &HYPERVISOR_shared_info->vcpu_info[0];
 #endif
-
-	/*
-	 * Set up dummy cpu_pri_data values till psm spl code is
-	 * installed.  This allows splx() to work on amd64.
-	 */
-
-	cpu[0]->cpu_pri_data = dummy_cpu_pri;
 
 	/*
 	 * check if we've got special bits to clear or set
@@ -195,9 +181,30 @@ mlsetup(struct regs *rp)
 	cpuid_pass1(cpu[0], x86_featureset);
 
 #if !defined(__xpv)
-
-	if (get_hwenv() == HW_XEN_HVM)
+	if ((get_hwenv() & HW_XEN_HVM) != 0)
 		xen_hvm_init();
+
+	/*
+	 * Before we do anything with the TSCs, we need to work around
+	 * Intel erratum BT81.  On some CPUs, warm reset does not
+	 * clear the TSC.  If we are on such a CPU, we will clear TSC ourselves
+	 * here.  Other CPUs will clear it when we boot them later, and the
+	 * resulting skew will be handled by tsc_sync_master()/_slave();
+	 * note that such skew already exists and has to be handled anyway.
+	 *
+	 * We do this only on metal.  This same problem can occur with a
+	 * hypervisor that does not happen to virtualise a TSC that starts from
+	 * zero, regardless of CPU type; however, we do not expect hypervisors
+	 * that do not virtualise TSC that way to handle writes to TSC
+	 * correctly, either.
+	 */
+	if (get_hwenv() == HW_NATIVE &&
+	    cpuid_getvendor(CPU) == X86_VENDOR_Intel &&
+	    cpuid_getfamily(CPU) == 6 &&
+	    (cpuid_getmodel(CPU) == 0x2d || cpuid_getmodel(CPU) == 0x3e) &&
+	    is_x86_feature(x86_featureset, X86FSET_TSC)) {
+		(void) wrmsr(REG_TSC, 0UL);
+	}
 
 	/*
 	 * Patch the tsc_read routine with appropriate set of instructions,
@@ -218,7 +225,7 @@ mlsetup(struct regs *rp)
 	 * The Xen hypervisor does not correctly report whether rdtscp is
 	 * supported or not, so we must assume that it is not.
 	 */
-	if (get_hwenv() != HW_XEN_HVM &&
+	if ((get_hwenv() & HW_XEN_HVM) == 0 &&
 	    is_x86_feature(x86_featureset, X86FSET_TSCP))
 		patch_tsc_read(X86_HAVE_TSCP);
 	else if (cpuid_getvendor(CPU) == X86_VENDOR_AMD &&
@@ -261,8 +268,17 @@ mlsetup(struct regs *rp)
 	if (is_x86_feature(x86_featureset, X86FSET_TSCP))
 		(void) wrmsr(MSR_AMD_TSCAUX, 0);
 
+	/*
+	 * Let's get the other %cr4 stuff while we're here. Note, we defer
+	 * enabling CR4_SMAP until startup_end(); however, that's importantly
+	 * before we start other CPUs. That ensures that it will be synced out
+	 * to other CPUs.
+	 */
 	if (is_x86_feature(x86_featureset, X86FSET_DE))
 		setcr4(getcr4() | CR4_DE);
+
+	if (is_x86_feature(x86_featureset, X86FSET_SMEP))
+		setcr4(getcr4() | CR4_SMEP);
 #endif /* __xpv */
 
 	/*
@@ -466,6 +482,10 @@ mach_modpath(char *path, const char *filename)
 	char *p;
 	const char isastr[] = "/amd64";
 	size_t isalen = strlen(isastr);
+
+	len = strlen(SYSTEM_BOOT_PATH "/kernel");
+	(void) strcpy(path, SYSTEM_BOOT_PATH "/kernel ");
+	path += len + 1;
 
 	if ((p = strrchr(filename, '/')) == NULL)
 		return;

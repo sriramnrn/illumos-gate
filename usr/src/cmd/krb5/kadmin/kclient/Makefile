@@ -32,7 +32,7 @@ SHFILES=	kclient
 SECFILES=	pam_krb5_first \
 		pam_krb5_only \
 		pam_krb5_optional
-CLOBBERFILES=	$(SHFILES)
+CLOBBERFILES +=	$(SHFILES)
 
 KRB5SBINSHFILES=$(SHFILES:%=$(KRB5SBIN)/%)
 
@@ -59,6 +59,10 @@ CPPFLAGS += -I$(SRC)/uts/common/gssapi/include \
 	-I$(SRC)/lib/krb5 -I$(SRC)/lib/gss_mechs/mech_krb5/include \
 	-I$(SRC)/uts/common/gssapi/include  \
 	-I$(SRC)/uts/common/gssapi/mechs/krb5/include
+
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-unused-function
 
 ksetpw:=	LDFLAGS += $(KRUNPATH)
 kdyndns:=	LDFLAGS += -R/usr/lib/smbsrv
@@ -99,7 +103,7 @@ $(USRLIBSEC)/%: %
 	$(INS.file)
 
 clean:
-	$(RM) $(PROG) $(SHFILES)
+	$(RM) $(OBJS)
 
 lint:	lint_SRCS
 

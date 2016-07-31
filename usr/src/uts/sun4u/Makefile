@@ -21,6 +21,7 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 #	This makefile drives the production of all implementation architecture
 #	dependent modules for the sun4u architecture.
@@ -46,7 +47,6 @@ SPARC_LINTS	 =
 #
 LINT_LIBS	 = $(LINT_LIB) \
 		   $(LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
-		   $(CLOSED_LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
 		   $(SPARC_LINTS:%=$(SPARC_LIB_DIR)/llib-l%.ln)
 
 
@@ -55,7 +55,7 @@ def.prereq	:=	TARGET= def
 all		:=	TARGET= all
 all.prereq	:=	TARGET= all
 install		:=	TARGET= install
-install.prereq	:=	TARGET= all
+install.prereq	:=	TARGET= install
 install_h	:=	TARGET= install_h
 install_h.prere	:=	TARGET= install_h
 clean		:=	TARGET= clean
@@ -71,8 +71,8 @@ check		:=	TARGET= check
 
 .KEEP_STATE:
 
-.PARALLEL:	$(PARALLEL_KMODS) $(CLOSED_KMODS) $(XMODS) $(CLOSED_XMODS) \
-		$(IMPLEMENTATIONS) $(CLOSED_IMPLEMENTATIONS) \
+.PARALLEL:	$(PARALLEL_KMODS) $(XMODS) \
+		$(IMPLEMENTATIONS) \
 		modlist modlist.sparc
 
 # Override for CPU_KMODS... they cannot be built
@@ -80,12 +80,12 @@ check		:=	TARGET= check
 .NO_PARALLEL:	$(CPU_KMODS)
 
 def all clean clobber clean.lint: genassym unix .WAIT \
-	$(KMODS) $(CLOSED_KMODS) $(XMODS) $(CLOSED_XMODS) \
-	$(IMPLEMENTATIONS) $(CLOSED_IMPLEMENTATIONS)
+	$(KMODS) $(XMODS) $(IMPLEMENTATIONS)
+
+clobber: clobber.targ
 
 # list the modules under sun4u.
-modlist: unix $(KMODS) $(CLOSED_KMODS) $(XMODS) $(CLOSED_XMODS) \
-	$(IMPLEMENTATIONS:.WAIT=) $(CLOSED_IMPLEMENTATIONS)
+modlist: unix $(KMODS) $(XMODS) $(IMPLEMENTATIONS:.WAIT=)
 
 # list the modules for Install -k sun4u.
 modlist.karch: modlist modlist.sparc
@@ -93,12 +93,12 @@ modlist.karch: modlist modlist.sparc
 modlist.sparc:
 	@cd $(SRC)/uts/sparc; pwd; $(MAKE) $(NO_STATE) modlist
 
-install: install_platforms genassym unix .WAIT $(KMODS) $(CLOSED_KMODS) \
-	$(XMODS) $(CLOSED_XMODS) $(IMPLEMENTATIONS) $(CLOSED_IMPLEMENTATIONS)
+install: install_platforms genassym unix .WAIT $(KMODS) \
+	$(XMODS) $(IMPLEMENTATIONS)
 
 lintlib:	unix
 
-modlintlib:	$(LINT_KMODS) $(CLOSED_LINT_KMODS)
+modlintlib:	$(LINT_KMODS)
 
 genassym unix $(KMODS):	FRC
 	@cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
@@ -113,8 +113,9 @@ genassym unix $(KMODS):	FRC
 PRIVS_C = $(UTSBASE)/common/os/priv_const.c
 
 $(PRIVS_C): $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
 
+CLOBBERFILES += $(PRIVS_C)
 
 #
 # Prerequisites
@@ -192,10 +193,6 @@ genunix: $(PRIVS_C)
 $(IMPLEMENTATIONS):	FRC
 	@cd $@; pwd; THISIMPL=$@ $(MAKE) $(NO_STATE) $(TARGET)
 
-$(CLOSED_IMPLEMENTATIONS):	FRC
-	cd $(CLOSED)/uts/sun4u/$@; pwd; \
-	    THISIMPL=$@ $(MAKE) $(NO_STATE) $(TARGET); \
-
 $(XMODS):	FRC
 	@if [ -f $@/Makefile  ]; then \
 		cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET); \
@@ -203,18 +200,7 @@ $(XMODS):	FRC
 		true; \
 	fi
 
-$(CLOSED_XMODS):	FRC
-	@if [ -f $(CLOSED)/uts/sun4u/$@/Makefile ]; then \
-		cd $(CLOSED)/uts/sun4u/$@; pwd; $(MAKE) $(NO_STATE) $(TARGET); \
-	else \
-		true; \
-	fi
-
-$(CLOSED_KMODS):	FRC
-	cd $(CLOSED)/uts/sun4u/$@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
-
-install_h check: install_platforms $(IMPLEMENTATIONS) \
-	$(CLOSED_IMPLEMENTATIONS) FRC
+install_h check: install_platforms $(IMPLEMENTATIONS)
 	@cd sys; pwd; $(MAKE) $(TARGET)
 	@cd vm; pwd; $(MAKE) $(TARGET)
 
@@ -284,18 +270,7 @@ globallint:
 	@-$(LINT) $(LINTFLAGS) $(LINT_LIBS) 2>&1 | $(LGREP.2)
 
 lint:	lintlib .WAIT modlintlib .WAIT $(SPARC_LINTS) $(LINT_DEPS) \
-	$(IMPLEMENTATIONS) $(CLOSED_IMPLEMENTATIONS) $(CPU_KMODS)
-
-# EXPORT DELETE START
-
-EXPORT_SRC:
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-	    < Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-
-# EXPORT DELETE END
+	$(IMPLEMENTATIONS) $(CPU_KMODS)
 
 include ../Makefile.targ
 
@@ -303,11 +278,7 @@ include ../Makefile.targ
 # Cross-reference customization: build a cross-reference over all of the
 # sun4u-related directories.
 #
-SHARED_XRDIRS	= ../sun4u ../sun4 ../sfmmu ../sparc ../sun ../common
-CLOSED_XRDIRS	= $(SHARED_XRDIRS:../%=../% ../../../closed/uts/%)
-XRDIRS		= $(SHARED_XRDIRS)
-$(CLOSED_BUILD)XRDIRS	= $(CLOSED_XRDIRS:../../../closed/uts/sfmmu=)
-
+XRDIRS	= ../sun4u ../sun4 ../sfmmu ../sparc ../sun ../common
 XRPRUNE = i86pc
 
 cscope.out tags: FRC

@@ -160,6 +160,31 @@ ignore_sym(Ofl_desc *ofl, Ifl_desc *ifl, Sym_desc *sdp, int allow_ldynsym)
 	}
 }
 
+static Boolean
+isdesc_discarded(Is_desc *isp)
+{
+	Ifl_desc	*ifl = isp->is_file;
+	Os_desc		*osp = isp->is_osdesc;
+	Word		ptype = osp->os_sgdesc->sg_phdr.p_type;
+
+	if (isp->is_flags & FLG_IS_DISCARD)
+		return (TRUE);
+
+	/*
+	 * If the file is discarded, it will take
+	 * the section with it.
+	 */
+	if (ifl &&
+	    (((ifl->ifl_flags & FLG_IF_FILEREF) == 0) ||
+	    ((ptype == PT_LOAD) &&
+	    ((isp->is_flags & FLG_IS_SECTREF) == 0) &&
+	    (isp->is_shdr->sh_size > 0))) &&
+	    (ifl->ifl_flags & FLG_IF_IGNORE))
+		return (TRUE);
+
+	return (FALSE);
+}
+
 /*
  * There are situations where we may count output sections (ofl_shdrcnt)
  * that are subsequently eliminated from the output object. Whether or
@@ -181,7 +206,6 @@ adjust_os_count(Ofl_desc *ofl)
 	Sg_desc		*sgp;
 	Is_desc		*isp;
 	Os_desc		*osp;
-	Ifl_desc	*ifl;
 	Aliste		idx1;
 
 	if ((ofl->ofl_flags & FLG_OF_ADJOSCNT) == 0)
@@ -194,37 +218,20 @@ adjust_os_count(Ofl_desc *ofl)
 	 */
 	for (APLIST_TRAVERSE(ofl->ofl_segs, idx1, sgp)) {
 		Aliste	idx2;
-		Word	ptype = sgp->sg_phdr.p_type;
 
 		for (APLIST_TRAVERSE(sgp->sg_osdescs, idx2, osp)) {
 			Aliste	idx3;
 			int	keep = 0, os_isdescs_idx;
 
 			OS_ISDESCS_TRAVERSE(os_isdescs_idx, osp, idx3, isp) {
-				ifl = isp->is_file;
-
-				/* Input section is tagged for discard? */
-				if (isp->is_flags & FLG_IS_DISCARD)
-					continue;
-
-				/*
-				 * If the file is discarded, it will take
-				 * the section with it.
-				 */
-				if (ifl &&
-				    (((ifl->ifl_flags & FLG_IF_FILEREF) == 0) ||
-				    ((ptype == PT_LOAD) &&
-				    ((isp->is_flags & FLG_IS_SECTREF) == 0) &&
-				    (isp->is_shdr->sh_size > 0))) &&
-				    (ifl->ifl_flags & FLG_IF_IGNORE))
-					continue;
-
 				/*
 				 * We have found a kept input section,
 				 * so the output section will be created.
 				 */
-				keep = 1;
-				break;
+				if (!isdesc_discarded(isp)) {
+					keep = 1;
+					break;
+				}
 			}
 			/*
 			 * If no section of this name was kept, decrement
@@ -2849,7 +2856,14 @@ ld_make_strmerge(Ofl_desc *ofl, Os_desc *osp, APlist **rel_alpp,
 	 */
 	mstrtab = NULL;
 	for (APLIST_TRAVERSE(osp->os_mstrisdescs, idx, isp)) {
-		if (isp->is_flags & FLG_IS_DISCARD)
+		if (isdesc_discarded(isp))
+			continue;
+
+		/*
+		 * Input sections of 0 size are dubiously valid since they do
+		 * not even contain the NUL string.  Ignore them.
+		 */
+		if (isp->is_shdr->sh_size == 0)
 			continue;
 
 		/*
@@ -3462,4 +3476,50 @@ ld_make_text(Ofl_desc *ofl, size_t size)
 		return ((Is_desc *)S_ERROR);
 
 	return (isec);
+}
+
+void
+ld_comdat_validate(Ofl_desc *ofl, Ifl_desc *ifl)
+{
+	int i;
+
+	for (i = 0; i < ifl->ifl_shnum; i++) {
+		Is_desc *isp = ifl->ifl_isdesc[i];
+		int types = 0;
+		char buf[1024] = "";
+		Group_desc *gr = NULL;
+
+		if ((isp == NULL) || (isp->is_flags & FLG_IS_COMDAT) == 0)
+			continue;
+
+		if (isp->is_shdr->sh_type == SHT_SUNW_COMDAT) {
+			types++;
+			(void) strlcpy(buf, MSG_ORIG(MSG_STR_SUNW_COMDAT),
+			    sizeof (buf));
+		}
+
+		if (strncmp(MSG_ORIG(MSG_SCN_GNU_LINKONCE), isp->is_name,
+		    MSG_SCN_GNU_LINKONCE_SIZE) == 0) {
+			types++;
+			if (types > 1)
+				(void) strlcat(buf, ", ", sizeof (buf));
+			(void) strlcat(buf, MSG_ORIG(MSG_SCN_GNU_LINKONCE),
+			    sizeof (buf));
+		}
+
+		if ((isp->is_shdr->sh_flags & SHF_GROUP) &&
+		    ((gr = ld_get_group(ofl, isp)) != NULL) &&
+		    (gr->gd_data[0] & GRP_COMDAT)) {
+			types++;
+			if (types > 1)
+				(void) strlcat(buf, ", ", sizeof (buf));
+			(void) strlcat(buf, MSG_ORIG(MSG_STR_GROUP),
+			    sizeof (buf));
+		}
+
+		if (types > 1)
+			ld_eprintf(ofl, ERR_FATAL,
+			    MSG_INTL(MSG_SCN_MULTICOMDAT), ifl->ifl_name,
+			    EC_WORD(isp->is_scnndx), isp->is_name, buf);
+	}
 }

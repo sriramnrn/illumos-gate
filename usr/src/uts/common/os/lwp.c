@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ */
+
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/sysmacros.h>
@@ -142,6 +146,7 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 	if (rctlfail) {
 		mutex_exit(&p->p_zone->zone_nlwps_lock);
 		mutex_exit(&p->p_lock);
+		atomic_inc_32(&p->p_zone->zone_ffcap);
 		return (NULL);
 	}
 	p->p_task->tk_nlwps++;
@@ -200,6 +205,7 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 			p->p_zone->zone_nlwps--;
 			mutex_exit(&p->p_zone->zone_nlwps_lock);
 			mutex_exit(&p->p_lock);
+			atomic_inc_32(&p->p_zone->zone_ffnomem);
 			return (NULL);
 		}
 	} else {
@@ -213,6 +219,7 @@ lwp_create(void (*proc)(), caddr_t arg, size_t len, proc_t *p,
 			p->p_zone->zone_nlwps--;
 			mutex_exit(&p->p_zone->zone_nlwps_lock);
 			mutex_exit(&p->p_lock);
+			atomic_inc_32(&p->p_zone->zone_ffnomem);
 			return (NULL);
 		}
 	}
@@ -578,10 +585,12 @@ grow:
 			err = CL_FORK(curthread, t, bufp);
 			t->t_cid = cid;
 		}
-		if (err)
+		if (err) {
+			atomic_inc_32(&p->p_zone->zone_ffmisc);
 			goto error;
-		else
+		} else {
 			bufp = NULL;
+		}
 	}
 
 	/*
@@ -608,6 +617,7 @@ grow:
 				 * All lwpids are allocated; fail the request.
 				 */
 				err = 1;
+				atomic_inc_32(&p->p_zone->zone_ffnoproc);
 				goto error;
 			}
 			/*
@@ -627,6 +637,7 @@ grow:
 	if (PROC_IS_BRANDED(p)) {
 		if (BROP(p)->b_initlwp(lwp)) {
 			err = 1;
+			atomic_inc_32(&p->p_zone->zone_ffmisc);
 			goto error;
 		}
 		branded = 1;
@@ -993,6 +1004,15 @@ lwp_exit(void)
 	if (lwp->lwp_curinfo != NULL) {
 		siginfofree(lwp->lwp_curinfo);
 		lwp->lwp_curinfo = NULL;
+	}
+
+	/*
+	 * If we have spymaster information (that is, if we're an agent LWP),
+	 * free that now.
+	 */
+	if (lwp->lwp_spymaster != NULL) {
+		kmem_free(lwp->lwp_spymaster, sizeof (psinfo_t));
+		lwp->lwp_spymaster = NULL;
 	}
 
 	thread_rele(t);

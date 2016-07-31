@@ -25,6 +25,9 @@
  *
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ */
 #ifndef	__RTLD_H
 #define	__RTLD_H
 
@@ -761,7 +764,6 @@ extern int		remove_hdl(Grp_hdl *, Rt_map *, int *);
 extern void		remove_lmc(Lm_list *, Rt_map *, Aliste, const char *);
 extern void		remove_lml(Lm_list *);
 extern void		remove_so(Lm_list *, Rt_map *, Rt_map *);
-extern int		rt_cond_wait(Rt_cond *, Rt_lock *);
 extern int		rt_critical(void);
 extern int		rt_bind_guard(int);
 extern int		rt_bind_clear(int);
@@ -786,7 +788,7 @@ extern void		set_dirs(Alist **, Spath_defn *, uint_t);
 extern int		set_prot(Rt_map *, mmapobj_result_t *, int);
 extern Rt_map		*setup(char **, auxv_t *, Word, char *, int, char *,
 			    ulong_t, ulong_t, int fd, Phdr *, char *, char **,
-			    uid_t, uid_t, gid_t, gid_t, void *, int, uint_t);
+			    uid_t, uid_t, gid_t, gid_t, void *, int, uint_t *);
 extern const char	*stravl_insert(const char *, uint_t, size_t, int);
 extern void		spavl_insert(const char *);
 extern int		sfcap1_check(Syscapset *, Xword, Rej_desc *);

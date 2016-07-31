@@ -24,6 +24,10 @@
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
+/*
+ * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 #include <sys/param.h>
 #include <sys/types.h>
@@ -189,7 +193,7 @@ fpregset_to_fxsave(const fpregset_t *fp, struct fxsave_state *fx)
 #if defined(__amd64)
 	bcopy(fp, fx, sizeof (*fx));
 #else
-	const struct fpchip_state *fc = &fp->fp_reg_set.fpchip_state;
+	const struct _fpchip_state *fc = &fp->fp_reg_set.fpchip_state;
 
 	fnsave_to_fxsave((const struct fnsave_state *)fc, fx);
 	fx->fx_mxcsr = fc->mxcsr;
@@ -210,7 +214,7 @@ fxsave_to_fpregset(const struct fxsave_state *fx, fpregset_t *fp)
 #if defined(__amd64)
 	bcopy(fx, fp, sizeof (*fx));
 #else
-	struct fpchip_state *fc = &fp->fp_reg_set.fpchip_state;
+	struct _fpchip_state *fc = &fp->fp_reg_set.fpchip_state;
 
 	fxsave_to_fnsave(fx, (struct fnsave_state *)fc);
 	fc->mxcsr = fx->fx_mxcsr;
@@ -922,10 +926,14 @@ elfheadcheck(
 }
 
 uint_t auxv_hwcap_include = 0;	/* patch to enable unrecognized features */
+uint_t auxv_hwcap_include_2 = 0;	/* second word */
 uint_t auxv_hwcap_exclude = 0;	/* patch for broken cpus, debugging */
+uint_t auxv_hwcap_exclude_2 = 0;	/* second word */
 #if defined(_SYSCALL32_IMPL)
 uint_t auxv_hwcap32_include = 0;	/* ditto for 32-bit apps */
+uint_t auxv_hwcap32_include_2 = 0;	/* ditto for 32-bit apps */
 uint_t auxv_hwcap32_exclude = 0;	/* ditto for 32-bit apps */
+uint_t auxv_hwcap32_exclude_2 = 0;	/* ditto for 32-bit apps */
 #endif
 
 /*
@@ -939,10 +947,13 @@ uint_t auxv_hwcap32_exclude = 0;	/* ditto for 32-bit apps */
 void
 bind_hwcap(void)
 {
-	uint_t cpu_hwcap_flags = cpuid_pass4(NULL);
+	uint_t cpu_hwcap_flags[2];
+	cpuid_pass4(NULL, cpu_hwcap_flags);
 
-	auxv_hwcap = (auxv_hwcap_include | cpu_hwcap_flags) &
+	auxv_hwcap = (auxv_hwcap_include | cpu_hwcap_flags[0]) &
 	    ~auxv_hwcap_exclude;
+	auxv_hwcap_2 = (auxv_hwcap_include_2 | cpu_hwcap_flags[1]) &
+	    ~auxv_hwcap_exclude_2;
 
 #if defined(__amd64)
 	/*
@@ -962,7 +973,8 @@ bind_hwcap(void)
 	auxv_hwcap |= AV_386_AHF;
 #endif
 
-	if (auxv_hwcap_include || auxv_hwcap_exclude) {
+	if (auxv_hwcap_include || auxv_hwcap_exclude || auxv_hwcap_include_2 ||
+	    auxv_hwcap_exclude_2) {
 		/*
 		 * The below assignment is regrettably required to get lint
 		 * to accept the validity of our format string.  The format
@@ -977,13 +989,17 @@ bind_hwcap(void)
 		 * and as soon as the format string is programmatic, it
 		 * knows enough to shut up.
 		 */
-		const char *fmt = "?user ABI extensions: %b\n";
+		char *fmt = "?user ABI extensions: %b\n";
 		cmn_err(CE_CONT, fmt, auxv_hwcap, FMT_AV_386);
+		fmt = "?user ABI extensions (word 2): %b\n";
+		cmn_err(CE_CONT, fmt, auxv_hwcap_2, FMT_AV_386_2);
 	}
 
 #if defined(_SYSCALL32_IMPL)
-	auxv_hwcap32 = (auxv_hwcap32_include | cpu_hwcap_flags) &
+	auxv_hwcap32 = (auxv_hwcap32_include | cpu_hwcap_flags[0]) &
 	    ~auxv_hwcap32_exclude;
+	auxv_hwcap32_2 = (auxv_hwcap32_include_2 | cpu_hwcap_flags[1]) &
+	    ~auxv_hwcap32_exclude_2;
 
 #if defined(__amd64)
 	/*
@@ -1001,12 +1017,15 @@ bind_hwcap(void)
 	auxv_hwcap32 |= AV_386_AHF;
 #endif
 
-	if (auxv_hwcap32_include || auxv_hwcap32_exclude) {
+	if (auxv_hwcap32_include || auxv_hwcap32_exclude ||
+	    auxv_hwcap32_include_2 || auxv_hwcap32_exclude_2) {
 		/*
 		 * See the block comment in the cmn_err() of auxv_hwcap, above.
 		 */
-		const char *fmt = "?32-bit user ABI extensions: %b\n";
+		char *fmt = "?32-bit user ABI extensions: %b\n";
 		cmn_err(CE_CONT, fmt, auxv_hwcap32, FMT_AV_386);
+		fmt = "?32-bit user ABI extensions (word 2): %b\n";
+		cmn_err(CE_CONT, fmt, auxv_hwcap32_2, FMT_AV_386_2);
 	}
 #endif
 }
@@ -1059,7 +1078,6 @@ panic_saveregs(panic_data_t *pdp, struct regs *rp)
 	PANICNVADD(pnv, "rax", rp->r_rax);
 	PANICNVADD(pnv, "rbx", rp->r_rbx);
 	PANICNVADD(pnv, "rbp", rp->r_rbp);
-	PANICNVADD(pnv, "r10", rp->r_r10);
 	PANICNVADD(pnv, "r10", rp->r_r10);
 	PANICNVADD(pnv, "r11", rp->r_r11);
 	PANICNVADD(pnv, "r12", rp->r_r12);

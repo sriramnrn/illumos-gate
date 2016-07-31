@@ -89,6 +89,8 @@ LINT_FLAGS=	-c -Nlevel=4 -Ncheck $($(CONCURR_MODE)_FLAGS)
 
 XGETFLAGS +=	-a -s -x $(PROG).xcl
 
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 #
 # LIBRARIES:
@@ -122,7 +124,7 @@ lint:
 	$(LINT) $(LINT_FLAGS) $(CPPFLAGS) $(LINT_SRCS)
 
 clean:
-	$(RM) $(PROG) $(OBJS) $(LINT_FILES) $(POFILES) $(POFILE) core 
+	$(RM) $(PROG) $(OBJS) $(LINT_FILES)
 
 $(POFILE): $(POFILES)
 	$(RM) $(POFILE)

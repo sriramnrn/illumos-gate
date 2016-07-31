@@ -22,8 +22,10 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
+ *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -43,9 +45,8 @@
 #ifndef _ISO_TIME_ISO_H
 #define	_ISO_TIME_ISO_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI" /* SVr4.0 1.18 */
-
 #include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -53,14 +54,6 @@ extern "C" {
 
 #if __cplusplus >= 199711L
 namespace std {
-#endif
-
-#ifndef NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
 #endif
 
 #if !defined(_SIZE_T) || __cplusplus >= 199711L
@@ -97,8 +90,6 @@ struct	tm {	/* see ctime(3) */
 };
 
 
-#if defined(__STDC__)
-
 extern char *asctime(const struct tm *);
 extern clock_t clock(void);
 extern char *ctime(const time_t *);
@@ -109,20 +100,6 @@ extern time_t mktime(struct tm *);
 extern time_t time(time_t *);
 extern size_t strftime(char *_RESTRICT_KYWD, size_t, const char *_RESTRICT_KYWD,
 	const struct tm *_RESTRICT_KYWD);
-
-#else /* __STDC__ */
-
-extern char *asctime();
-extern clock_t clock();
-extern char *ctime();
-extern double difftime();
-extern struct tm *gmtime();
-extern struct tm *localtime();
-extern time_t mktime();
-extern time_t time();
-extern size_t strftime();
-
-#endif	/* __STDC__ */
 
 #if __cplusplus >= 199711L
 }

@@ -59,11 +59,6 @@ else
 	rootlist="$CODEMGR_WS/proto/root_sparc $CODEMGR_WS/proto/root_i386"
 fi
 
-# If the closed source is not present, then exclude IKE from validation.
-if [ "$CLOSED_IS_PRESENT" = no ]; then
-	excl="-e ^usr/include/ike/"
-fi
-
 for ROOT in $rootlist
 do
 	case "$ROOT" in
@@ -84,7 +79,8 @@ do
 		# the svr4-specific usr/src/pkgdefs
 		#
 		[ -f $SRC/pkgdefs/etc/exception_list_$arch ] && \
-			validate_paths '-s/\s*'$arch'$//' $excl -b $ROOT \
+			validate_paths '-s/\s*'$arch'$//'  \
+			    -e ^usr/include/ike/ -b $ROOT \
 			    $args $SRC/pkgdefs/etc/exception_list_$arch
 		#
 		# These are the new-style packaging exception lists,
@@ -116,37 +112,11 @@ if [ -r $SRC/tools/findunref/exception_list ]; then
 	validate_paths -k ISUSED -r -e '^\*' $SRC/tools/findunref/exception_list
 fi
 
-# These are straightforward.
-if [ -d $SRC/xmod ]; then
-	# If the closed source is not present, then don't validate it.
-	if [ "$CLOSED_IS_PRESENT" = no ]; then
-		excl_cry="-e ^usr/closed"
-		excl_xmod="-e ^../closed"
-	fi
-	validate_paths $excl_cry $SRC/xmod/cry_files
-	validate_paths $excl_xmod -b $SRC $SRC/xmod/xmod_files
-fi
-
 if [ -f $SRC/tools/opensolaris/license-list ]; then
-	excl=
-	if [ "$CLOSED_IS_PRESENT" = no ]; then
-		excl="-e ^usr/closed"
-	fi
 	sed -e 's/$/.descrip/' < $SRC/tools/opensolaris/license-list | \
-		validate_paths -n SRC/tools/opensolaris/license-list $excl
+		validate_paths -n SRC/tools/opensolaris/license-list
 fi
 
-# Finally, make sure the that (req|inc).flg files are in good shape.
-# If SCCS files are not expected to be present, though, then don't
-# check them.
-if [ ! -d "$CODEMGR_WS/Codemgr_wsdata" ]; then
-	f_flg='-f'
-fi
-# If the closed source is not present, then don't validate it.
-if [ "$CLOSED_IS_PRESENT" = no ]; then
-	excl="-e ^usr/closed/"
-fi
-
-validate_flg $f_flg $excl
+validate_flg -f
 
 exit 0

@@ -1,10 +1,11 @@
 '\" te
+.\" Copyright (c) 2013 Gary Mills
 .\" Copyright (c) 2004, Sun Microsystems, Inc. All Rights Reserved.
 .\" Copyright 1989 AT&T
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
 .\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
 .\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PASSWD 4 "Jul 28, 2004"
+.TH PASSWD 4 "Apr 16, 2013"
 .SH NAME
 passwd \- password file
 .SH SYNOPSIS
@@ -14,7 +15,6 @@ passwd \- password file
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The file \fB/etc/passwd\fR is a local source of information about users'
 accounts. The password file can be used in conjunction with other naming
@@ -47,7 +47,7 @@ where
 is the user's login name.
 .sp
 The login (\fBlogin\fR) and role (\fBrole\fR) fields accept a string of no more
-than eight bytes consisting of characters from the set of alphabetic
+than 32 bytes consisting of characters from the set of alphabetic
 characters, numeric characters, period (\fB\&.\fR), underscore (\fB_\fR), and
 hyphen (\fB-\fR). The first character should be alphabetic and the field should
 contain at least one lower case alphabetic character. A warning message is
@@ -305,7 +305,6 @@ will be able to log in with their usual password, shell, and home directory,
 but with a \fIgcos\fR field of \fBGuest\fR
 
 .SH FILES
-.sp
 .ne 2
 .na
 \fB\fB/etc/nsswitch.conf\fR\fR
@@ -333,12 +332,11 @@ but with a \fIgcos\fR field of \fBGuest\fR
 .RE
 
 .SH SEE ALSO
-.sp
 .LP
 \fBchgrp\fR(1), \fBchown\fR(1), \fBfinger\fR(1), \fBgroups\fR(1),
 \fBlogin\fR(1), \fBnewgrp\fR(1), \fBnispasswd\fR(1), \fBpasswd\fR(1),
 \fBsh\fR(1), \fBsort\fR(1), \fBdomainname\fR(1M), \fBgetent\fR(1M),
-\fBin.ftpd\fR(1M), \fBpassmgmt\fR(1M), \fBpwck\fR(1M), \fBpwconv\fR(1M),
+\fBpassmgmt\fR(1M), \fBpwck\fR(1M), \fBpwconv\fR(1M),
 \fBsu\fR(1M), \fBuseradd\fR(1M), \fBuserdel\fR(1M), \fBusermod\fR(1M),
 \fBa64l\fR(3C), \fBcrypt\fR(3C), \fBgetpw\fR(3C), \fBgetpwnam\fR(3C),
 \fBgetspnam\fR(3C), \fBputpwent\fR(3C), \fBgroup\fR(4), \fBhosts.equiv\fR(4),

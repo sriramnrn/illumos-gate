@@ -11,29 +11,32 @@
 .\"
 .\"
 .\" Copyright 2012, Richard Lowe.
+.\" Copyright (c) 2012, 2014 by Delphix. All rights reserved.
 .\"
-.TH "ZDB" "1M" "February 15, 2012" "" ""
+.TH "ZDB" "1M" "March 6, 2014" "" ""
 
 .SH "NAME"
 \fBzdb\fR - Display zpool debugging and consistency information
 
 .SH "SYNOPSIS"
-\fBzdb\fR [-CumdibcsDvhLXFPA] [-e [-p \fIpath\fR...]] [-t \fItxg\fR]
-    \fIpoolname\fR [\fIobject\fR ...]
+\fBzdb\fR [-CumdibcsDvhLMXFPA] [-e [-p \fIpath\fR...]] [-t \fItxg\fR]
+    [-U \fIcache\fR] [-I \fIinflight I/Os\fR] [-x \fIdumpdir\fR]
+    [\fIpoolname\fR [\fIobject\fR ...]]
 
 .P
-\fBzdb\fR [-divPA] [-e [-p \fIpath\fR...]] \fIdataset\fR [\fIobject\fR ...]
+\fBzdb\fR [-divPA] [-e [-p \fIpath\fR...]] [-U \fIcache\fR]
+    \fIdataset\fR [\fIobject\fR ...]
 
 .P
-\fBzdb\fR -m [-LXFPA] [-t \fItxg\fR] [-e [-p \fIpath\fR...]] \fIpoolname\fR
-    [\fIvdev\fR [\fImetaslab\fR ...]]
+\fBzdb\fR -m [-MLXFPA] [-t \fItxg\fR] [-e [-p \fIpath\fR...]] [-U \fIcache\fR]
+    \fIpoolname\fR [\fIvdev\fR [\fImetaslab\fR ...]]
 
 .P
-\fBzdb\fR -R [-A] [-e [-p \fIpath\fR...]] \fIpoolname\fR
+\fBzdb\fR -R [-A] [-e [-p \fIpath\fR...]] [-U \fIcache\fR] \fIpoolname\fR
     \fIvdev\fR:\fIoffset\fR:\fIsize\fR[:\fIflags\fR]
 
 .P
-\fBzdb\fR -S [-AP] [-e [-p \fIpath\fR...]] \fIpoolname\fR
+\fBzdb\fR -S [-AP] [-e [-p \fIpath\fR...]] [-U \fIcache\fR] \fIpoolname\fR
 
 .P
 \fBzdb\fR -l [-uA] \fIdevice\fR
@@ -51,6 +54,11 @@ a fsck(1M) nor an fsdb(1M) utility.
 The output of this command in general reflects the on-disk structure of a ZFS
 pool, and is inherently unstable. The precise output of most invocations is
 not documented, a knowledge of ZFS internals is assumed.
+
+.P
+If the \fIdataset\fR argument does not contain any \fB/\fR or \fB@\fR
+characters, it is interpreted as a pool name.  The root dataset can be
+specified as \fIpool\fB/\fR (pool name followed by a slash).
 
 .P
 When operating on an imported and active pool it is possible, though unlikely,
@@ -130,6 +138,12 @@ compression ratio (compress), inflation due to the zfs copies property
 If specified twice, display a histogram of deduplication statistics, showing
 the allocated (physically present on disk) and referenced (logically
 referenced in the pool) block counts and sizes by reference count.
+.sp
+If specified a third time, display the statistics independently for each deduplication table.
+.sp
+If specified a fourth time, dump the contents of the deduplication tables describing duplicate blocks.
+.sp
+If specified a fifth time, also dump the contents of the deduplication tables describing unique blocks.
 .RE
 
 .sp
@@ -181,6 +195,21 @@ verifies that all non-free blocks are referenced, which can be very expensive.
 .ne 2
 .na
 \fB-m\fR
+.ad
+.sp .6
+.RS 4n
+Display the offset, spacemap, and free space of each metaslab.
+When specified twice, also display information about the on-disk free
+space histogram associated with each metaslab. When specified three time,
+display the maximum contiguous free space, the in-core free space histogram,
+and the percentage of free space in each space map.  When specified
+four times display every spacemap record.
+.RE
+
+.sp
+.ne 2
+.na
+\fB-M\fR
 .ad
 .sp .6
 .RS 4n
@@ -346,12 +375,38 @@ Operate on an exported pool, not present in \fB/etc/zfs/zpool.cache\fR. The
 .sp
 .ne 2
 .na
+\fB-x\fR \fIdumpdir\fR
+.ad
+.sp .6
+.RS 4n
+All blocks accessed will be copied to files in the specified directory.
+The blocks will be placed in sparse files whose name is the same as
+that of the file or device read.  zdb can be then run on the generated files.
+Note that the \fB-bbc\fR flags are sufficient to access (and thus copy)
+all metadata on the pool.
+.RE
+
+.sp
+.ne 2
+.na
 \fB-F\fR
 .ad
 .sp .6
 .RS 4n
 Attempt to make an unreadable pool readable by trying progressively older
 transactions.
+.RE
+
+.sp
+.ne 2
+.na
+\fB-I \fIinflight I/Os\fR \fR
+.ad
+.sp .6
+.RS 4n
+Limit the number of outstanding checksum I/Os to the specified value. The
+default value is 200. This option affects the performance of the \fB-c\fR
+option.
 .RE
 
 .sp
@@ -384,8 +439,7 @@ and their associated transaction numbers.
 .ad
 .sp .6
 .RS 4n
-Use a cache file other than \fB/etc/zfs/zpool.cache\fR. This option is only
-valid with \fB-C\fR
+Use a cache file other than \fB/etc/zfs/zpool.cache\fR.
 .RE
 
 .sp
@@ -446,8 +500,7 @@ Dataset rpool/swap [ZVOL], ID 59, cr_txg 356, 486M, 2 objects
 .sp
 
 .LP
-\fBExample 3 \fRDisplay basic information about object 0 in
-'rpool/export/home'
+\fBExample 3 \fRDisplay basic information about object 0 in 'rpool/export/home'
 .sp
 .in +2
 .nf

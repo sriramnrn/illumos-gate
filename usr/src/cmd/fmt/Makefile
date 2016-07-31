@@ -20,8 +20,6 @@
 # CDDL HEADER END
 #
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2003 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -34,6 +32,10 @@ HEAD= ../mailx/head.o
 SRCS= $(OBJS:%.o=%.c)
 
 include ../Makefile.cmd
+
+LDLIBS += -lcmdutils
+CERRWARN += -_gcc=-Wno-switch
+CERRWARN += -_gcc=-Wno-parentheses
 
 .KEEP_STATE:
 

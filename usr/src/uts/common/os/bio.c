@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2011 Joyent, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1213,7 +1214,7 @@ biowait(struct buf *bp)
 	ASSERT(SEMA_HELD(&bp->b_sem));
 
 	cpup = CPU;
-	atomic_add_64(&cpup->cpu_stats.sys.iowait, 1);
+	atomic_inc_64(&cpup->cpu_stats.sys.iowait);
 	DTRACE_IO1(wait__start, struct buf *, bp);
 
 	/*
@@ -1226,7 +1227,7 @@ biowait(struct buf *bp)
 		sema_p(&bp->b_io);
 
 	DTRACE_IO1(wait__done, struct buf *, bp);
-	atomic_add_64(&cpup->cpu_stats.sys.iowait, -1);
+	atomic_dec_64(&cpup->cpu_stats.sys.iowait);
 
 	error = geterror(bp);
 	if ((bp->b_flags & B_ASYNC) == 0) {
@@ -1320,6 +1321,9 @@ pageio_setup(struct page *pp, size_t len, struct vnode *vp, int flags)
 		cpup = CPU;	/* get pointer AFTER preemption is disabled */
 		CPU_STATS_ADDQ(cpup, vm, pgin, 1);
 		CPU_STATS_ADDQ(cpup, vm, pgpgin, btopr(len));
+
+		atomic_add_64(&curzone->zone_pgpgin, btopr(len));
+
 		if ((flags & B_ASYNC) == 0) {
 			klwp_t *lwp = ttolwp(curthread);
 			if (lwp != NULL)
@@ -1336,12 +1340,18 @@ pageio_setup(struct page *pp, size_t len, struct vnode *vp, int flags)
 		if (pp != NULL && pp->p_vnode != NULL) {
 			if (IS_SWAPFSVP(pp->p_vnode)) {
 				CPU_STATS_ADDQ(cpup, vm, anonpgin, btopr(len));
+				atomic_add_64(&curzone->zone_anonpgin,
+				    btopr(len));
 			} else {
 				if (pp->p_vnode->v_flag & VVMEXEC) {
 					CPU_STATS_ADDQ(cpup, vm, execpgin,
 					    btopr(len));
+					atomic_add_64(&curzone->zone_execpgin,
+					    btopr(len));
 				} else {
 					CPU_STATS_ADDQ(cpup, vm, fspgin,
+					    btopr(len));
+					atomic_add_64(&curzone->zone_fspgin,
 					    btopr(len));
 				}
 			}

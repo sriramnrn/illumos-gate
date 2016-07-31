@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef _SMBSRV_SMB_DOOR_H
@@ -47,6 +48,8 @@ extern "C" {
  *
  * SMB_DR_ASYNC_RESPONSE delivers the response part of an asynchronous
  * request and must be processed as a synchronous request.
+ *
+ * See also: smb_doorhdr_opname()
  */
 typedef enum smb_dopcode {
 	SMB_DR_NULL = 0,
@@ -66,7 +69,8 @@ typedef enum smb_dopcode {
 	SMB_DR_QUOTA_SET,
 	SMB_DR_DFS_GET_REFERRALS,
 	SMB_DR_SHR_HOSTACCESS,
-	SMB_DR_SHR_EXEC
+	SMB_DR_SHR_EXEC,
+	SMB_DR_NOTIFY_DC_CHANGED
 } smb_dopcode_t;
 
 struct smb_event;
@@ -93,12 +97,18 @@ typedef struct smb_doorarg {
 #define	SMB_DOP_ENCODE_ERROR		3
 #define	SMB_DOP_EMPTYBUF		4
 
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 char *smb_common_encode(void *, xdrproc_t, size_t *);
 int smb_common_decode(char *, size_t, xdrproc_t, void *);
 char *smb_string_encode(char *, size_t *);
 int smb_string_decode(smb_string_t *, char *, size_t);
-#endif /* _KERNEL */
+#endif /* !_KERNEL */
+
+/* libfksmbsrv "kdoor" callback to smbd-d */
+typedef int fksmb_kdoor_disp_func_t(smb_doorarg_t *);
+
+/* libfksmbsrv "opipe" callback to smbd-d */
+typedef int fksmb_opipe_disp_func_t(door_arg_t *);
 
 /*
  * Legacy door interface

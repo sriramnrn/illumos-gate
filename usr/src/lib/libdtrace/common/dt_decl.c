@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright (c) 2013 Joyent, Inc. All rights reserved.
  */
 
 #include <strings.h>
@@ -251,11 +253,6 @@ dt_decl_spec(ushort_t kind, char *name)
 	ddp->dd_kind = kind;
 	ddp->dd_name = name;
 
-	if (name != NULL && strchr(name, '`') != NULL) {
-		xyerror(D_DECL_SCOPE, "D scoping operator may not be used "
-		    "in a type name\n");
-	}
-
 	return (dt_decl_check(ddp));
 }
 
@@ -268,6 +265,26 @@ dt_decl_attr(ushort_t attr)
 		ddp = dt_decl_push(dt_decl_alloc(CTF_K_UNKNOWN, NULL));
 		ddp->dd_attr = attr;
 		return (ddp);
+	}
+
+	if ((attr & DT_DA_LONG) && (ddp->dd_attr & DT_DA_LONGLONG)) {
+		xyerror(D_DECL_COMBO, "the attribute 'long' may only "
+		    "be used at most twice in a declaration");
+	}
+
+	if ((attr & DT_DA_SHORT) && (ddp->dd_attr & DT_DA_SHORT)) {
+		xyerror(D_DECL_COMBO, "the attribute 'short' may only be "
+		    "used at most once in a declaration");
+	}
+
+	if ((attr & DT_DA_SIGNED) && (ddp->dd_attr & DT_DA_SIGNED)) {
+		xyerror(D_DECL_COMBO, "the attribute 'signed' may only be "
+		    "used at most once in a declaration");
+	}
+
+	if ((attr & DT_DA_UNSIGNED) && (ddp->dd_attr & DT_DA_UNSIGNED)) {
+		xyerror(D_DECL_COMBO, "the attribute 'unsigned' may only be "
+		    "used at most once in a declaration");
 	}
 
 	if (attr == DT_DA_LONG && (ddp->dd_attr & DT_DA_LONG)) {
@@ -779,7 +796,7 @@ dt_decl_enumerator(char *s, dt_node_t *dnp)
 	yyintdecimal = 0;
 
 	dnp = dt_node_int(value);
-	dt_node_type_assign(dnp, dsp->ds_ctfp, dsp->ds_type);
+	dt_node_type_assign(dnp, dsp->ds_ctfp, dsp->ds_type, B_FALSE);
 
 	if ((inp = malloc(sizeof (dt_idnode_t))) == NULL)
 		longjmp(yypcb->pcb_jmpbuf, EDT_NOMEM);
@@ -821,12 +838,17 @@ dt_decl_type(dt_decl_t *ddp, dtrace_typeinfo_t *tip)
 	char *name;
 	int rv;
 
+	tip->dtt_flags = 0;
+
 	/*
 	 * Based on our current #include depth and decl stack depth, determine
 	 * which dynamic CTF module and scope to use when adding any new types.
 	 */
 	dmp = yypcb->pcb_idepth ? dtp->dt_cdefs : dtp->dt_ddefs;
 	flag = yypcb->pcb_dstack.ds_next ? CTF_ADD_NONROOT : CTF_ADD_ROOT;
+
+	if (ddp->dd_attr & DT_DA_USER)
+		tip->dtt_flags = DTT_FL_USER;
 
 	/*
 	 * If we have already cached a CTF type for this decl, then we just

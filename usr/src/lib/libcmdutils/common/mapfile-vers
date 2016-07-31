@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2013 RackTop Systems.
 #
 
 #
@@ -41,7 +42,19 @@ $mapfile_version 2
 SYMBOL_VERSION SUNWprivate_1.1 {
     global:
 	add_tnode;
+	custr_alloc;
+	custr_alloc_buf;
+	custr_append;
+	custr_appendc;
+	custr_append_printf;
+	custr_append_vprintf;
+	custr_cstr;
+	custr_free;
+	custr_len;
+	custr_reset;
 	destroy_tree;
+	findnextgid;
+	findnextuid;
 	list_create;
 	list_destroy;
 	list_head;

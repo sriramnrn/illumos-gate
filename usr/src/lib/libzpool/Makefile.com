@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2013, 2015 by Delphix. All rights reserved.
 #
 
 LIBRARY= libzpool.a
@@ -28,6 +29,7 @@ VERS= .1
 # include the list of ZFS sources
 include ../../../uts/common/Makefile.files
 KERNEL_OBJS = kernel.o taskq.o util.o
+DTRACE_OBJS = zfs.o
 
 OBJECTS=$(ZFS_COMMON_OBJS) $(ZFS_SHARED_OBJS) $(KERNEL_OBJS)
 
@@ -51,15 +53,27 @@ INCS += -I../../../uts/common/fs/zfs
 INCS += -I../../../common/zfs
 INCS += -I../../../common
 
+CLEANFILES += ../common/zfs.h
+CLEANFILES += $(EXTPICS)
+
 $(LINTLIB) := SRCS=	$(SRCDIR)/$(LINTSRC)
+$(LINTLIB): ../common/zfs.h
 
 C99MODE=	-xc99=%all
 C99LMODE=	-Xc99=%all
 
 CFLAGS +=	-g $(CCVERBOSE) $(CNOGLOBAL)
-CFLAGS64 +=	-g $(CCVERBOSE) $(CNOGLOBAL)
+CFLAGS64 +=	-g $(CCVERBOSE)	$(CNOGLOBAL)
 LDLIBS +=	-lcmdutils -lumem -lavl -lnvpair -lz -lc -lsysevent -lmd
-CPPFLAGS +=	$(INCS)
+CPPFLAGS +=	$(INCS)	-DDEBUG
+
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-switch
+CERRWARN +=	-_gcc=-Wno-type-limits
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-empty-body
+CERRWARN +=	-_gcc=-Wno-unused-function
+CERRWARN +=	-_gcc=-Wno-unused-label
 
 .KEEP_STATE:
 
@@ -69,10 +83,19 @@ lint: $(LINTLIB)
 
 include ../../Makefile.targ
 
-pics/%.o: ../../../uts/common/fs/zfs/%.c
+EXTPICS= $(DTRACE_OBJS:%=pics/%)
+
+pics/%.o: ../../../uts/common/fs/zfs/%.c ../common/zfs.h
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
-pics/%.o: ../../../common/zfs/%.c
+pics/%.o: ../../../common/zfs/%.c ../common/zfs.h
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
+
+pics/%.o: ../common/%.d $(PICS)
+	$(COMPILE.d) -C -s $< -o $@ $(PICS)
+	$(POST_PROCESS_O)
+
+../common/%.h: ../common/%.d
+	$(DTRACE) -xnolibs -h -s $< -o $@

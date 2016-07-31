@@ -25,6 +25,9 @@
 #include <term.h>
 #include <terminfo.h>
 
+#define	COMP_BS_SERIAL	0x01
+#define	COMP_BS_BIOS	0x02
+
 /* An input buffer.  */
 static char input_buf[8];
 static int npending = 0;
@@ -33,6 +36,7 @@ static int serial_x;
 static int serial_y;
 
 static int keep_track = 1;
+static int composite_bitset = COMP_BS_SERIAL | COMP_BS_BIOS;
 
 
 /* Hardware-dependent definitions.  */
@@ -137,6 +141,16 @@ serial_hw_init (unsigned short port, unsigned int speed,
   int i;
   unsigned short div = 0;
   unsigned char status = 0;
+
+  if (port == 0)
+    return 0;
+
+  /* Make sure the port actually exists. */
+  outb (port + UART_SR, UART_SR_TEST);
+  outb (port + UART_FCR, 0);
+  status = inb (port + UART_SR);
+  if (status != UART_SR_TEST)
+    return 0;
   
   /* Turn off the interrupt.  */
   outb (port + UART_IER, 0);
@@ -159,7 +173,7 @@ serial_hw_init (unsigned short port, unsigned int speed,
   outb (port + UART_DLH, div >> 8);
   
   /* Set the line status.  */
-  status |= parity | word_len | stop_bit_len;
+  status = parity | word_len | stop_bit_len;
   outb (port + UART_LCR, status);
 
   /* Enable the FIFO.  */
@@ -177,13 +191,11 @@ serial_hw_init (unsigned short port, unsigned int speed,
 
   /* Get rid of TERM_NEED_INIT from the serial terminal.  */
   for (i = 0; term_table[i].name; i++)
-    if (grub_strcmp (term_table[i].name, "serial") == 0)
+    if (grub_strcmp (term_table[i].name, "serial") == 0 ||
+	grub_strcmp (term_table[i].name, "composite") == 0)
       {
 	term_table[i].flags &= ~TERM_NEED_INIT;
-	break;
       }
-
-  /* FIXME: should check if the serial terminal was found.  */
   
   return 1;
 }
@@ -402,8 +414,12 @@ serial_getxy (void)
 void
 serial_gotoxy (int x, int y)
 {
+  int saved_cbs = composite_bitset;
+
   keep_track = 0;
+  composite_bitset &= ~COMP_BS_BIOS;
   ti_cursor_address (x, y);
+  composite_bitset = saved_cbs;
   keep_track = 1;
   
   serial_x = x;
@@ -413,8 +429,12 @@ serial_gotoxy (int x, int y)
 void
 serial_cls (void)
 {
+  int saved_cbs = composite_bitset;
+
   keep_track = 0;
+  composite_bitset &= ~COMP_BS_BIOS;
   ti_clear_screen ();
+  composite_bitset = saved_cbs;
   keep_track = 1;
   
   serial_x = serial_y = 0;
@@ -423,12 +443,67 @@ serial_cls (void)
 void
 serial_setcolorstate (color_state state)
 {
+  int saved_cbs = composite_bitset;
+
   keep_track = 0;
+  composite_bitset &= ~COMP_BS_BIOS;
   if (state == COLOR_STATE_HIGHLIGHT)
     ti_enter_standout_mode ();
   else
     ti_exit_standout_mode ();
+  composite_bitset = saved_cbs;
   keep_track = 1;
+}
+
+void
+composite_putchar (int c)
+{
+  if (composite_bitset & COMP_BS_SERIAL)
+    serial_putchar (c);
+  if (composite_bitset & COMP_BS_BIOS)
+    console_putchar (c);
+}
+
+int
+composite_getkey (void)
+{
+  for (;;) {
+    if (serial_checkkey () != -1)
+      return (serial_getkey ());
+    if (console_checkkey () != -1)
+      return (console_getkey ());
+  }
+}
+
+int
+composite_checkkey (void)
+{
+  int ch;
+
+  if ((ch = serial_checkkey ()) != -1)
+    return (ch);
+  return (console_checkkey ());
+}
+
+void
+composite_gotoxy (int x, int y)
+{
+  serial_gotoxy (x, y);
+  console_gotoxy (x, y);
+}
+
+void
+composite_cls (void)
+{
+  serial_cls();
+  console_cls();
+}
+
+void
+composite_setcolorstate (color_state state)
+{
+  serial_setcolorstate (state);
+  console_setcolorstate (state);
 }
 
 #endif /* SUPPORT_SERIAL */

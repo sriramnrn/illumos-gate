@@ -24,8 +24,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * grep - pattern matching program - combined grep, egrep, and fgrep.
  *	Based on MKS grep command, with XCU & Solaris mods.
@@ -34,6 +32,12 @@
 /*
  * Copyright 1985, 1992 by Mortice Kern Systems Inc.  All rights reserved.
  *
+ */
+
+/* Copyright 2012 Nexenta Systems, Inc.  All rights reserved. */
+
+/*
+ * Copyright 2013 Damian Bogel. All rights reserved.
  */
 
 #include <string.h>
@@ -51,9 +55,14 @@
 #include <errno.h>
 #include <unistd.h>
 #include <wctype.h>
+#include <ftw.h>
+#include <sys/param.h>
+
+#define	STDIN_FILENAME gettext("(standard input)")
 
 #define	BSIZE		512		/* Size of block for -b */
 #define	BUFSIZE		8192		/* Input buffer size */
+#define	MAX_DEPTH	1000		/* how deep to recurse */
 
 #define	M_CSETSIZE	256		/* singlebyte chars */
 static int	bmglen;			/* length of BMG pattern */
@@ -70,14 +79,18 @@ typedef	struct	_PATTERN	{
 static PATTERN	*patterns;
 static char	errstr[128];		/* regerror string buffer */
 static int	regflags = 0;		/* regcomp options */
+static int	matched = 0;		/* return of the grep() */
+static int	errors = 0;		/* count of errors */
 static uchar_t	fgrep = 0;		/* Invoked as fgrep */
 static uchar_t	egrep = 0;		/* Invoked as egrep */
 static uchar_t	nvflag = 1;		/* Print matching lines */
 static uchar_t	cflag;			/* Count of matches */
 static uchar_t	iflag;			/* Case insensitve matching */
+static uchar_t	Hflag;			/* Precede lines by file name */
 static uchar_t	hflag;			/* Supress printing of filename */
 static uchar_t	lflag;			/* Print file names of matches */
 static uchar_t	nflag;			/* Precede lines by line number */
+static uchar_t	rflag;			/* Search directories recursively */
 static uchar_t	bflag;			/* Preccede matches by block number */
 static uchar_t	sflag;			/* Suppress file error messages */
 static uchar_t	qflag;			/* Suppress standard output */
@@ -85,6 +98,7 @@ static uchar_t	wflag;			/* Search for expression as a word */
 static uchar_t	xflag;			/* Anchoring */
 static uchar_t	Eflag;			/* Egrep or -E flag */
 static uchar_t	Fflag;			/* Fgrep or -F flag */
+static uchar_t	Rflag;			/* Like rflag, but follow symlinks */
 static uchar_t	outfn;			/* Put out file name */
 static char	*cmdname;
 
@@ -94,13 +108,16 @@ static size_t	outbuflen, prntbuflen;
 static char	*prntbuf;
 static wchar_t	*outline;
 
-static void	addfile(char *fn);
+static void	addfile(const char *fn);
 static void	addpattern(char *s);
 static void	fixpatterns(void);
 static void	usage(void);
-static int	grep(int, char *);
+static int	grep(int, const char *);
 static void	bmgcomp(char *, int);
 static char	*bmgexec(char *, char *);
+static int	recursive(const char *, const struct stat *, int, struct FTW *);
+static void	process_path(const char *);
+static void	process_file(const char *, int);
 
 /*
  * mainline for grep
@@ -109,10 +126,8 @@ int
 main(int argc, char **argv)
 {
 	char	*ap;
-	int	matched = 0;
 	int	c;
 	int	fflag = 0;
-	int	errors = 0;
 	int	i, n_pattern = 0, n_file = 0;
 	char	**pattern_list = NULL;
 	char	**file_list = NULL;
@@ -147,7 +162,7 @@ main(int argc, char **argv)
 		}
 	}
 
-	while ((c = getopt(argc, argv, "vwchilnbse:f:qxEFI")) != EOF) {
+	while ((c = getopt(argc, argv, "vwchHilnrbse:f:qxEFIR")) != EOF) {
 		switch (c) {
 		case 'v':	/* POSIX: negate matches */
 			nvflag = 0;
@@ -168,6 +183,10 @@ main(int argc, char **argv)
 
 		case 'n':	/* POSIX: Write line numbers */
 			nflag++;
+			break;
+
+		case 'r':	/* Solaris: search recursively */
+			rflag++;
 			break;
 
 		case 'b':	/* Solaris: Write file block numbers */
@@ -204,8 +223,16 @@ main(int argc, char **argv)
 			}
 			*(file_list + n_file - 1) = optarg;
 			break;
+
+		/* based on options order h or H is set as in GNU grep */
 		case 'h':	/* Solaris: supress printing of file name */
 			hflag = 1;
+			Hflag = 0;
+			break;
+		/* Solaris: precede every matching with file name */
+		case 'H':
+			Hflag = 1;
+			hflag = 0;
 			break;
 
 		case 'q':	/* POSIX: quiet: status only */
@@ -228,6 +255,11 @@ main(int argc, char **argv)
 
 		case 'F':	/* POSIX: strings, not RE's */
 			Fflag++;
+			break;
+
+		case 'R':	/* Solaris: like rflag, but follow symlinks */
+			Rflag++;
+			rflag++;
 			break;
 
 		default:
@@ -275,6 +307,12 @@ main(int argc, char **argv)
 	 */
 	if (Eflag && Fflag)
 		usage();
+
+	/*
+	 * -l overrides -H like in GNU grep
+	 */
+	if (lflag)
+		Hflag = 0;
 
 	/*
 	 * -c, -l and -q flags are mutually exclusive
@@ -329,26 +367,12 @@ main(int argc, char **argv)
 
 	/* Process all files: stdin, or rest of arg list */
 	if (argc < 2) {
-		matched = grep(0, gettext("(standard input)"));
+		matched = grep(0, STDIN_FILENAME);
 	} else {
-		if (argc > 2 && hflag == 0)
+		if (Hflag || (argc > 2 && hflag == 0))
 			outfn = 1;	/* Print filename on match line */
 		for (argv++; *argv != NULL; argv++) {
-			int	fd;
-
-			if ((fd = open(*argv, O_RDONLY)) == -1) {
-				errors = 1;
-				if (sflag)
-					continue;
-				(void) fprintf(stderr, gettext(
-				    "%s: can't open \"%s\"\n"),
-				    cmdname, *argv);
-				continue;
-			}
-			matched |= grep(fd, *argv);
-			(void) close(fd);
-			if (ferror(stdout))
-				break;
+			process_path(*argv);
 		}
 	}
 	/*
@@ -362,11 +386,110 @@ main(int argc, char **argv)
 	return (matched ? 0 : 1);
 }
 
+static void
+process_path(const char *path)
+{
+	struct	stat st;
+	int	walkflags = FTW_CHDIR;
+	char	*buf = NULL;
+
+	if (rflag) {
+		if (stat(path, &st) != -1 &&
+		    (st.st_mode & S_IFMT) == S_IFDIR) {
+			outfn = 1; /* Print filename */
+
+			/*
+			 * Add trailing slash if arg
+			 * is directory, to resolve symlinks.
+			 */
+			if (path[strlen(path) - 1] != '/') {
+				(void) asprintf(&buf, "%s/", path);
+				if (buf != NULL)
+					path = buf;
+			}
+
+			/*
+			 * Search through subdirs if path is directory.
+			 * Don't follow symlinks if Rflag is not set.
+			 */
+			if (!Rflag)
+				walkflags |= FTW_PHYS;
+
+			if (nftw(path, recursive, MAX_DEPTH, walkflags) != 0) {
+				if (!sflag)
+					(void) fprintf(stderr,
+					    gettext("%s: can't open \"%s\"\n"),
+					    cmdname, path);
+				errors = 1;
+			}
+			return;
+		}
+	}
+	process_file(path, 0);
+}
+
+/*
+ * Read and process all files in directory recursively.
+ */
+static int
+recursive(const char *name, const struct stat *statp, int info, struct FTW *ftw)
+{
+	/*
+	 * Process files and follow symlinks if Rflag set.
+	 */
+	if (info != FTW_F) {
+		/* Report broken symlinks and unreadable files */
+		if (!sflag &&
+		    (info == FTW_SLN || info == FTW_DNR || info == FTW_NS)) {
+			(void) fprintf(stderr,
+			    gettext("%s: can't open \"%s\"\n"), cmdname, name);
+		}
+		return (0);
+	}
+
+
+	/* Skip devices and pipes if Rflag is not set */
+	if (!Rflag && !S_ISREG(statp->st_mode))
+		return (0);
+	/* Pass offset to relative name from FTW_CHDIR */
+	process_file(name, ftw->base);
+	return (0);
+}
+
+/*
+ * Opens file and call grep function.
+ */
+static void
+process_file(const char *name, int base)
+{
+	int fd;
+
+	if ((fd = open(name + base, O_RDONLY)) == -1) {
+		errors = 1;
+		if (!sflag) /* Silent mode */
+			(void) fprintf(stderr, gettext(
+			    "%s: can't open \"%s\"\n"),
+			    cmdname, name);
+		return;
+	}
+	matched |= grep(fd, name);
+	(void) close(fd);
+
+	if (ferror(stdout)) {
+		(void) fprintf(stderr, gettext(
+		    "%s: error writing to stdout\n"),
+		    cmdname);
+		(void) fflush(stdout);
+		exit(2);
+	}
+
+}
+
 /*
  * Add a file of strings to the pattern list.
  */
 static void
-addfile(char *fn)
+addfile(const char *fn)
 {
 	FILE	*fp;
 	char	*inbuf;
@@ -528,7 +651,7 @@ fixpatterns(void)
 				size_t	n;
 				n = strlen(pp->pattern) + 1;
 				if ((pp->wpattern =
-					malloc(sizeof (wchar_t) * n)) == NULL) {
+				    malloc(sizeof (wchar_t) * n)) == NULL) {
 					(void) fprintf(stderr,
 					    gettext("%s: out of memory\n"),
 					    cmdname);
@@ -538,7 +661,7 @@ fixpatterns(void)
 				    (size_t)-1) {
 					(void) fprintf(stderr,
 					    gettext("%s: failed to convert "
-						"\"%s\" to wide-characters\n"),
+					    "\"%s\" to wide-characters\n"),
 					    cmdname, pp->pattern);
 					exit(2);
 				}
@@ -579,7 +702,7 @@ fixpatterns(void)
 			(void) regerror(rv, &pp->re, errstr, sizeof (errstr));
 			(void) fprintf(stderr,
 			    gettext("%s: RE error in %s: %s\n"),
-				cmdname, pp->pattern, errstr);
+			    cmdname, pp->pattern, errstr);
 			exit(2);
 		}
 		free(pp->pattern);
@@ -675,7 +798,7 @@ istrdup(const char *s1)
  * and check for a match on each line.
  */
 static int
-grep(int fd, char *fn)
+grep(int fd, const char *fn)
 {
 	PATTERN *pp;
 	off_t	data_len;	/* length of the data chunk */
@@ -740,11 +863,11 @@ grep(int fd, char *fn)
 			if (count < 0) {
 				/* read error */
 				if (cflag) {
-					if (outfn) {
+					if (outfn && !rflag) {
 						(void) fprintf(stdout,
 						    "%s:", fn);
 					}
-					if (!qflag) {
+					if (!qflag && !rflag) {
 						(void) fprintf(stdout, "%lld\n",
 						    matches);
 					}
@@ -859,7 +982,7 @@ L_start_process:
 			 * need to handle xflag if specified
 			 */
 			if (xflag && (line_len != bmglen ||
-				strcmp(bmgpat, ptr) != 0)) {
+			    strcmp(bmgpat, ptr) != 0)) {
 				/* didn't match */
 				pp = NULL;
 			} else {
@@ -915,7 +1038,7 @@ L_start_process:
 				for (pp = patterns; pp; pp = pp->next) {
 					if (outline[0] == pp->wpattern[0] &&
 					    wcscmp(outline,
-						pp->wpattern) == 0) {
+					    pp->wpattern) == 0) {
 						/* matched */
 						break;
 					}
@@ -1010,7 +1133,7 @@ L_next_line:
 				break;
 			}
 			if (!cflag) {
-				if (outfn) {
+				if (Hflag || outfn) {
 					(void) printf("%s:", fn);
 				}
 				if (bflag) {
@@ -1037,7 +1160,7 @@ L_skip_line:
 	}
 
 	if (cflag) {
-		if (outfn) {
+		if (Hflag || outfn) {
 			(void) printf("%s:", fn);
 		}
 		if (!qflag) {
@@ -1056,43 +1179,46 @@ usage(void)
 	if (egrep || fgrep) {
 		(void) fprintf(stderr, gettext("Usage:\t%s"), cmdname);
 		(void) fprintf(stderr,
-		    gettext(" [-c|-l|-q] [-bhinsvx] "
-			"pattern_list [file ...]\n"));
+		    gettext(" [-c|-l|-q] [-r|-R] [-bhHinsvx] "
+		    "pattern_list [file ...]\n"));
 
 		(void) fprintf(stderr, "\t%s", cmdname);
 		(void) fprintf(stderr,
-		    gettext(" [-c|-l|-q] [-bhinsvx] [-e pattern_list]... "
-			"[-f pattern_file]... [file...]\n"));
+		    gettext(" [-c|-l|-q] [-r|-R] [-bhHinsvx] "
+		    "[-e pattern_list]... "
+		    "[-f pattern_file]... [file...]\n"));
 	} else {
 		(void) fprintf(stderr, gettext("Usage:\t%s"), cmdname);
 		(void) fprintf(stderr,
-		    gettext(" [-c|-l|-q] [-bhinsvwx] "
-			"pattern_list [file ...]\n"));
+		    gettext(" [-c|-l|-q] [-r|-R] [-bhHinsvwx] "
+		    "pattern_list [file ...]\n"));
 
 		(void) fprintf(stderr, "\t%s", cmdname);
 		(void) fprintf(stderr,
-		    gettext(" [-c|-l|-q] [-bhinsvwx] [-e pattern_list]... "
-			"[-f pattern_file]... [file...]\n"));
+		    gettext(" [-c|-l|-q] [-r|-R] [-bhHinsvwx] "
+		    "[-e pattern_list]... "
+		    "[-f pattern_file]... [file...]\n"));
 
 		(void) fprintf(stderr, "\t%s", cmdname);
 		(void) fprintf(stderr,
-		    gettext(" -E [-c|-l|-q] [-bhinsvx] "
-			"pattern_list [file ...]\n"));
+		    gettext(" -E [-c|-l|-q] [-r|-R] [-bhHinsvx] "
+		    "pattern_list [file ...]\n"));
 
 		(void) fprintf(stderr, "\t%s", cmdname);
 		(void) fprintf(stderr,
-		    gettext(" -E [-c|-l|-q] [-bhinsvx] [-e pattern_list]... "
-			"[-f pattern_file]... [file...]\n"));
+		    gettext(" -E [-c|-l|-q] [-r|-R] [-bhHinsvx] "
+		    "[-e pattern_list]... "
+		    "[-f pattern_file]... [file...]\n"));
 
 		(void) fprintf(stderr, "\t%s", cmdname);
 		(void) fprintf(stderr,
-		    gettext(" -F [-c|-l|-q] [-bhinsvx] "
-			"pattern_list [file ...]\n"));
+		    gettext(" -F [-c|-l|-q] [-r|-R] [-bhHinsvx] "
+		    "pattern_list [file ...]\n"));
 
 		(void) fprintf(stderr, "\t%s", cmdname);
 		(void) fprintf(stderr,
-		    gettext(" -F [-c|-l|-q] [-bhinsvx] [-e pattern_list]... "
-			"[-f pattern_file]... [file...]\n"));
+		    gettext(" -F [-c|-l|-q] [-bhHinsvx] [-e pattern_list]... "
+		    "[-f pattern_file]... [file...]\n"));
 	}
 	exit(2);
 	/* NOTREACHED */

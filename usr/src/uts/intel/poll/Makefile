@@ -20,11 +20,10 @@
 # CDDL HEADER END
 #
 #
-# uts/intel/devpoll/Makefile
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+
 #
 #	This makefile drives the production of the /dev/poll driver
 #
@@ -49,6 +48,18 @@ CONF_SRCDIR	= $(UTSBASE)/common/io
 #	Include common rules.
 #
 include $(UTSBASE)/intel/Makefile.intel
+
+CERRWARN	+= -_gcc=-Wno-uninitialized
+
+#
+# It's unfortunate that we have to disable this; however, it's lint's fault. We
+# have a line which only causes a lint warning on a 64-bit build. If we suppress
+# it, then the 32-bit lint build complains about it being unnecessarily
+# suppressed. Therefore, the only thing it seems like we can do is disable the
+# lint warning completely.
+#
+
+LINTTAGS      += -erroff=E_BAD_PTR_CAST_ALIGN
 
 #
 #	Define targets

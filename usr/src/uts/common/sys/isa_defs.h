@@ -23,6 +23,7 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Joyent, Inc.
  */
 
 #ifndef	_SYS_ISA_DEFS_H
@@ -78,6 +79,9 @@
  * _MAX_ALIGNMENT:
  *	The most stringent alignment requirement as specified by the ABI.
  *	Equal to the maximum of all the above _XXX_ALIGNMENT values.
+ *
+ * _MAX_ALIGNMENT_TYPE:
+ * 	The name of the C type that has the value descried in _MAX_ALIGNMENT.
  *
  * _ALIGNMENT_REQUIRED:
  *	True or false (1 or 0) whether or not the hardware requires the ABI
@@ -256,6 +260,7 @@ extern "C" {
 #define	_POINTER_ALIGNMENT		8
 #define	_MAX_ALIGNMENT			16
 #define	_ALIGNMENT_REQUIRED		1
+#define	_MAX_ALIGNMENT_TYPE		long double
 
 /*
  * Different alignment constraints for the i386 ABI in compatibility mode
@@ -321,13 +326,16 @@ extern "C" {
 #define	_POINTER_ALIGNMENT		4
 #define	_MAX_ALIGNMENT			4
 #define	_ALIGNMENT_REQUIRED		0
+#define	_MAX_ALIGNMENT_TYPE		long
 
 #define	_LONG_LONG_ALIGNMENT_32		_LONG_LONG_ALIGNMENT
 
 /*
  * Define the appropriate "implementation choices".
  */
+#if !defined(_ILP32)
 #define	_ILP32
+#endif
 #if !defined(_I32LPx) && defined(_KERNEL)
 #define	_I32LPx
 #endif
@@ -426,13 +434,16 @@ extern "C" {
 #define	_LONG_DOUBLE_COMPLEX_ALIGNMENT	8
 #define	_POINTER_ALIGNMENT		4
 #define	_MAX_ALIGNMENT			8
+#define	_MAX_ALIGNMENT_TYPE		long double
 
 #define	_LONG_LONG_ALIGNMENT_32		_LONG_LONG_ALIGNMENT
 
 /*
  * Define the appropriate "implementation choices"
  */
+#if !defined(_ILP32)
 #define	_ILP32
+#endif
 #if !defined(_I32LPx) && defined(_KERNEL)
 #define	_I32LPx
 #endif
@@ -451,6 +462,7 @@ extern "C" {
 #define	_LONG_DOUBLE_COMPLEX_ALIGNMENT	16
 #define	_POINTER_ALIGNMENT		8
 #define	_MAX_ALIGNMENT			16
+#define	_MAX_ALIGNMENT_TYPE		long double
 
 #define	_LONG_LONG_ALIGNMENT_32		_LONG_LONG_ALIGNMENT
 

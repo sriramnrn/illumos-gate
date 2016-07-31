@@ -23,7 +23,9 @@
  * Use is subject to license terms.
  */
 
-/* Copyright (c) 2011 by Delphix. All rights reserved. */
+/*
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ */
 
 /*
  * condvar.h:
@@ -92,12 +94,13 @@ extern  void	cv_destroy(kcondvar_t *);
 extern	void	cv_wait(kcondvar_t *, kmutex_t *);
 extern	void	cv_wait_stop(kcondvar_t *, kmutex_t *, int);
 extern	clock_t	cv_timedwait(kcondvar_t *, kmutex_t *, clock_t);
+extern	clock_t	cv_timedwait_hires(kcondvar_t *, kmutex_t *, hrtime_t, hrtime_t,
+    int);
 extern	clock_t	cv_reltimedwait(kcondvar_t *, kmutex_t *, clock_t, time_res_t);
 extern	int	cv_wait_sig(kcondvar_t *, kmutex_t *);
 extern	clock_t	cv_timedwait_sig(kcondvar_t *, kmutex_t *, clock_t);
+extern	int	cv_timedwait_sig_hrtime(kcondvar_t *, kmutex_t *, hrtime_t);
 extern	clock_t	cv_reltimedwait_sig(kcondvar_t *, kmutex_t *, clock_t,
-    time_res_t);
-extern	clock_t	cv_relwaituntil_sig(kcondvar_t *, kmutex_t *, clock_t *,
     time_res_t);
 extern	int	cv_wait_sig_swap(kcondvar_t *, kmutex_t *);
 extern	int	cv_wait_sig_swap_core(kcondvar_t *, kmutex_t *, int *);

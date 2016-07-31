@@ -22,8 +22,9 @@
 #
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+
 #
 #	This makefile drives the production of the graphics private
 #	interface kernel module.
@@ -67,6 +68,11 @@ LINTTAGS +=	-erroff=E_ASSIGN_NARROW_CONV
 LINTTAGS +=	-erroff=E_BAD_PTR_CAST_ALIGN
 LINTTAGS +=	-erroff=E_STATIC_UNUSED
 
+CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= -_gcc=-Wno-parentheses
+
+CLOBBERFILES	+= $(OBJS_DIR)/$(VGATEXT_FONT).c
+
 #
 #	Default build targets.
 #
@@ -91,7 +97,7 @@ install:	$(INSTALL_DEPS)
 # Custom targets and rules
 
 $(OBJS_DIR)/$(VGATEXT_FONT).c:	$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf
-	awk -f $(VGATEXT_SRC)/bdf_to_c.awk	\
+	$(AWK) -f $(VGATEXT_SRC)/bdf_to_c.awk	\
 		$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf > $@
 
 $(OBJS_DIR)/$(VGATEXT_FONT).o:	$(OBJS_DIR)/$(VGATEXT_FONT).c

@@ -79,10 +79,21 @@ LINTFLAGS += \
 	-erroff=E_STMT_NOT_REACHED \
 	-errtags=yes
 
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-unused-variable
+
 ROOTLIBSSH=	$(ROOTLIB)/ssh
 ROOTLIBSSHPROG=	$(PROG:%=$(ROOTLIBSSH)/%)
 
+ROOTLIBSUNSSH = $(ROOTLIB)/sunssh
+ROOTLIBSUNSSHPROG = $(PROG:%=$(ROOTLIBSUNSSH)/%)
+
 POFILE= _messages.po
 
-$(ROOTLIBSSH)/%: %
+$(ROOTLIBSSH)/%: $(ROOTLIBSUNSSH)/%
+	-$(RM) $@; $(SYMLINK) ../sunssh/$(@F) $@
+
+$(ROOTLIBSUNSSH)/%: %
 	$(INS.file)

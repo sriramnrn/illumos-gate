@@ -37,9 +37,9 @@
  */
 /* Copyright (c) 2007, The Storage Networking Industry Association. */
 /* Copyright (c) 1996, 1997 PDC, Network Appliance. All Rights Reserved */
+/* Copyright 2014 Nexenta Systems, Inc. All rights reserved. */
 
 #include <sys/types.h>
-#include <sys/socket.h>
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
@@ -63,20 +63,6 @@
 #include <sys/scsi/impl/uscsi.h>
 #include <sys/scsi/scsi.h>
 #include "tlm.h"
-
-/*
- * Mutex to protect Nlp
- */
-mutex_t nlp_mtx;
-
-/*
- * Patchable socket buffer sizes in kilobytes.
- * ssb: send buffer size.
- * rsb: receive buffer size.
- */
-int ndmp_sbs = 60;
-int ndmp_rbs = 60;
-
 
 /*
  * Force to backup all the intermediate directories leading to an object
@@ -369,8 +355,7 @@ ndmpd_select(ndmpd_session_t *session, boolean_t block, ulong_t class_mask)
 	int n;
 	ndmpd_file_handler_t *handler;
 	struct timeval timeout;
-
-	nlp_event_rv_set(session, 0);
+	ndmp_lbr_params_t *nlp;
 
 	if (session->ns_file_handler_list == 0)
 		return (0);
@@ -420,6 +405,8 @@ ndmpd_select(ndmpd_session_t *session, boolean_t block, ulong_t class_mask)
 
 		NDMP_LOG(LOG_DEBUG, "Select error: %m");
 
+		nlp = ndmp_get_nlp(session);
+		(void) mutex_lock(&nlp->nlp_mtx);
 		for (handler = session->ns_file_handler_list; handler != 0;
 		    handler = handler->fh_next) {
 			if ((handler->fh_class & class_mask) == 0)
@@ -441,8 +428,8 @@ ndmpd_select(ndmpd_session_t *session, boolean_t block, ulong_t class_mask)
 					session->ns_eof = TRUE;
 			}
 		}
-
-		nlp_event_rv_set(session, -1);
+		(void) cond_broadcast(&nlp->nlp_cv);
+		(void) mutex_unlock(&nlp->nlp_mtx);
 		return (-1);
 	}
 	if (n == 0)
@@ -485,18 +472,11 @@ ndmpd_select(ndmpd_session_t *session, boolean_t block, ulong_t class_mask)
 			 * each execution.
 			 */
 			handler = session->ns_file_handler_list;
-
-			/*
-			 * Release the thread which is waiting for a request
-			 * to be proccessed.
-			 */
-			nlp_event_nw(session);
 		} else
 			handler = handler->fh_next;
 
 	}
 
-	nlp_event_rv_set(session, 1);
 	return (1);
 }
 
@@ -943,44 +923,36 @@ long_long_to_quad(u_longlong_t ull)
 	return (q);
 }
 
-
-/*
- * ndmp_set_socket_nodelay
- *
- * Set the TCP socket option to nodelay mode
- */
 void
-ndmp_set_socket_nodelay(int sock)
+set_socket_options(int sock)
 {
-	int flag = 1;
+	int val;
 
-	(void) setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof (flag));
-}
+	/* set send buffer size */
+	val = atoi((const char *)ndmpd_get_prop_default(NDMP_SOCKET_CSS, "60"));
+	if (val <= 0)
+		val = 60;
+	val <<= 10; /* convert the value from kilobytes to bytes */
+	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &val, sizeof (val)) < 0)
+		NDMP_LOG(LOG_ERR, "SO_SNDBUF failed: %m");
 
+	/* set receive buffer size */
+	val = atoi((const char *)ndmpd_get_prop_default(NDMP_SOCKET_CRS, "60"));
+	if (val <= 0)
+		val = 60;
+	val <<= 10; /* convert the value from kilobytes to bytes */
+	if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &val, sizeof (val)) < 0)
+		NDMP_LOG(LOG_ERR, "SO_RCVBUF failed: %m");
 
-/*
- * ndmp_set_socket_snd_buf
- *
- * Set the socket send buffer size
- */
-void
-ndmp_set_socket_snd_buf(int sock, int size)
-{
-	if (setsockopt(sock, SOL_SOCKET, SO_SNDBUF, &size, sizeof (size)) < 0)
-		NDMP_LOG(LOG_DEBUG, "SO_SNDBUF failed errno=%d", errno);
-}
+	/* don't wait to group tcp data */
+	val = 1;
+	if (setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &val, sizeof (val)) != 0)
+		NDMP_LOG(LOG_ERR, "TCP_NODELAY failed: %m");
 
-
-/*
- * ndmp_set_socket_rcv_buf
- *
- * Set the socket receive buffer size
- */
-void
-ndmp_set_socket_rcv_buf(int sock, int size)
-{
-	if (setsockopt(sock, SOL_SOCKET, SO_RCVBUF, &size, sizeof (size)) < 0)
-		NDMP_LOG(LOG_DEBUG, "SO_RCVBUF failed errno=%d", errno);
+	/* tcp keep-alive */
+	val = 1;
+	if (setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &val, sizeof (val)) != 0)
+		NDMP_LOG(LOG_ERR, "SO_KEEPALIVE failed: %m");
 }
 
 /*
@@ -1067,6 +1039,7 @@ ndmp_lbr_init(ndmpd_session_t *session)
 	session->ns_ndmp_lbr_params->nlp_bkmap = -1;
 	session->ns_ndmp_lbr_params->nlp_session = session;
 	(void) cond_init(&session->ns_ndmp_lbr_params->nlp_cv, 0, NULL);
+	(void) mutex_init(&session->ns_ndmp_lbr_params->nlp_mtx, 0, NULL);
 	(void) mutex_init(&session->ns_lock, 0, NULL);
 	session->ns_nref = 0;
 	return (0);
@@ -1088,14 +1061,6 @@ ndmp_lbr_init(ndmpd_session_t *session)
 void
 ndmp_lbr_cleanup(ndmpd_session_t *session)
 {
-	/*
-	 * If in 3-way restore, the connection close is detected after
-	 * check in tape_read(), the reader thread of mover may wait forever
-	 * for the tape to be changed.  Force the reader thread to exit.
-	 */
-	nlp_event_rv_set(session, -2);
-	nlp_event_nw(session);
-
 	ndmpd_abort_marking_v2(session);
 	ndmp_stop_buffer_worker(session);
 	ndmp_waitfor_op(session);
@@ -1106,179 +1071,71 @@ ndmp_lbr_cleanup(ndmpd_session_t *session)
 		tlm_release_list(session->ns_ndmp_lbr_params->nlp_exl);
 		tlm_release_list(session->ns_ndmp_lbr_params->nlp_inc);
 		(void) cond_destroy(&session->ns_ndmp_lbr_params->nlp_cv);
+		(void) mutex_destroy(&session->ns_ndmp_lbr_params->nlp_mtx);
 	}
 
 	NDMP_FREE(session->ns_ndmp_lbr_params);
 }
 
-
 /*
- * nlp_ref_nw
+ * ndmp_wait_for_mover
  *
- * Increase the references to the NDMP/LBR parameter to prevent
- * unwanted release
+ * Wait for a mover to become active. Waiting is interrupted if session is
+ * aborted or mover gets to unexpected state.
  *
  * Parameters:
  *   session (input) - session pointer.
  *
  * Returns:
- *   void
- */
-void
-nlp_ref_nw(ndmpd_session_t *session)
-{
-	ndmp_lbr_params_t *nlp;
-
-	(void) mutex_lock(&nlp_mtx);
-	if ((nlp = ndmp_get_nlp(session)) != NULL) {
-		nlp->nlp_nw++;
-		NDMP_LOG(LOG_DEBUG, "nw: %d", nlp->nlp_nw);
-	} else
-		NDMP_LOG(LOG_DEBUG, "nlp == NULL");
-	(void) mutex_unlock(&nlp_mtx);
-}
-
-
-/*
- * nlp_unref_nw
- *
- * Decrease the references to the NDMP/LBR parameter before
- * release
- *
- * Parameters:
- *   session (input) - session pointer.
- *
- * Returns:
- *   void
- */
-void
-nlp_unref_nw(ndmpd_session_t *session)
-{
-	ndmp_lbr_params_t *nlp;
-
-	(void) mutex_lock(&nlp_mtx);
-	if ((nlp = ndmp_get_nlp(session)) != NULL) {
-		NDMP_LOG(LOG_DEBUG, "nw: %d", nlp->nlp_nw);
-		if (nlp->nlp_nw > 0)
-			nlp->nlp_nw--;
-	} else
-		NDMP_LOG(LOG_DEBUG, "nlp == NULL");
-	(void) mutex_unlock(&nlp_mtx);
-}
-
-
-/*
- * nlp_wait_nw
- *
- * Wait for a NDMP/LBR parameter to get available
- *
- * Parameters:
- *   session (input) - session pointer.
- *
- * Returns:
- *   void
- */
-void
-nlp_wait_nw(ndmpd_session_t *session)
-{
-	ndmp_lbr_params_t *nlp;
-
-	(void) mutex_lock(&nlp_mtx);
-	if ((nlp = ndmp_get_nlp(session)) != NULL) {
-		NDMP_LOG(LOG_DEBUG, "nw: %d", nlp->nlp_nw);
-		if (nlp->nlp_nw > 0) {
-			NDMP_LOG(LOG_DEBUG, "Waiting");
-			while ((nlp->nlp_flag & NLP_READY) == 0)
-				(void) cond_wait(&nlp->nlp_cv, &nlp_mtx);
-		}
-	} else
-		NDMP_LOG(LOG_DEBUG, "nlp == NULL");
-	(void) mutex_unlock(&nlp_mtx);
-}
-
-
-/*
- * nlp_event_nw
- *
- * Signal that a NDMP/LBR parameter is available to wake up the
- * threads waiting on that
- *
- * Parameters:
- *   session (input) - session pointer.
- *
- * Returns:
- *   void
- */
-void
-nlp_event_nw(ndmpd_session_t *session)
-{
-	ndmp_lbr_params_t *nlp;
-
-	(void) mutex_lock(&nlp_mtx);
-	if ((nlp = ndmp_get_nlp(session)) != NULL) {
-		if (nlp->nlp_nw > 0) {
-			NDMP_LOG(LOG_DEBUG, "nw: %d", nlp->nlp_nw);
-			nlp->nlp_flag |= NLP_READY;
-			(void) cond_signal(&nlp->nlp_cv);
-		}
-	} else
-		NDMP_LOG(LOG_DEBUG, "nlp == NULL");
-	(void) mutex_unlock(&nlp_mtx);
-}
-
-
-/*
- * nlp_event_rv_get
- *
- * Get the return value for each NLP
- *
- * Parameters:
- *   session (input) - session pointer.
- *
- * Returns:
- *   return value
+ *   0 if success, -1 if failure.
  */
 int
-nlp_event_rv_get(ndmpd_session_t *session)
+ndmp_wait_for_mover(ndmpd_session_t *session)
 {
 	ndmp_lbr_params_t *nlp;
+	tlm_cmd_t *lcmd;
 
-	if ((nlp = ndmp_get_nlp(session)) == NULL) {
-		NDMP_LOG(LOG_DEBUG, "nlp == NULL");
-		return (0);
+	if ((nlp = ndmp_get_nlp(session)) == NULL)
+		return (-1);
+
+	(void) mutex_lock(&nlp->nlp_mtx);
+	while (session->ns_mover.md_state == NDMP_MOVER_STATE_PAUSED) {
+		if (session->ns_eof) {
+			NDMP_LOG(LOG_ERR, "EOF detected");
+			break;
+		}
+		if (session->ns_data.dd_abort) {
+			NDMP_LOG(LOG_DEBUG, "Received data abort");
+			break;
+		}
+		if (session->ns_data.dd_mover.addr_type == NDMP_ADDR_TCP) {
+			/* remote backup/restore error */
+			if (session->ns_mover.md_sock == -1 &&
+			    session->ns_mover.md_listen_sock == -1) {
+				NDMP_LOG(LOG_ERR,
+				    "Remote data connection terminated");
+				break;
+			}
+		} else {
+			/* local backup/restore error */
+			if ((lcmd = nlp->nlp_cmds.tcs_command) != NULL) {
+				if (lcmd->tc_reader == TLM_STOP ||
+				    lcmd->tc_reader == TLM_ABORT ||
+				    lcmd->tc_writer == TLM_STOP ||
+				    lcmd->tc_writer == TLM_ABORT) {
+					NDMP_LOG(LOG_ERR,
+					    "Local data connection terminated");
+					break;
+				}
+			}
+		}
+
+		(void) cond_wait(&nlp->nlp_cv, &nlp->nlp_mtx);
 	}
+	(void) mutex_unlock(&nlp->nlp_mtx);
 
-	return (nlp->nlp_rv);
-}
-
-
-/*
- * nlp_event_rv_set
- *
- * Set the return value for an NLP
- *
- * Parameters:
- *   session (input) - session pointer.
- *   rv (input) - return value
- *
- * Returns:
- *   void
- */
-void
-nlp_event_rv_set(ndmpd_session_t *session,
-    int rv)
-{
-	ndmp_lbr_params_t *nlp;
-
-	(void) mutex_lock(&nlp_mtx);
-	if (rv != 0)
-		NDMP_LOG(LOG_DEBUG, "rv: %d", rv);
-
-	if ((nlp = ndmp_get_nlp(session)) != NULL)
-		nlp->nlp_rv = rv;
-	else
-		NDMP_LOG(LOG_DEBUG, "nlp == NULL");
-	(void) mutex_unlock(&nlp_mtx);
+	return ((session->ns_mover.md_state == NDMP_MOVER_STATE_ACTIVE) ?
+	    0 : -1);
 }
 
 /*
@@ -1450,15 +1307,16 @@ ndmp_execute_cdb(ndmpd_session_t *session, char *adapter_name, int sid, int lun,
 void
 ndmp_stop_local_reader(ndmpd_session_t *session, tlm_commands_t *cmds)
 {
-	if (session != NULL) {
-		if (session->ns_data.dd_sock == -1) {
-			/*
-			 * 2-way restore.
-			 */
-			NDMP_LOG(LOG_DEBUG, "2-way restore");
-			if (cmds != NULL && cmds->tcs_reader_count > 0) {
-				nlp_event_rv_set(session, -2);
-				nlp_event_nw(session);
+	ndmp_lbr_params_t *nlp;
+
+	if (session != NULL && session->ns_data.dd_sock == -1) {
+		/* 2-way restore */
+		if (cmds != NULL && cmds->tcs_reader_count > 0) {
+			if ((nlp = ndmp_get_nlp(session)) != NULL) {
+				(void) mutex_lock(&nlp->nlp_mtx);
+				cmds->tcs_command->tc_reader = TLM_STOP;
+				(void) cond_broadcast(&nlp->nlp_cv);
+				(void) mutex_unlock(&nlp->nlp_mtx);
 			}
 		}
 	}
@@ -1797,8 +1655,11 @@ ndmp_stop_writer_thread(ndmpd_session_t *session)
 		if (cmds->tcs_command == NULL) {
 			NDMP_LOG(LOG_DEBUG, "cmds->tcs_command == NULL");
 		} else {
+			(void) mutex_lock(&nlp->nlp_mtx);
 			cmds->tcs_writer = TLM_ABORT;
 			cmds->tcs_command->tc_writer = TLM_ABORT;
+			(void) cond_broadcast(&nlp->nlp_cv);
+			(void) mutex_unlock(&nlp->nlp_mtx);
 			while (cmds->tcs_writer_count > 0) {
 				NDMP_LOG(LOG_DEBUG,
 				    "trying to stop writer thread");
@@ -2067,7 +1928,6 @@ ndmp_connect_sock_v3(ulong_t addr, ushort_t port)
 {
 	int sock;
 	struct sockaddr_in sin;
-	int flag = 1;
 
 	NDMP_LOG(LOG_DEBUG, "addr %s:%d", inet_ntoa(IN_ADDR(addr)), port);
 
@@ -2084,19 +1944,11 @@ ndmp_connect_sock_v3(ulong_t addr, ushort_t port)
 	if (connect(sock, (struct sockaddr *)&sin, sizeof (sin)) < 0) {
 		NDMP_LOG(LOG_DEBUG, "Connect error: %m");
 		(void) close(sock);
-		sock = -1;
-	} else {
-		if (ndmp_sbs > 0)
-			ndmp_set_socket_snd_buf(sock, ndmp_sbs*KILOBYTE);
-		if (ndmp_rbs > 0)
-			ndmp_set_socket_rcv_buf(sock, ndmp_rbs*KILOBYTE);
-
-		ndmp_set_socket_nodelay(sock);
-		(void) setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &flag,
-		    sizeof (flag));
-
-		NDMP_LOG(LOG_DEBUG, "sock %d", sock);
+		return (-1);
 	}
+
+	set_socket_options(sock);
+	NDMP_LOG(LOG_DEBUG, "sock %d", sock);
 
 	return (sock);
 }

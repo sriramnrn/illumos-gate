@@ -22,6 +22,8 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Joyent, Inc.  All rights reserved.
  */
 
 
@@ -31,6 +33,9 @@
 #include <sys/systm.h>
 #include <sys/mach_mmu.h>
 #include <sys/multiboot.h>
+#include <sys/sha1.h>
+#include <util/string.h>
+#include <util/strtolctype.h>
 
 #if defined(__xpv)
 
@@ -54,6 +59,8 @@ extern int have_cpuid(void);
 #include "dboot_printf.h"
 #include "dboot_xboot.h"
 #include "dboot_elfload.h"
+
+#define	SHA1_ASCII_LENGTH	(SHA1_DIGEST_LENGTH * 2)
 
 /*
  * This file contains code that runs to transition us from either a multiboot
@@ -157,8 +164,12 @@ uint_t pcimemlists_used = 0;
 struct boot_memlist rsvdmemlists[MAX_MEMLIST];
 uint_t rsvdmemlists_used = 0;
 
-#define	MAX_MODULES (10)
-struct boot_modules modules[MAX_MODULES];
+/*
+ * This should match what's in the bootloader.  It's arbitrary, but GRUB
+ * in particular has limitations on how much space it can use before it
+ * stops working properly.  This should be enough.
+ */
+struct boot_modules modules[MAX_BOOT_MODULES];
 uint_t modules_used = 0;
 
 /*
@@ -166,6 +177,8 @@ uint_t modules_used = 0;
  */
 uint_t prom_debug = 0;
 uint_t map_debug = 0;
+
+static char noname[2] = "-";
 
 /*
  * Either hypervisor-specific or grub-specific code builds the initial
@@ -767,6 +780,281 @@ init_mem_alloc(void)
 
 #else	/* !__xpv */
 
+static uint8_t
+dboot_a2h(char v)
+{
+	if (v >= 'a')
+		return (v - 'a' + 0xa);
+	else if (v >= 'A')
+		return (v - 'A' + 0xa);
+	else if (v >= '0')
+		return (v - '0');
+	else
+		dboot_panic("bad ASCII hex character %c\n", v);
+
+	return (0);
+}
+
+static void
+digest_a2h(const char *ascii, uint8_t *digest)
+{
+	unsigned int i;
+
+	for (i = 0; i < SHA1_DIGEST_LENGTH; i++) {
+		digest[i] = dboot_a2h(ascii[i * 2]) << 4;
+		digest[i] |= dboot_a2h(ascii[i * 2 + 1]);
+	}
+}
+
+/*
+ * Generate a SHA-1 hash of the first len bytes of image, and compare it with
+ * the ASCII-format hash found in the 40-byte buffer at ascii.  If they
+ * match, return 0, otherwise -1.  This works only for images smaller than
+ * 4 GB, which should not be a problem.
+ */
+static int
+check_image_hash(uint_t midx)
+{
+	const char *ascii;
+	const void *image;
+	size_t len;
+	SHA1_CTX ctx;
+	uint8_t digest[SHA1_DIGEST_LENGTH];
+	uint8_t baseline[SHA1_DIGEST_LENGTH];
+	unsigned int i;
+
+	ascii = (const char *)(uintptr_t)modules[midx].bm_hash;
+	image = (const void *)(uintptr_t)modules[midx].bm_addr;
+	len = (size_t)modules[midx].bm_size;
+
+	digest_a2h(ascii, baseline);
+
+	SHA1Init(&ctx);
+	SHA1Update(&ctx, image, len);
+	SHA1Final(digest, &ctx);
+
+	for (i = 0; i < SHA1_DIGEST_LENGTH; i++) {
+		if (digest[i] != baseline[i])
+			return (-1);
+	}
+
+	return (0);
+}
+
+static const char *
+type_to_str(boot_module_type_t type)
+{
+	switch (type) {
+	case BMT_ROOTFS:
+		return ("rootfs");
+	case BMT_FILE:
+		return ("file");
+	case BMT_HASH:
+		return ("hash");
+	default:
+		return ("unknown");
+	}
+}
+
+static void
+check_images(void)
+{
+	uint_t i;
+	char displayhash[SHA1_ASCII_LENGTH + 1];
+
+	for (i = 0; i < modules_used; i++) {
+		if (prom_debug) {
+			dboot_printf("module #%d: name %s type %s "
+			    "addr %lx size %lx\n",
+			    i, (char *)(uintptr_t)modules[i].bm_name,
+			    type_to_str(modules[i].bm_type),
+			    (ulong_t)modules[i].bm_addr,
+			    (ulong_t)modules[i].bm_size);
+		}
+
+		if (modules[i].bm_type == BMT_HASH ||
+		    modules[i].bm_hash == NULL) {
+			DBG_MSG("module has no hash; skipping check\n");
+			continue;
+		}
+		(void) memcpy(displayhash,
+		    (void *)(uintptr_t)modules[i].bm_hash,
+		    SHA1_ASCII_LENGTH);
+		displayhash[SHA1_ASCII_LENGTH] = '\0';
+		if (prom_debug) {
+			dboot_printf("checking expected hash [%s]: ",
+			    displayhash);
+		}
+
+		if (check_image_hash(i) != 0)
+			dboot_panic("hash mismatch!\n");
+		else
+			DBG_MSG("OK\n");
+	}
+}
+
+/*
+ * Determine the module's starting address, size, name, and type, and fill the
+ * boot_modules structure.  This structure is used by the bop code, except for
+ * hashes which are checked prior to transferring control to the kernel.
+ */
+static void
+process_module(mb_module_t *mod)
+{
+	int midx = modules_used++;
+	char *p, *q;
+
+	if (prom_debug) {
+		dboot_printf("\tmodule #%d: '%s' at 0x%lx, end 0x%lx\n",
+		    midx, (char *)(mod->mod_name),
+		    (ulong_t)mod->mod_start, (ulong_t)mod->mod_end);
+	}
+
+	if (mod->mod_start > mod->mod_end) {
+		dboot_panic("module #%d: module start address 0x%lx greater "
+		    "than end address 0x%lx", midx,
+		    (ulong_t)mod->mod_start, (ulong_t)mod->mod_end);
+	}
+
+	/*
+	 * A brief note on lengths and sizes: GRUB, for reasons unknown, passes
+	 * the address of the last valid byte in a module plus 1 as mod_end.
+	 * This is of course a bug; the multiboot specification simply states
+	 * that mod_start and mod_end "contain the start and end addresses of
+	 * the boot module itself" which is pretty obviously not what GRUB is
+	 * doing.  However, fixing it requires that not only this code be
+	 * changed but also that other code consuming this value and values
+	 * derived from it be fixed, and that the kernel and GRUB must either
+	 * both have the bug or neither.  While there are a lot of combinations
+	 * that will work, there are also some that won't, so for simplicity
+	 * we'll just cope with the bug.  That means we won't actually hash the
+	 * byte at mod_end, and we will expect that mod_end for the hash file
+	 * itself is one greater than some multiple of 41 (40 bytes of ASCII
+	 * hash plus a newline for each module).  We set bm_size to the true
+	 * correct number of bytes in each module, achieving exactly this.
+	 */
+
+	modules[midx].bm_addr = mod->mod_start;
+	modules[midx].bm_size = mod->mod_end - mod->mod_start;
+	modules[midx].bm_name = mod->mod_name;
+	modules[midx].bm_hash = NULL;
+	modules[midx].bm_type = BMT_FILE;
+
+	if (mod->mod_name == NULL) {
+		modules[midx].bm_name = (native_ptr_t)(uintptr_t)noname;
+		return;
+	}
+
+	p = (char *)(uintptr_t)mod->mod_name;
+	modules[midx].bm_name =
+	    (native_ptr_t)(uintptr_t)strsep(&p, " \t\f\n\r");
+
+	while (p != NULL) {
+		q = strsep(&p, " \t\f\n\r");
+		if (strncmp(q, "name=", 5) == 0) {
+			if (q[5] != '\0' && !isspace(q[5])) {
+				modules[midx].bm_name =
+				    (native_ptr_t)(uintptr_t)(q + 5);
+			}
+			continue;
+		}
+
+		if (strncmp(q, "type=", 5) == 0) {
+			if (q[5] == '\0' || isspace(q[5]))
+				continue;
+			q += 5;
+			if (strcmp(q, "rootfs") == 0) {
+				modules[midx].bm_type = BMT_ROOTFS;
+			} else if (strcmp(q, "hash") == 0) {
+				modules[midx].bm_type = BMT_HASH;
+			} else if (strcmp(q, "file") != 0) {
+				dboot_printf("\tmodule #%d: unknown module "
+				    "type '%s'; defaulting to 'file'",
+				    midx, q);
+			}
+			continue;
+		}
+
+		if (strncmp(q, "hash=", 5) == 0) {
+			if (q[5] != '\0' && !isspace(q[5])) {
+				modules[midx].bm_hash =
+				    (native_ptr_t)(uintptr_t)(q + 5);
+			}
+			continue;
+		}
+
+		dboot_printf("ignoring unknown option '%s'\n", q);
+	}
+}
+
+/*
+ * Backward compatibility: if there are exactly one or two modules, both
+ * of type 'file' and neither with an embedded hash value, we have been
+ * given the legacy style modules.  In this case we need to treat the first
+ * module as a rootfs and the second as a hash referencing that module.
+ * Otherwise, even if the configuration is invalid, we assume that the
+ * operator knows what he's doing or at least isn't being bitten by this
+ * interface change.
+ */
+static void
+fixup_modules(void)
+{
+	if (modules_used == 0 || modules_used > 2)
+		return;
+
+	if (modules[0].bm_type != BMT_FILE ||
+	    modules_used > 1 && modules[1].bm_type != BMT_FILE) {
+		return;
+	}
+
+	if (modules[0].bm_hash != NULL ||
+	    modules_used > 1 && modules[1].bm_hash != NULL) {
+		return;
+	}
+
+	modules[0].bm_type = BMT_ROOTFS;
+	if (modules_used > 1) {
+		modules[1].bm_type = BMT_HASH;
+		modules[1].bm_name = modules[0].bm_name;
+	}
+}
+
+/*
+ * For modules that do not have assigned hashes but have a separate hash module,
+ * find the assigned hash module and set the primary module's bm_hash to point
+ * to the hash data from that module.  We will then ignore modules of type
+ * BMT_HASH from this point forward.
+ */
+static void
+assign_module_hashes(void)
+{
+	uint_t i, j;
+
+	for (i = 0; i < modules_used; i++) {
+		if (modules[i].bm_type == BMT_HASH ||
+		    modules[i].bm_hash != NULL) {
+			continue;
+		}
+
+		for (j = 0; j < modules_used; j++) {
+			if (modules[j].bm_type != BMT_HASH ||
+			    strcmp((char *)(uintptr_t)modules[j].bm_name,
+			    (char *)(uintptr_t)modules[i].bm_name) != 0) {
+				continue;
+			}
+
+			if (modules[j].bm_size < SHA1_ASCII_LENGTH) {
+				dboot_printf("Short hash module of length "
+				    "0x%lx bytes; ignoring\n",
+				    (ulong_t)modules[j].bm_size);
+			} else {
+				modules[i].bm_hash = modules[j].bm_addr;
+			}
+			break;
+		}
+	}
+}
+
 /*
  * During memory allocation, find the highest address not used yet.
  */
@@ -799,9 +1087,9 @@ init_mem_alloc(void)
 	DBG_MSG("Entered init_mem_alloc()\n");
 	DBG((uintptr_t)mb_info);
 
-	if (mb_info->mods_count > MAX_MODULES) {
+	if (mb_info->mods_count > MAX_BOOT_MODULES) {
 		dboot_panic("Too many modules (%d) -- the maximum is %d.",
-		    mb_info->mods_count, MAX_MODULES);
+		    mb_info->mods_count, MAX_BOOT_MODULES);
 	}
 	/*
 	 * search the modules to find the last used address
@@ -812,24 +1100,17 @@ init_mem_alloc(void)
 	for (mod = (mb_module_t *)(mb_info->mods_addr), i = 0;
 	    i < mb_info->mods_count;
 	    ++mod, ++i) {
-		if (prom_debug) {
-			dboot_printf("\tmodule #%d: %s at: 0x%lx, len 0x%lx\n",
-			    i, (char *)(mod->mod_name),
-			    (ulong_t)mod->mod_start, (ulong_t)mod->mod_end);
-		}
-		modules[i].bm_addr = mod->mod_start;
-		if (mod->mod_start > mod->mod_end) {
-			dboot_panic("module[%d]: Invalid module start address "
-			    "(0x%llx)", i, (uint64_t)mod->mod_start);
-		}
-		modules[i].bm_size = mod->mod_end - mod->mod_start;
-
+		process_module(mod);
 		check_higher(mod->mod_end);
 	}
 	bi->bi_modules = (native_ptr_t)(uintptr_t)modules;
 	DBG(bi->bi_modules);
 	bi->bi_module_cnt = mb_info->mods_count;
 	DBG(bi->bi_module_cnt);
+
+	fixup_modules();
+	assign_module_hashes();
+	check_images();
 
 	/*
 	 * Walk through the memory map from multiboot and build our memlist

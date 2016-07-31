@@ -20,10 +20,14 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
-#include <assert.h>
 #include <sys/types.h>
+#include <sys/sockio.h>
+#include <sys/socket.h>
+#include <sys/utsname.h>
+
 #include <stdarg.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -38,11 +42,11 @@
 #include <netinet/in.h>
 #include <arpa/nameser.h>
 #include <resolv.h>
-#include <sys/sockio.h>
-#include <sys/socket.h>
+
 #include <smbsrv/smbinfo.h>
 #include <smbsrv/netbios.h>
 #include <smbsrv/libsmb.h>
+#include <assert.h>
 
 static mutex_t seqnum_mtx;
 
@@ -59,23 +63,81 @@ static smb_ipc_t	ipc_orig_info;
 static rwlock_t		smb_ipc_lock;
 
 /*
- * Some older clients (Windows 98) only handle the low byte
- * of the max workers value. If the low byte is less than
- * SMB_PI_MAX_WORKERS_MIN set it to SMB_PI_MAX_WORKERS_MIN.
+ * These three parameters are all related:
+ *	skc_initial_credits
+ *	skc_maximum_credits
+ *	skc_maxworkers	(max worker threads)
+ * They must be in non-decreasing order.  Get the values in order:
+ *	maxworkers, maximum_credits, initial_credits
+ * enforcing maximum values and relations as we go.  Then in the
+ * opposite order check minimum values and relations.
+ *
+ * smb_config_getnum puts a zero in the &citem if it fails getting
+ * the parameter value.  When fetch parameters for which zero is OK,
+ * the return code is intentionally ignored.
  */
 void
 smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 {
+	struct utsname uts;
 	int64_t citem;
+	int rc;
 
 	bzero(kcfg, sizeof (smb_kmod_cfg_t));
 
-	(void) smb_config_getnum(SMB_CI_MAX_WORKERS, &citem);
+	/*
+	 * skc_maxworkers (max. no. of taskq worker threads)
+	 */
+	rc = smb_config_getnum(SMB_CI_MAX_WORKERS, &citem);
+	if (rc != SMBD_SMF_OK)
+		citem = SMB_PI_MAX_WORKERS_DEF;
+	if (citem > SMB_PI_MAX_WORKERS_MAX)
+		citem = SMB_PI_MAX_WORKERS_MAX;
 	kcfg->skc_maxworkers = (uint32_t)citem;
-	if ((kcfg->skc_maxworkers & 0xFF) < SMB_PI_MAX_WORKERS_MIN) {
-		kcfg->skc_maxworkers &= ~0xFF;
-		kcfg->skc_maxworkers += SMB_PI_MAX_WORKERS_MIN;
-	}
+
+	/*
+	 * The largest number of credits we let a single client have.
+	 * It never makes sense for this to be > max_workers
+	 */
+	rc = smb_config_getnum(SMB_CI_MAXIMUM_CREDITS, &citem);
+	if (rc != SMBD_SMF_OK)
+		citem = SMB_PI_MAXIMUM_CREDITS_DEF;
+	if (citem > SMB_PI_MAXIMUM_CREDITS_MAX)
+		citem = SMB_PI_MAXIMUM_CREDITS_MAX;
+	kcfg->skc_maximum_credits = (uint16_t)citem;
+	if (kcfg->skc_maximum_credits > kcfg->skc_maxworkers)
+		kcfg->skc_maximum_credits = (uint16_t)kcfg->skc_maxworkers;
+
+	/*
+	 * The number of credits we give a client initially.
+	 * Should be enough for a "light" workload, as the
+	 * client will request additional credits when the
+	 * workload increases.  Must be <= maximum_credits.
+	 */
+	rc = smb_config_getnum(SMB_CI_INITIAL_CREDITS, &citem);
+	if (rc != SMBD_SMF_OK)
+		citem = SMB_PI_INITIAL_CREDITS_DEF;
+	if (citem > SMB_PI_INITIAL_CREDITS_MAX)
+		citem = SMB_PI_INITIAL_CREDITS_MAX;
+	kcfg->skc_initial_credits = (uint16_t)citem;
+	if (kcfg->skc_initial_credits > kcfg->skc_maximum_credits)
+		kcfg->skc_initial_credits = kcfg->skc_maximum_credits;
+
+	/*
+	 * Now enforce minimums, smaller to larger.
+	 */
+	if (kcfg->skc_initial_credits < SMB_PI_INITIAL_CREDITS_MIN)
+		kcfg->skc_initial_credits = SMB_PI_INITIAL_CREDITS_MIN;
+
+	if (kcfg->skc_maximum_credits < SMB_PI_MAXIMUM_CREDITS_MIN)
+		kcfg->skc_maximum_credits = SMB_PI_MAXIMUM_CREDITS_MIN;
+	if (kcfg->skc_maximum_credits < kcfg->skc_initial_credits)
+		kcfg->skc_maximum_credits = kcfg->skc_initial_credits;
+
+	if (kcfg->skc_maxworkers < SMB_PI_MAX_WORKERS_MIN)
+		kcfg->skc_maxworkers = SMB_PI_MAX_WORKERS_MIN;
+	if (kcfg->skc_maxworkers < kcfg->skc_maximum_credits)
+		kcfg->skc_maxworkers = kcfg->skc_maximum_credits;
 
 	(void) smb_config_getnum(SMB_CI_KEEPALIVE, &citem);
 	kcfg->skc_keepalive = (uint32_t)citem;
@@ -88,11 +150,15 @@ smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 	kcfg->skc_restrict_anon = smb_config_getbool(SMB_CI_RESTRICT_ANON);
 	kcfg->skc_signing_enable = smb_config_getbool(SMB_CI_SIGNING_ENABLE);
 	kcfg->skc_signing_required = smb_config_getbool(SMB_CI_SIGNING_REQD);
+	kcfg->skc_netbios_enable = smb_config_getbool(SMB_CI_NETBIOS_ENABLE);
 	kcfg->skc_ipv6_enable = smb_config_getbool(SMB_CI_IPV6_ENABLE);
 	kcfg->skc_print_enable = smb_config_getbool(SMB_CI_PRINT_ENABLE);
 	kcfg->skc_oplock_enable = smb_config_getbool(SMB_CI_OPLOCK_ENABLE);
 	kcfg->skc_sync_enable = smb_config_getbool(SMB_CI_SYNC_ENABLE);
+	kcfg->skc_traverse_mounts = smb_config_getbool(SMB_CI_TRAVERSE_MOUNTS);
+	kcfg->skc_max_protocol = smb_config_get_max_protocol();
 	kcfg->skc_secmode = smb_config_get_secmode();
+
 	(void) smb_getdomainname(kcfg->skc_nbdomain,
 	    sizeof (kcfg->skc_nbdomain));
 	(void) smb_getfqdomainname(kcfg->skc_fqdn,
@@ -103,6 +169,18 @@ smb_load_kconfig(smb_kmod_cfg_t *kcfg)
 	    sizeof (kcfg->skc_system_comment));
 	smb_config_get_version(&kcfg->skc_version);
 	kcfg->skc_execflags = smb_config_get_execinfo(NULL, NULL, 0);
+	if (smb_config_get_localuuid(kcfg->skc_machine_uuid) < 0) {
+		syslog(LOG_ERR, "smb_load_kconfig: no machine_uuid");
+		uuid_generate_time(kcfg->skc_machine_uuid);
+	}
+	/* skc_negtok, skc_negtok_len: see smbd_authsvc.c */
+
+	(void) uname(&uts);
+	(void) snprintf(kcfg->skc_native_os, sizeof (kcfg->skc_native_os),
+	    "%s %s %s", uts.sysname, uts.release, uts.version);
+
+	(void) strlcpy(kcfg->skc_native_lm, "Native SMB service",
+	    sizeof (kcfg->skc_native_lm));
 }
 
 /*
@@ -513,11 +591,17 @@ smb_tracef(const char *fmt, ...)
 
 /*
  * Temporary fbt for dtrace until user space sdt enabled.
+ *
+ * This function is designed to be used with dtrace, i.e. see:
+ * usr/src/cmd/smbsrv/dtrace/smbd-all.d
+ *
+ * Outside of dtrace, the messages passed to this function usually
+ * lack sufficient context to be useful, so we don't log them.
  */
+/* ARGSUSED */
 void
 smb_trace(const char *s)
 {
-	syslog(LOG_DEBUG, "%s", s);
 }
 
 /*
@@ -574,14 +658,14 @@ smb_get_nameservers(smb_inaddr_t *ips, int sz)
 		if (i >= sz)
 			break;
 		ips[i].a_family = AF_INET;
-		bcopy(&set[i].sin.sin_addr, &ips[i].a_ipv4, INADDRSZ);
+		bcopy(&set[i].sin.sin_addr, &ips[i].a_ipv4, NS_INADDRSZ);
 		if (inet_ntop(AF_INET, &ips[i].a_ipv4, ipstr,
 		    INET_ADDRSTRLEN)) {
 			syslog(LOG_DEBUG, "Found %s name server\n", ipstr);
 			continue;
 		}
 		ips[i].a_family = AF_INET6;
-		bcopy(&set[i].sin.sin_addr, &ips[i].a_ipv6, IPV6_ADDR_LEN);
+		bcopy(&set[i].sin.sin_addr, &ips[i].a_ipv6, NS_IN6ADDRSZ);
 		if (inet_ntop(AF_INET6, &ips[i].a_ipv6, ipstr,
 		    INET6_ADDRSTRLEN)) {
 			syslog(LOG_DEBUG, "Found %s name server\n", ipstr);

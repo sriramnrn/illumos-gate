@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -163,6 +165,8 @@ int soaccept_tpi_multioptions = 1;
 extern int do_useracc;
 extern clock_t sock_test_timelimit;
 #endif /* SOCK_TEST */
+
+extern uint32_t ucredsize;
 
 /*
  * Some X/Open added checks might have to be backed out to keep SunOS 4.X
@@ -528,6 +532,13 @@ sotpi_init(struct sonode *so, struct sonode *tso, struct cred *cr, int flags)
 		if (error = so_strinit(so, tso)) {
 			(void) sotpi_close(so, flags, cr);
 			return (error);
+		}
+
+		/* Enable sendfile() on AF_UNIX streams */
+		if (so->so_family == AF_UNIX && so->so_type == SOCK_STREAM) {
+			mutex_enter(&so->so_lock);
+			so->so_mode |= SM_SENDFILESUPP;
+			mutex_exit(&so->so_lock);
 		}
 
 		/* Wildcard */
@@ -3220,6 +3231,8 @@ sotpi_recvmsg(struct sonode *so, struct nmsghdr *msg, struct uio *uiop,
 
 	if (flags & MSG_DONTWAIT)
 		timout = 0;
+	else if (so->so_rcvtimeo != 0)
+		timout = TICK_TO_MSEC(so->so_rcvtimeo);
 	else
 		timout = -1;
 	opflag = pflag;
@@ -3748,6 +3761,13 @@ sosend_dgramcmsg(struct sonode *so, struct sockaddr *name, socklen_t namelen,
 		error = fdbuf_create(fds, fdlen, &fdbuf);
 		if (error)
 			return (error);
+
+		/*
+		 * Pre-allocate enough additional space for lower level modules
+		 * to append an option (e.g. see tl_unitdata). The following
+		 * is enough extra space for the largest option we might append.
+		 */
+		size += sizeof (struct T_opthdr) + ucredsize;
 		mp = fdbuf_allocmsg(size, fdbuf);
 	} else {
 		mp = soallocproto(size, _ALLOC_INTR, CRED());
@@ -3790,8 +3810,10 @@ sosend_dgramcmsg(struct sonode *so, struct sockaddr *name, socklen_t namelen,
 	}
 	ASSERT(mp->b_wptr <= mp->b_datap->db_lim);
 	so_cmsg2opt(control, controllen, !(flags & MSG_XPG4_2), mp);
-	/* At most 3 bytes left in the message */
-	ASSERT(MBLKL(mp) > (ssize_t)(size - __TPI_ALIGN_SIZE));
+	/*
+	 * Normally at most 3 bytes left in the message, but we might have
+	 * allowed for extra space if we're passing fd's through.
+	 */
 	ASSERT(MBLKL(mp) <= (ssize_t)size);
 
 	ASSERT(mp->b_wptr <= mp->b_datap->db_lim);
@@ -3881,6 +3903,14 @@ sosend_svccmsg(struct sonode *so, struct uio *uiop, int more, void *control,
 			error = fdbuf_create(fds, fdlen, &fdbuf);
 			if (error)
 				return (error);
+
+			/*
+			 * Pre-allocate enough additional space for lower level
+			 * modules to append an option (e.g. see tl_unitdata).
+			 * The following is enough extra space for the largest
+			 * option we might append.
+			 */
+			size += sizeof (struct T_opthdr) + ucredsize;
 			mp = fdbuf_allocmsg(size, fdbuf);
 		} else {
 			mp = soallocproto(size, _ALLOC_INTR, CRED());
@@ -3906,8 +3936,10 @@ sosend_svccmsg(struct sonode *so, struct uio *uiop, int more, void *control,
 			ASSERT(__TPI_TOPT_ISALIGNED(mp->b_wptr));
 		}
 		so_cmsg2opt(control, controllen, !(flags & MSG_XPG4_2), mp);
-		/* At most 3 bytes left in the message */
-		ASSERT(MBLKL(mp) > (ssize_t)(size - __TPI_ALIGN_SIZE));
+		/*
+		 * Normally at most 3 bytes left in the message, but we might
+		 * have allowed for extra space if we're passing fd's through.
+		 */
 		ASSERT(MBLKL(mp) <= (ssize_t)size);
 
 		ASSERT(mp->b_wptr <= mp->b_datap->db_lim);
@@ -4556,8 +4588,15 @@ sotpi_sendmblk(struct sonode *so, struct nmsghdr *msg, int fflag,
 {
 	int error;
 
-	if (so->so_family != AF_INET && so->so_family != AF_INET6)
+	switch (so->so_family) {
+	case AF_INET:
+	case AF_INET6:
+	case AF_UNIX:
+		break;
+	default:
 		return (EAFNOSUPPORT);
+
+	}
 
 	if (so->so_state & SS_CANTSENDMORE)
 		return (EPIPE);
@@ -4978,9 +5017,17 @@ sotpi_getsockname(struct sonode *so, struct sockaddr *name, socklen_t *namelen,
 	}
 
 	if (so->so_family == AF_UNIX) {
-		/* Transport has different name space - return local info */
+		/*
+		 * Transport has different name space - return local info. If we
+		 * have enough space, let consumers know the family.
+		 */
+		if (*namelen >= sizeof (sa_family_t)) {
+			name->sa_family = AF_UNIX;
+			*namelen = sizeof (sa_family_t);
+		} else {
+			*namelen = 0;
+		}
 		error = 0;
-		*namelen = 0;
 		goto done;
 	}
 	if (!(so->so_state & SS_ISBOUND)) {
@@ -6259,6 +6306,13 @@ sotpi_poll(
 
 	if (sti->sti_conn_ind_head != NULL)
 		*reventsp |= (POLLIN|POLLRDNORM) & events;
+
+	if (so->so_state & SS_CANTRCVMORE) {
+		*reventsp |= POLLRDHUP & events;
+
+		if (so->so_state & SS_CANTSENDMORE)
+			*reventsp |= POLLHUP;
+	}
 
 	if (so->so_state & SS_OOBPEND)
 		*reventsp |= POLLRDBAND & events;

@@ -17,7 +17,13 @@
  * information: Portions Copyright [yyyy] [name of copyright owner]
  *
  * CDDL HEADER END
- *
+ */
+
+/*
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
+ */
+
+/*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -39,12 +45,11 @@
 
 #include <sys/byteorder.h>	/* For all ntoh* and hton*() kind of macros */
 #include <rpc/types.h>	/* For all ntoh* and hton*() kind of macros */
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <stdio.h> /* defines FILE *, used in ANSI C function prototypes */
-#endif
-#ifdef _KERNEL
+#else	/* _KERNEL */
 #include <sys/stream.h>
-#endif
+#endif	/* _KERNEL */
 
 #ifdef __cplusplus
 extern "C" {
@@ -557,7 +562,7 @@ typedef struct xdr_bytesrec xdr_bytesrec;
  * These are the public routines for the various implementations of
  * xdr streams.
  */
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #ifdef __STDC__
 extern void   xdrmem_create(XDR *, const caddr_t, const uint_t, const enum
 xdr_op);
@@ -591,6 +596,7 @@ extern void	xdrmem_create(XDR *, caddr_t, uint_t, enum xdr_op);
 extern void	xdrmblk_init(XDR *, mblk_t *, enum xdr_op, int);
 extern bool_t	xdrmblk_getmblk(XDR *, mblk_t **, uint_t *);
 extern bool_t	xdrmblk_putmblk(XDR *, mblk_t *, uint_t);
+extern bool_t	xdrmblk_putmblk_raw(XDR *, mblk_t *);
 extern struct xdr_ops xdrmblk_ops;
 extern struct xdr_ops xdrrdmablk_ops;
 extern struct xdr_ops xdrrdma_ops;

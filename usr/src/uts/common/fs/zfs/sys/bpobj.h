@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
  */
 
 #ifndef	_SYS_BPOBJ_H
@@ -67,14 +68,15 @@ typedef struct bpobj {
 typedef int bpobj_itor_t(void *arg, const blkptr_t *bp, dmu_tx_t *tx);
 
 uint64_t bpobj_alloc(objset_t *mos, int blocksize, dmu_tx_t *tx);
+uint64_t bpobj_alloc_empty(objset_t *os, int blocksize, dmu_tx_t *tx);
 void bpobj_free(objset_t *os, uint64_t obj, dmu_tx_t *tx);
+void bpobj_decr_empty(objset_t *os, dmu_tx_t *tx);
 
 int bpobj_open(bpobj_t *bpo, objset_t *mos, uint64_t object);
 void bpobj_close(bpobj_t *bpo);
 
 int bpobj_iterate(bpobj_t *bpo, bpobj_itor_t func, void *arg, dmu_tx_t *tx);
 int bpobj_iterate_nofree(bpobj_t *bpo, bpobj_itor_t func, void *, dmu_tx_t *);
-int bpobj_iterate_dbg(bpobj_t *bpo, uint64_t *itorp, blkptr_t *bp);
 
 void bpobj_enqueue_subobj(bpobj_t *bpo, uint64_t subobj, dmu_tx_t *tx);
 void bpobj_enqueue(bpobj_t *bpo, const blkptr_t *bp, dmu_tx_t *tx);

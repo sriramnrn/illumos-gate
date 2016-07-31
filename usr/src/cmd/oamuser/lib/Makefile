@@ -63,12 +63,17 @@ CLOBBERFILES=	$(DATEFILE)
 
 GENERAL=	../inc
 CPPFLAGS=	-I. -I$(GENERAL) $(CPPFLAGS.master)
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-type-limits
+CERRWARN +=	-_gcc=-Wno-unused-variable
 ARFLAGS=	cr
 AROBJS=		`$(LORDER) $(OBJS) | $(TSORT)`
 LINTFLAGS=	-u
 
 ROOTUSRSADM=	$(ROOT)/usr/sadm
 ROOTUSRSADMFILE=$(DATEFILE:%=$(ROOTUSRSADM)/%)
+
+CLOBBERFILES += $(LIBRARY)
 
 .KEEP_STATE:
 

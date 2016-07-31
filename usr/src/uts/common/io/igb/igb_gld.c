@@ -25,6 +25,9 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013, Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Pluribus Networks Inc.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 #include "igb_sw.h"
@@ -52,51 +55,42 @@ igb_m_stat(void *arg, uint_t stat, uint64_t *val)
 		break;
 
 	case MAC_STAT_MULTIRCV:
-		igb_ks->mprc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_MPRC);
-		*val = igb_ks->mprc.value.ui64;
+		igb->stat_mprc += E1000_READ_REG(hw, E1000_MPRC);
+		*val = igb->stat_mprc;
 		break;
 
 	case MAC_STAT_BRDCSTRCV:
-		igb_ks->bprc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_BPRC);
-		*val = igb_ks->bprc.value.ui64;
+		igb->stat_bprc += E1000_READ_REG(hw, E1000_BPRC);
+		*val = igb->stat_bprc;
 		break;
 
 	case MAC_STAT_MULTIXMT:
-		igb_ks->mptc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_MPTC);
-		*val = igb_ks->mptc.value.ui64;
+		igb->stat_mptc += E1000_READ_REG(hw, E1000_MPTC);
+		*val = igb->stat_mptc;
 		break;
 
 	case MAC_STAT_BRDCSTXMT:
-		igb_ks->bptc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_BPTC);
-		*val = igb_ks->bptc.value.ui64;
+		igb->stat_bptc += E1000_READ_REG(hw, E1000_BPTC);
+		*val = igb->stat_bptc;
 		break;
 
 	case MAC_STAT_NORCVBUF:
-		igb_ks->rnbc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_RNBC);
-		*val = igb_ks->rnbc.value.ui64;
+		igb->stat_rnbc += E1000_READ_REG(hw, E1000_RNBC);
+		*val = igb->stat_rnbc;
 		break;
 
 	case MAC_STAT_IERRORS:
-		igb_ks->rxerrc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_RXERRC);
-		igb_ks->algnerrc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_ALGNERRC);
+		igb->stat_rxerrc += E1000_READ_REG(hw, E1000_RXERRC);
+		igb->stat_algnerrc += E1000_READ_REG(hw, E1000_ALGNERRC);
 		igb_ks->rlec.value.ui64 +=
 		    E1000_READ_REG(hw, E1000_RLEC);
-		igb_ks->crcerrs.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_CRCERRS);
-		igb_ks->cexterr.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_CEXTERR);
-		*val = igb_ks->rxerrc.value.ui64 +
-		    igb_ks->algnerrc.value.ui64 +
+		igb->stat_crcerrs += E1000_READ_REG(hw, E1000_CRCERRS);
+		igb->stat_cexterr += E1000_READ_REG(hw, E1000_CEXTERR);
+		*val = igb->stat_rxerrc +
+		    igb->stat_algnerrc +
 		    igb_ks->rlec.value.ui64 +
-		    igb_ks->crcerrs.value.ui64 +
-		    igb_ks->cexterr.value.ui64;
+		    igb->stat_crcerrs +
+		    igb->stat_cexterr;
 		break;
 
 	case MAC_STAT_NOXMTBUF:
@@ -104,15 +98,13 @@ igb_m_stat(void *arg, uint_t stat, uint64_t *val)
 		break;
 
 	case MAC_STAT_OERRORS:
-		igb_ks->ecol.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_ECOL);
-		*val = igb_ks->ecol.value.ui64;
+		igb->stat_ecol += E1000_READ_REG(hw, E1000_ECOL);
+		*val = igb->stat_ecol;
 		break;
 
 	case MAC_STAT_COLLISIONS:
-		igb_ks->colc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_COLC);
-		*val = igb_ks->colc.value.ui64;
+		igb->stat_colc += E1000_READ_REG(hw, E1000_COLC);
+		*val = igb->stat_colc;
 		break;
 
 	case MAC_STAT_RBYTES:
@@ -123,15 +115,13 @@ igb_m_stat(void *arg, uint_t stat, uint64_t *val)
 		 */
 		low_val = E1000_READ_REG(hw, E1000_TORL);
 		high_val = E1000_READ_REG(hw, E1000_TORH);
-		igb_ks->tor.value.ui64 +=
-		    (uint64_t)high_val << 32 | (uint64_t)low_val;
-		*val = igb_ks->tor.value.ui64;
+		igb->stat_tor += (uint64_t)high_val << 32 | (uint64_t)low_val;
+		*val = igb->stat_tor;
 		break;
 
 	case MAC_STAT_IPACKETS:
-		igb_ks->tpr.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_TPR);
-		*val = igb_ks->tpr.value.ui64;
+		igb->stat_tpr += E1000_READ_REG(hw, E1000_TPR);
+		*val = igb->stat_tpr;
 		break;
 
 	case MAC_STAT_OBYTES:
@@ -142,88 +132,74 @@ igb_m_stat(void *arg, uint_t stat, uint64_t *val)
 		 */
 		low_val = E1000_READ_REG(hw, E1000_TOTL);
 		high_val = E1000_READ_REG(hw, E1000_TOTH);
-		igb_ks->tot.value.ui64 +=
-		    (uint64_t)high_val << 32 | (uint64_t)low_val;
-		*val = igb_ks->tot.value.ui64;
+		igb->stat_tot += (uint64_t)high_val << 32 | (uint64_t)low_val;
+		*val = igb->stat_tot;
 		break;
 
 	case MAC_STAT_OPACKETS:
-		igb_ks->tpt.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_TPT);
-		*val = igb_ks->tpt.value.ui64;
+		igb->stat_tpt += E1000_READ_REG(hw, E1000_TPT);
+		*val = igb->stat_tpt;
 		break;
 
 	/* RFC 1643 stats */
 	case ETHER_STAT_ALIGN_ERRORS:
-		igb_ks->algnerrc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_ALGNERRC);
-		*val = igb_ks->algnerrc.value.ui64;
+		igb->stat_algnerrc += E1000_READ_REG(hw, E1000_ALGNERRC);
+		*val = igb->stat_algnerrc;
 		break;
 
 	case ETHER_STAT_FCS_ERRORS:
-		igb_ks->crcerrs.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_CRCERRS);
-		*val = igb_ks->crcerrs.value.ui64;
+		igb->stat_crcerrs += E1000_READ_REG(hw, E1000_CRCERRS);
+		*val = igb->stat_crcerrs;
 		break;
 
 	case ETHER_STAT_FIRST_COLLISIONS:
-		igb_ks->scc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_SCC);
-		*val = igb_ks->scc.value.ui64;
+		igb->stat_scc += E1000_READ_REG(hw, E1000_SCC);
+		*val = igb->stat_scc;
 		break;
 
 	case ETHER_STAT_MULTI_COLLISIONS:
-		igb_ks->mcc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_MCC);
-		*val = igb_ks->mcc.value.ui64;
+		igb->stat_mcc += E1000_READ_REG(hw, E1000_MCC);
+		*val = igb->stat_mcc;
 		break;
 
 	case ETHER_STAT_SQE_ERRORS:
-		igb_ks->sec.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_SEC);
-		*val = igb_ks->sec.value.ui64;
+		igb->stat_sec += E1000_READ_REG(hw, E1000_SEC);
+		*val = igb->stat_sec;
 		break;
 
 	case ETHER_STAT_DEFER_XMTS:
-		igb_ks->dc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_DC);
-		*val = igb_ks->dc.value.ui64;
+		igb->stat_dc += E1000_READ_REG(hw, E1000_DC);
+		*val = igb->stat_dc;
 		break;
 
 	case ETHER_STAT_TX_LATE_COLLISIONS:
-		igb_ks->latecol.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_LATECOL);
-		*val = igb_ks->latecol.value.ui64;
+		igb->stat_latecol += E1000_READ_REG(hw, E1000_LATECOL);
+		*val = igb->stat_latecol;
 		break;
 
 	case ETHER_STAT_EX_COLLISIONS:
-		igb_ks->ecol.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_ECOL);
-		*val = igb_ks->ecol.value.ui64;
+		igb->stat_ecol += E1000_READ_REG(hw, E1000_ECOL);
+		*val = igb->stat_ecol;
 		break;
 
 	case ETHER_STAT_MACXMT_ERRORS:
-		igb_ks->ecol.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_ECOL);
-		*val = igb_ks->ecol.value.ui64;
+		igb->stat_ecol += E1000_READ_REG(hw, E1000_ECOL);
+		*val = igb->stat_ecol;
 		break;
 
 	case ETHER_STAT_CARRIER_ERRORS:
-		igb_ks->cexterr.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_CEXTERR);
-		*val = igb_ks->cexterr.value.ui64;
+		igb->stat_cexterr += E1000_READ_REG(hw, E1000_CEXTERR);
+		*val = igb->stat_cexterr;
 		break;
 
 	case ETHER_STAT_TOOLONG_ERRORS:
-		igb_ks->roc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_ROC);
-		*val = igb_ks->roc.value.ui64;
+		igb->stat_roc += E1000_READ_REG(hw, E1000_ROC);
+		*val = igb->stat_roc;
 		break;
 
 	case ETHER_STAT_MACRCV_ERRORS:
-		igb_ks->rxerrc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_RXERRC);
-		*val = igb_ks->rxerrc.value.ui64;
+		igb->stat_rxerrc += E1000_READ_REG(hw, E1000_RXERRC);
+		*val = igb->stat_rxerrc;
 		break;
 
 	/* MII/GMII stats */
@@ -384,9 +360,8 @@ igb_m_stat(void *arg, uint_t stat, uint64_t *val)
 		break;
 
 	case ETHER_STAT_TOOSHORT_ERRORS:
-		igb_ks->ruc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_RUC);
-		*val = igb_ks->ruc.value.ui64;
+		igb->stat_ruc += E1000_READ_REG(hw, E1000_RUC);
+		*val = igb->stat_ruc;
 		break;
 
 	case ETHER_STAT_CAP_REMFAULT:
@@ -402,9 +377,8 @@ igb_m_stat(void *arg, uint_t stat, uint64_t *val)
 		break;
 
 	case ETHER_STAT_JABBER_ERRORS:
-		igb_ks->rjc.value.ui64 +=
-		    E1000_READ_REG(hw, E1000_RJC);
-		*val = igb_ks->rjc.value.ui64;
+		igb->stat_rjc += E1000_READ_REG(hw, E1000_RJC);
+		*val = igb->stat_rjc;
 		break;
 
 	case ETHER_STAT_CAP_100T4:
@@ -1143,7 +1117,7 @@ setup_link:
 		err = igb_set_priv_prop(igb, pr_name, pr_valsize, pr_val);
 		break;
 	default:
-		err = EINVAL;
+		err = ENOTSUP;
 		break;
 	}
 
@@ -1245,7 +1219,7 @@ igb_m_getprop(void *arg, const char *pr_name, mac_prop_id_t pr_num,
 		err = igb_get_priv_prop(igb, pr_name, pr_valsize, pr_val);
 		break;
 	default:
-		err = EINVAL;
+		err = ENOTSUP;
 		break;
 	}
 	return (err);
@@ -1385,6 +1359,43 @@ igb_set_priv_prop(igb_t *igb, const char *pr_name,
 	struct e1000_hw *hw = &igb->hw;
 	int i;
 
+	if (strcmp(pr_name, "_eee_support") == 0) {
+		if (pr_val == NULL)
+			return (EINVAL);
+		(void) ddi_strtol(pr_val, (char **)NULL, 0, &result);
+		switch (result) {
+		case 0:
+		case 1:
+			/*
+			 * For now, only supported on I350/I354.
+			 * Add new mac.type values (or use < instead)
+			 * as new cards offer up EEE.
+			 */
+			switch (hw->mac.type) {
+			case e1000_i350:
+				/* Must set this prior to the set call. */
+				hw->dev_spec._82575.eee_disable = !result;
+				if (e1000_set_eee_i350(hw, result,
+				    result) != E1000_SUCCESS)
+					err = EIO;
+				break;
+			case e1000_i354:
+				/* Must set this prior to the set call. */
+				hw->dev_spec._82575.eee_disable = !result;
+				if (e1000_set_eee_i354(hw, result,
+				    result) != E1000_SUCCESS)
+					err = EIO;
+				break;
+			default:
+				return (ENXIO);
+			}
+			break;
+		default:
+			err = EINVAL;
+			/* FALLTHRU */
+		}
+		return (err);
+	}
 	if (strcmp(pr_name, "_tx_copy_thresh") == 0) {
 		if (pr_val == NULL) {
 			err = EINVAL;
@@ -1507,6 +1518,19 @@ igb_get_priv_prop(igb_t *igb, const char *pr_name, uint_t pr_valsize,
 		value = igb->param_adv_pause_cap;
 	} else if (strcmp(pr_name, "_adv_asym_pause_cap") == 0) {
 		value = igb->param_adv_asym_pause_cap;
+	} else if (strcmp(pr_name, "_eee_support") == 0) {
+		/*
+		 * For now, only supported on I350.  Add new mac.type values
+		 * (or use < instead) as new cards offer up EEE.
+		 */
+		switch (igb->hw.mac.type) {
+		case e1000_i350:
+		case e1000_i354:
+			value = !(igb->hw.dev_spec._82575.eee_disable);
+			break;
+		default:
+			value = 0;
+		}
 	} else if (strcmp(pr_name, "_tx_copy_thresh") == 0) {
 		value = igb->tx_copy_thresh;
 	} else if (strcmp(pr_name, "_tx_recycle_thresh") == 0) {

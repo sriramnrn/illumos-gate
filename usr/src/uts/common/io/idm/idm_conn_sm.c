@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/cpuvar.h>
@@ -169,6 +171,7 @@ idm_conn_sm_fini(idm_conn_t *ic)
 	 * destroy it since there is no way to locate the object now.
 	 */
 	mutex_enter(&ic->ic_state_mutex);
+	IDM_SM_TIMER_CLEAR(ic);
 	mutex_destroy(&ic->ic_state_mutex);
 }
 
@@ -490,6 +493,7 @@ idm_login_timeout(void *arg)
 {
 	idm_conn_t *ic = arg;
 
+	ic->ic_state_timeout = 0;
 	idm_conn_event(ic, CE_LOGIN_TIMEOUT, NULL);
 }
 
@@ -499,6 +503,7 @@ idm_state_s3_xpt_up(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	switch (event_ctx->iec_event) {
 	case CE_LOGIN_RCV:
 		/* T4 */
+		/* Keep login timeout active through S3 and into S4 */
 		idm_initial_login_actions(ic, event_ctx);
 		idm_update_state(ic, CS_S4_IN_LOGIN, event_ctx);
 		break;
@@ -517,14 +522,14 @@ idm_state_s3_xpt_up(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * connection context to handle additional notifications.
 		 * IDM needs to just clean things up on its own.
 		 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		idm_update_state(ic, CS_S9A_REJECTED, event_ctx);
 		break;
 	case CE_CONNECT_FAIL:
 	case CE_TRANSPORT_FAIL:
 	case CE_LOGOUT_OTHER_CONN_SND:
 		/* T6 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		(void) idm_notify_client(ic, CN_LOGIN_FAIL, NULL);
 		idm_update_state(ic, CS_S9_INIT_ERROR, event_ctx);
 		break;
@@ -552,7 +557,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGIN_SUCCESS_SND:
 		ASSERT(ic->ic_client_callback == NULL);
 
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		idm_login_success_actions(ic, event_ctx);
 		if (ic->ic_rdma_extensions) {
 			/* T19 */
@@ -573,7 +578,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * the state machine cleanup until the completion callback.
 		 * Only 1 level or callback interposition is allowed.
 		 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		pdu = (idm_pdu_t *)event_ctx->iec_info;
 		ASSERT(ic->ic_client_callback == NULL);
 		ic->ic_client_callback = pdu->isp_callback;
@@ -597,7 +602,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_OTHER_CONN_SND:
 	case CE_LOGOUT_OTHER_CONN_RCV:
 		/* T7 */
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		(void) idm_notify_client(ic, CN_LOGIN_FAIL, NULL);
 		idm_update_state(ic, CS_S9_INIT_ERROR, event_ctx);
 		break;
@@ -609,6 +614,7 @@ idm_state_s4_in_login(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 		 * connections are shut down by a CE_LOGOUT_SESSION_SUCCESS
 		 * event sent from the session to the IDM layer.
 		 */
+		IDM_SM_TIMER_CLEAR(ic);
 		if (IDM_CONN_ISTGT(ic)) {
 			ic->ic_transport_ops->it_tgt_conn_disconnect(ic);
 		} else {
@@ -824,6 +830,7 @@ idm_logout_req_timeout(void *arg)
 {
 	idm_conn_t *ic = arg;
 
+	ic->ic_state_timeout = 0;
 	idm_conn_event(ic, CE_LOGOUT_TIMEOUT, NULL);
 }
 
@@ -838,7 +845,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_OTHER_CONN_SND:
 		/* T10 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		idm_ffp_disable(ic, FD_CONN_LOGOUT); /* Explicit logout */
 		idm_update_state(ic, CS_S6_IN_LOGOUT, event_ctx);
@@ -847,7 +854,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SESSION_SND:
 		/* T10 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		idm_ffp_disable(ic, FD_SESS_LOGOUT); /* Explicit logout */
 		idm_update_state(ic, CS_S6_IN_LOGOUT, event_ctx);
@@ -863,7 +870,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_ASYNC_DROP_ALL_CONN_SND:
 		/* T16 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		/* FALLTHROUGH */
 	case CE_LOGOUT_TIMEOUT:
@@ -873,7 +880,7 @@ idm_state_s7_logout_req(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SESSION_SUCCESS:
 		/* T18 */
 		if (IDM_CONN_ISTGT(ic)) {
-			(void) untimeout(ic->ic_state_timeout);
+			IDM_SM_TIMER_CLEAR(ic);
 		}
 		idm_ffp_disable(ic, FD_SESS_LOGOUT); /* Explicit logout */
 
@@ -904,6 +911,7 @@ idm_cleanup_timeout(void *arg)
 {
 	idm_conn_t *ic = arg;
 
+	ic->ic_state_timeout = 0;
 	idm_conn_event(ic, CE_CLEANUP_TIMEOUT, NULL);
 }
 
@@ -920,7 +928,7 @@ idm_state_s8_cleanup(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SUCCESS_RCV:
 	case CE_LOGOUT_SUCCESS_SND:
 	case CE_LOGOUT_SESSION_SUCCESS:
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		/*FALLTHROUGH*/
 	case CE_CLEANUP_TIMEOUT:
 		/* M1 */
@@ -1029,7 +1037,7 @@ idm_state_s10_in_cleanup(idm_conn_t *ic, idm_conn_event_ctx_t *event_ctx)
 	case CE_LOGOUT_SUCCESS_SND:
 	case CE_LOGOUT_SUCCESS_RCV:
 	case CE_LOGOUT_SESSION_SUCCESS:
-		(void) untimeout(ic->ic_state_timeout);
+		IDM_SM_TIMER_CLEAR(ic);
 		/*FALLTHROUGH*/
 	case CE_CLEANUP_TIMEOUT:
 		idm_update_state(ic, CS_S11_COMPLETE, event_ctx);
@@ -1185,6 +1193,7 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		 * First login received will cause a transition to
 		 * CS_S4_IN_LOGIN.  Start login timer.
 		 */
+		IDM_SM_TIMER_CHECK(ic);
 		ic->ic_state_timeout = timeout(idm_login_timeout, ic,
 		    drv_usectohz(IDM_LOGIN_SECONDS*1000000));
 		break;
@@ -1220,6 +1229,7 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 	case CS_S7_LOGOUT_REQ:
 		/* Start logout timer for target connections */
 		if (IDM_CONN_ISTGT(ic)) {
+			IDM_SM_TIMER_CHECK(ic);
 			ic->ic_state_timeout = timeout(idm_logout_req_timeout,
 			    ic, drv_usectohz(IDM_LOGOUT_SECONDS*1000000));
 		}
@@ -1236,6 +1246,7 @@ idm_update_state(idm_conn_t *ic, idm_conn_state_t new_state,
 		idm_task_abort(ic, NULL, AT_INTERNAL_SUSPEND);
 
 		/* Start logout timer */
+		IDM_SM_TIMER_CHECK(ic);
 		ic->ic_state_timeout = timeout(idm_cleanup_timeout, ic,
 		    drv_usectohz(IDM_CLEANUP_SECONDS*1000000));
 		break;

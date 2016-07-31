@@ -19,8 +19,9 @@
  * CDDL HEADER END
  */
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
  */
 /*
  * This file contains all of the interfaces for mdb's tab completion engine.
@@ -43,6 +44,7 @@
 #include <mdb/mdb_print.h>
 #include <mdb/mdb_nv.h>
 #include <mdb/mdb_tab.h>
+#include <mdb/mdb_target.h>
 #include <mdb/mdb.h>
 
 #include <ctype.h>
@@ -282,7 +284,11 @@ mdb_tab_command(mdb_tab_cookie_t *mcp, const char *buf)
 	 */
 	ret = tab_parse_buf(data, &dcmd, &argc, &argv, &flags);
 
+	/*
+	 * Match against global symbols if the input is not a dcmd
+	 */
 	if (ret != 0) {
+		(void) mdb_tab_complete_global(mcp, buf);
 		goto out;
 	}
 
@@ -293,8 +299,9 @@ mdb_tab_command(mdb_tab_cookie_t *mcp, const char *buf)
 
 	/*
 	 * When argc is zero it indicates that we are trying to tab complete
-	 * a dcmd. Note, that if there isn't the start of a dcmd, i.e. ::, then
-	 * we will have already bailed in the call to tab_parse_buf.
+	 * a dcmd or a global symbol. Note, that if there isn't the start of
+	 * a dcmd, i.e. ::, then we will have already bailed in the call to
+	 * tab_parse_buf.
 	 */
 	if (cp == NULL && argc != 0) {
 		goto out;
@@ -336,7 +343,8 @@ tab_complete_dcmd(mdb_var_t *v, void *arg)
 int
 mdb_tab_complete_dcmd(mdb_tab_cookie_t *mcp, const char *dcmd)
 {
-	mdb_tab_setmbase(mcp, dcmd);
+	if (dcmd != NULL)
+		mdb_tab_setmbase(mcp, dcmd);
 	mdb_nv_sort_iter(&mdb.m_dcmds, tab_complete_dcmd, mcp,
 	    UM_GC | UM_SLEEP);
 	return (0);
@@ -388,11 +396,8 @@ mdb_tab_size(mdb_tab_cookie_t *mcp)
 void
 mdb_tab_insert(mdb_tab_cookie_t *mcp, const char *name)
 {
-	size_t len, matches, index;
-	uint_t flags;
+	size_t matches, index;
 	mdb_var_t *v;
-	char *n;
-	const char *nvn;
 
 	/*
 	 * If we have a match set, then we want to verify that we actually match
@@ -406,34 +411,15 @@ mdb_tab_insert(mdb_tab_cookie_t *mcp, const char *name)
 	if (v != NULL)
 		return;
 
-	/*
-	 * Names that we get passed in may be longer than MDB_NV_NAMELEN which
-	 * is currently 31 including the null terminator. If that is the case,
-	 * then we're going to take care of allocating a string and holding it
-	 * for our caller. Note that we don't need to free it, because we're
-	 * allocating this with UM_GC.
-	 */
-	flags = 0;
-	len = strlen(name);
-	if (len > MDB_NV_NAMELEN - 1) {
-		n = mdb_alloc(len + 1, UM_SLEEP | UM_GC);
-		(void) strcpy(n, name);
-		nvn = n;
-		flags |= MDB_NV_EXTNAME;
-	} else {
-		nvn = name;
-	}
-	flags |= MDB_NV_RDONLY;
-
-	(void) mdb_nv_insert(&mcp->mtc_nv, nvn, NULL, 0, flags);
+	(void) mdb_nv_insert(&mcp->mtc_nv, name, NULL, 0, MDB_NV_RDONLY);
 
 	matches = mdb_tab_size(mcp);
 	if (matches == 1) {
-		(void) strlcpy(mcp->mtc_match, nvn, MDB_SYM_NAMLEN);
+		(void) strlcpy(mcp->mtc_match, name, MDB_SYM_NAMLEN);
 	} else {
 		index = 0;
 		while (mcp->mtc_match[index] &&
-		    mcp->mtc_match[index] == nvn[index])
+		    mcp->mtc_match[index] == name[index])
 			index++;
 
 		mcp->mtc_match[index] = '\0';
@@ -480,6 +466,29 @@ mdb_tab_setmbase(mdb_tab_cookie_t *mcp, const char *base)
 void
 mdb_tab_fini(mdb_tab_cookie_t *mcp)
 {
+}
+
+/*ARGSUSED*/
+static int
+tab_complete_global(void *arg, const GElf_Sym *sym, const char *name,
+    const mdb_syminfo_t *sip, const char *obj)
+{
+	mdb_tab_cookie_t *mcp = arg;
+	mdb_tab_insert(mcp, name);
+	return (0);
+}
+
+/*
+ * This function tab completes against all loaded global symbols.
+ */
+int
+mdb_tab_complete_global(mdb_tab_cookie_t *mcp, const char *name)
+{
+	mdb_tab_setmbase(mcp, name);
+	(void) mdb_tgt_symbol_iter(mdb.m_target, MDB_TGT_OBJ_EVERY,
+	    MDB_TGT_SYMTAB, MDB_TGT_BIND_ANY | MDB_TGT_TYPE_OBJECT |
+	    MDB_TGT_TYPE_FUNC, tab_complete_global, mcp);
+	return (0);
 }
 
 /*
@@ -550,6 +559,8 @@ mdb_tab_complete_type(mdb_tab_cookie_t *mcp, const char *name, uint_t flags)
 		mdb_tab_setmbase(mcp, name);
 
 	(void) mdb_tgt_object_iter(t, mdb_tab_complete_module, mcp);
+	(void) mdb_ctf_type_iter(MDB_CTF_SYNTHETIC_ITER, tab_complete_type,
+	    mcp);
 	return (0);
 }
 

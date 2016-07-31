@@ -19,10 +19,9 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# ident	"%Z%%M%	%I%	%E% SMI"
 #
 
 LIBRARY= libresolv.a
@@ -56,6 +55,10 @@ C99MODE=	$(C99_DISABLE)
 # so we must put -I. ahead of the default include directories:
 CPPFLAGS = -I. -I../common/inc $(CPPFLAGS.master) -DDEBUG -DSYSV -D_REENTRANT
 LDLIBS += -lsocket -lnsl -lc
+CFLAGS += $(CCVERBOSE)
+
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-uninitialized
 
 ROOTDYNLIBS=	$(DYNLIB:%=$(ROOTLIBDIR)/%)
 

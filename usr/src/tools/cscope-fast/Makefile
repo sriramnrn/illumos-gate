@@ -19,11 +19,11 @@
 #
 # CDDL HEADER END
 #
-#
-# ident	"%Z%%M%	%I%	%E% SMI"
+
 #
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
 
 PROG= cscope-fast
 
@@ -33,7 +33,7 @@ OBJS= 	main.o dir.o crossref.o scanner.o lookup.o command.o display.o \
 	mouse.o mygetenv.o mygetwd.o mypopen.o \
 	vpaccess.o vpfopen.o vpinit.o vpopen.o vpstat.o
 SRCS=	$(OBJS:%.o=%.c)
-CLEANFILES += $(OBJS)
+CLEANFILES += $(OBJS) scanner.c
 TMPDIR= /tmp
 
 include ../Makefile.tools
@@ -45,6 +45,10 @@ PATLEN=		250
 STMTMAX=	10000
 YYLMAX=		10251
 CFLAGS +=	-DPATLEN=$(PATLEN) -DSTMTMAX=$(STMTMAX) -DYYLMAX=$(YYLMAX)
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+CERRWARN +=	-_gcc=-Wno-unused
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 CFLAGS +=	$(CCVERBOSE)
 LDLIBS +=	-lcurses -ll

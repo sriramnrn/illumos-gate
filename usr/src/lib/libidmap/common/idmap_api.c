@@ -21,6 +21,8 @@
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright Milan Jurik 2012. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 
@@ -1652,7 +1654,7 @@ idmap_get_w2u_mapping(
 	    TIMEOUT);
 
 	if (retcode != IDMAP_SUCCESS)
-		return (retcode);
+		goto out;
 
 	retcode = result.retcode;
 
@@ -2172,7 +2174,7 @@ idmap_getgidbywinname(const char *name, const char *domain, int flag,
 /*
  * Get winname given pid
  */
-static idmap_retcode
+idmap_stat
 idmap_getwinnamebypid(uid_t pid, int is_user, int flag, char **name,
 	char **domain)
 {
@@ -2210,8 +2212,7 @@ idmap_getwinnamebypid(uid_t pid, int is_user, int flag, char **name,
 	 * generated SID in which case there isn't any
 	 * Windows name
 	 */
-	if (winname == NULL || windomain == NULL) {
-		idmap_free(winname);
+	if (winname == NULL) {
 		idmap_free(windomain);
 		return (IDMAP_ERR_NORESULT);
 	}
@@ -2230,10 +2231,10 @@ out:
 		*name = winname;
 		*domain = windomain;
 	} else {
-		len = strlen(winname) + strlen(windomain) + 2;
+		char *wd = windomain != NULL ? windomain : "";
+		len = snprintf(NULL, 0, "%s@%s", winname, wd) + 1;
 		if ((*name = malloc(len)) != NULL)
-			(void) snprintf(*name, len, "%s@%s", winname,
-			    windomain);
+			(void) snprintf(*name, len, "%s@%s", winname, wd);
 		else
 			rc = IDMAP_ERR_MEMORY;
 		idmap_free(winname);

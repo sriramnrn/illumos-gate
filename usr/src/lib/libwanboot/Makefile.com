@@ -21,6 +21,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright (c) 2012 by Delphix. All rights reserved.
+#
 
 LIBRARY =	libwanboot.a
 VERS =		.1
@@ -58,8 +60,12 @@ include ../../Makefile.lib
 
 LIBS +=		$(LINTLIB)
 LDLIBS +=	-lnvpair -lresolv -lnsl -lsocket -ldevinfo -ldhcputil \
-    		-linetutil -lc -lcrypto -lssl
+		-linetutil -lc -lcrypto -lssl
 CPPFLAGS =	-I$(SRC)/common/net/wanboot/crypt $(CPPFLAGS.master)
+CERRWARN +=	-_gcc=-Wno-switch
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-unused-value
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 # Must override SRCS from Makefile.lib since sources have
 # multiple source directories.
@@ -69,8 +75,9 @@ SRCS =		$(LOC_SRCS) $(COM_SRCS) $(DHCP_SRCS)
 SRCDIR =	$(LOC_DIR)
 $(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
-# OpenSSL requires us to turn this off
-LINTFLAGS +=    -erroff=E_BAD_PTR_CAST_ALIGN
+# OpenSSL (incl. varying versions) requires us to turn these off
+LINTFLAGS   +=    -erroff=E_BAD_PTR_CAST_ALIGN,E_SUPPRESSION_DIRECTIVE_UNUSED
+LINTFLAGS64 +=    -erroff=E_BAD_PTR_CAST_ALIGN,E_SUPPRESSION_DIRECTIVE_UNUSED
 
 CFLAGS +=	$(CCVERBOSE)
 CPPFLAGS +=	-I$(LOC_DIR) -I$(COM_DIR) -I$(DHCP_DIR)

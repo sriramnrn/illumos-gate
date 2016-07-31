@@ -20,11 +20,14 @@
 #
 
 #
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
+# Copyright (c) 2013 Gary Mills
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 #
 
 <include system-library.man3.inc>
+<include system-library.man3avl.inc>
 <include system-library.man3bsm.inc>
 <include system-library.man3c.inc>
 <include system-library.man3c_db.inc>
@@ -51,6 +54,7 @@
 <include system-library.man3nsl.inc>
 <include system-library.man3nvpair.inc>
 <include system-library.man3pam.inc>
+<include system-library.man3proc.inc>
 <include system-library.man3scf.inc>
 <include system-library.man3sec.inc>
 <include system-library.man3secdb.inc>
@@ -120,6 +124,7 @@ dir path=usr/lib/security
 dir path=usr/lib/security/$(ARCH64)
 dir path=usr/share/man
 dir path=usr/share/man/man3
+dir path=usr/share/man/man3avl
 dir path=usr/share/man/man3bsm
 dir path=usr/share/man/man3c
 dir path=usr/share/man/man3c_db
@@ -179,6 +184,7 @@ file path=lib/$(ARCH64)/libcurses.so.1
 file path=lib/$(ARCH64)/libdevice.so.1
 file path=lib/$(ARCH64)/libdevid.so.1
 file path=lib/$(ARCH64)/libdevinfo.so.1
+file path=lib/$(ARCH64)/libdhcputil.so.1
 file path=lib/$(ARCH64)/libdl.so.1
 file path=lib/$(ARCH64)/libdladm.so.1
 file path=lib/$(ARCH64)/libdlpi.so.1
@@ -297,6 +303,7 @@ file path=lib/libsec.so.1
 file path=lib/libsecdb.so.1
 file path=lib/libsendfile.so.1
 file path=lib/libsocket.so.1
+file path=lib/libsqlite-sys.so.2.8.15
 file path=lib/libsysevent.so.1
 file path=lib/libtermcap.so.1
 file path=lib/libthread.so.1
@@ -314,6 +321,8 @@ file path=lib/nss_files.so.1
 file path=lib/nss_nis.so.1
 file path=lib/nss_user.so.1
 file path=usr/lib/$(ARCH64)/0@0.so.1
+file path=usr/lib/$(ARCH64)/getloginx.so.1
+file path=usr/lib/$(ARCH64)/libads.so.1
 file path=usr/lib/$(ARCH64)/libadutils.so.1
 file path=usr/lib/$(ARCH64)/libast.so.1
 file path=usr/lib/$(ARCH64)/libbsdmalloc.so.1
@@ -326,6 +335,7 @@ file path=usr/lib/$(ARCH64)/libdisasm.so.1
 file path=usr/lib/$(ARCH64)/libdll.so.1
 file path=usr/lib/$(ARCH64)/libexacct.so.1
 file path=usr/lib/$(ARCH64)/libform.so.1
+file path=usr/lib/$(ARCH64)/libfstyp.so.1
 file path=usr/lib/$(ARCH64)/libhotplug.so.1
 file path=usr/lib/$(ARCH64)/libidmap.so.1
 file path=usr/lib/$(ARCH64)/libike.so.1
@@ -344,10 +354,12 @@ file path=usr/lib/$(ARCH64)/libmenu.so.1
 file path=usr/lib/$(ARCH64)/libmtmalloc.so.1
 file path=usr/lib/$(ARCH64)/libnls.so.1
 file path=usr/lib/$(ARCH64)/libpanel.so.1
+file path=usr/lib/$(ARCH64)/libpcidb.so.1
 file path=usr/lib/$(ARCH64)/libpkcs11.so.1
 file path=usr/lib/$(ARCH64)/libproject.so.1
 file path=usr/lib/$(ARCH64)/libraidcfg.so.1
 file path=usr/lib/$(ARCH64)/libreparse.so.1
+$(i386_ONLY)file path=usr/lib/$(ARCH64)/libsaveargs.so.1
 file path=usr/lib/$(ARCH64)/libsched.so.1
 file path=usr/lib/$(ARCH64)/libsctp.so.1
 file path=usr/lib/$(ARCH64)/libshell.so.1
@@ -358,7 +370,9 @@ file path=usr/lib/$(ARCH64)/libsoftcrypto.so.1
 file path=usr/lib/$(ARCH64)/libsum.so.1
 $(sparc_ONLY)file path=usr/lib/$(ARCH64)/libv12n.so.1
 file path=usr/lib/$(ARCH64)/libvolmgt.so.1
+file path=usr/lib/$(ARCH64)/libwrap.so.1.0
 file path=usr/lib/$(ARCH64)/liby.so.1
+file path=usr/lib/$(ARCH64)/libzoneinfo.so.1
 file path=usr/lib/$(ARCH64)/nss_ad.so.1
 file path=usr/lib/$(ARCH64)/nss_ldap.so.1
 file path=usr/lib/$(ARCH64)/passwdutil.so.1
@@ -378,7 +392,9 @@ file path=usr/lib/cfgadm/scsi.so.1
 file path=usr/lib/cfgadm/shp.so.1
 file path=usr/lib/cfgadm/usb.so.1
 file path=usr/lib/extendedFILE.so.1
+file path=usr/lib/getloginx.so.1
 file path=usr/lib/lib.b mode=0444
+file path=usr/lib/libads.so.1
 file path=usr/lib/libadutils.so.1
 file path=usr/lib/libast.so.1
 file path=usr/lib/libbsdmalloc.so.1
@@ -414,6 +430,7 @@ file path=usr/lib/libmenu.so.1
 file path=usr/lib/libmtmalloc.so.1
 file path=usr/lib/libnls.so.1
 file path=usr/lib/libpanel.so.1
+file path=usr/lib/libpcidb.so.1
 file path=usr/lib/libpkcs11.so.1
 file path=usr/lib/libproject.so.1
 file path=usr/lib/libraidcfg.so.1
@@ -474,6 +491,7 @@ file path=usr/lib/security/$(ARCH64)/pam_passwd_auth.so.1
 file path=usr/lib/security/$(ARCH64)/pam_rhosts_auth.so.1
 file path=usr/lib/security/$(ARCH64)/pam_roles.so.1
 file path=usr/lib/security/$(ARCH64)/pam_sample.so.1
+file path=usr/lib/security/$(ARCH64)/pam_timestamp.so.1
 file path=usr/lib/security/$(ARCH64)/pam_tsol_account.so.1
 file path=usr/lib/security/$(ARCH64)/pam_unix_account.so.1
 file path=usr/lib/security/$(ARCH64)/pam_unix_auth.so.1
@@ -503,6 +521,7 @@ file path=usr/lib/security/pam_passwd_auth.so.1
 file path=usr/lib/security/pam_rhosts_auth.so.1
 file path=usr/lib/security/pam_roles.so.1
 file path=usr/lib/security/pam_sample.so.1
+file path=usr/lib/security/pam_timestamp.so.1
 file path=usr/lib/security/pam_tsol_account.so.1
 file path=usr/lib/security/pam_unix_account.so.1
 file path=usr/lib/security/pam_unix_auth.so.1
@@ -528,6 +547,9 @@ license cr_Sun license=cr_Sun
 license lic_CDDL license=lic_CDDL
 license lic_OSBL license=lic_OSBL
 license lic_OSBL_preamble license=lic_OSBL_preamble
+# libwrap is part of tcp wrappers along with tcpd
+license usr/src/cmd/tcpd/THIRDPARTYLICENSE \
+    license=usr/src/cmd/tcpd/THIRDPARTYLICENSE
 license usr/src/common/crypto/THIRDPARTYLICENSE.cryptogams \
     license=usr/src/common/crypto/THIRDPARTYLICENSE.cryptogams
 license usr/src/common/crypto/aes/amd64/THIRDPARTYLICENSE.gladman \
@@ -566,18 +588,21 @@ license usr/src/lib/libshell/THIRDPARTYLICENSE \
     license=usr/src/lib/libshell/THIRDPARTYLICENSE
 license usr/src/lib/libsum/THIRDPARTYLICENSE \
     license=usr/src/lib/libsum/THIRDPARTYLICENSE
-license usr/src/lib/libwrap/THIRDPARTYLICENSE \
-    license=usr/src/lib/libwrap/THIRDPARTYLICENSE
 license usr/src/lib/pam_modules/authtok_check/THIRDPARTYLICENSE \
     license=usr/src/lib/pam_modules/authtok_check/THIRDPARTYLICENSE
 license usr/src/lib/passwdutil/THIRDPARTYLICENSE \
     license=usr/src/lib/passwdutil/THIRDPARTYLICENSE
 license usr/src/lib/pkcs11/pkcs11_tpm/THIRDPARTYLICENSE \
     license=usr/src/lib/pkcs11/pkcs11_tpm/THIRDPARTYLICENSE
+license usr/src/man/man3c/THIRDPARTYLICENSE.arc4random \
+    license=usr/src/man/man3c/THIRDPARTYLICENSE.arc4random
+license usr/src/man/man3c/THIRDPARTYLICENSE.getentropy \
+    license=usr/src/man/man3c/THIRDPARTYLICENSE.getentropy
 license usr/src/uts/common/sys/THIRDPARTYLICENSE.unicode \
     license=usr/src/uts/common/sys/THIRDPARTYLICENSE.unicode
 link path=lib/$(ARCH64)/libadm.so target=libadm.so.1
 link path=lib/$(ARCH64)/libaio.so target=libaio.so.1
+link path=lib/$(ARCH64)/libavl.so target=libavl.so.1
 link path=lib/$(ARCH64)/libbsm.so target=libbsm.so.1
 link path=lib/$(ARCH64)/libc.so reboot-needed=true target=libc.so.1
 link path=lib/$(ARCH64)/libc_db.so target=libc_db.so.1
@@ -641,6 +666,7 @@ link path=lib/crypto/32 target=.
 link path=lib/crypto/64 target=$(ARCH64)
 link path=lib/libadm.so target=libadm.so.1
 link path=lib/libaio.so target=libaio.so.1
+link path=lib/libavl.so target=libavl.so.1
 link path=lib/libbsm.so target=libbsm.so.1
 link path=lib/libc.so target=libc.so.1
 link path=lib/libc_db.so target=libc_db.so.1
@@ -734,11 +760,14 @@ link path=usr/lib/$(ARCH64)/libadm.so \
     target=../../../lib/$(ARCH64)/libadm.so.1
 link path=usr/lib/$(ARCH64)/libadm.so.1 \
     target=../../../lib/$(ARCH64)/libadm.so.1
+link path=usr/lib/$(ARCH64)/libads.so target=./libads.so.1
 link path=usr/lib/$(ARCH64)/libadutils.so target=./libadutils.so.1
 link path=usr/lib/$(ARCH64)/libaio.so \
     target=../../../lib/$(ARCH64)/libaio.so.1
 link path=usr/lib/$(ARCH64)/libaio.so.1 \
     target=../../../lib/$(ARCH64)/libaio.so.1
+link path=usr/lib/$(ARCH64)/libavl.so \
+    target=../../../lib/$(ARCH64)/libavl.so.1
 link path=usr/lib/$(ARCH64)/libavl.so.1 \
     target=../../../lib/$(ARCH64)/libavl.so.1
 link path=usr/lib/$(ARCH64)/libbsdmalloc.so target=libbsdmalloc.so.1
@@ -786,6 +815,8 @@ link path=usr/lib/$(ARCH64)/libdevinfo.so \
     target=../../../lib/$(ARCH64)/libdevinfo.so.1
 link path=usr/lib/$(ARCH64)/libdevinfo.so.1 \
     target=../../../lib/$(ARCH64)/libdevinfo.so.1
+link path=usr/lib/$(ARCH64)/libdhcputil.so.1 \
+    target=../../../lib/$(ARCH64)/libdhcputil.so.1
 link path=usr/lib/$(ARCH64)/libdisasm.so target=libdisasm.so.1
 link path=usr/lib/$(ARCH64)/libdl.so target=../../../lib/$(ARCH64)/libdl.so.1
 link path=usr/lib/$(ARCH64)/libdl.so.1 \
@@ -812,6 +843,7 @@ $(i386_ONLY)link path=usr/lib/$(ARCH64)/libfdisk.so \
 $(i386_ONLY)link path=usr/lib/$(ARCH64)/libfdisk.so.1 \
     target=../../../lib/$(ARCH64)/libfdisk.so.1
 link path=usr/lib/$(ARCH64)/libform.so target=libform.so.1
+link path=usr/lib/$(ARCH64)/libfstyp.so target=./libfstyp.so.1
 link path=usr/lib/$(ARCH64)/libgen.so \
     target=../../../lib/$(ARCH64)/libgen.so.1
 link path=usr/lib/$(ARCH64)/libgen.so.1 \
@@ -976,11 +1008,14 @@ $(sparc_ONLY)link path=usr/lib/$(ARCH64)/libv12n.so target=./libv12n.so.1
 link path=usr/lib/$(ARCH64)/libvolmgt.so target=libvolmgt.so.1
 link path=usr/lib/$(ARCH64)/libw.so target=../../../lib/$(ARCH64)/libw.so.1
 link path=usr/lib/$(ARCH64)/libw.so.1 target=../../../lib/$(ARCH64)/libw.so.1
+link path=usr/lib/$(ARCH64)/libwrap.so target=libwrap.so.1.0
+link path=usr/lib/$(ARCH64)/libwrap.so.1 target=libwrap.so.1.0
 link path=usr/lib/$(ARCH64)/libxnet.so \
     target=../../../lib/$(ARCH64)/libxnet.so.1
 link path=usr/lib/$(ARCH64)/libxnet.so.1 \
     target=../../../lib/$(ARCH64)/libxnet.so.1
 link path=usr/lib/$(ARCH64)/liby.so target=liby.so.1
+link path=usr/lib/$(ARCH64)/libzoneinfo.so target=./libzoneinfo.so.1
 link path=usr/lib/$(ARCH64)/nss_compat.so.1 \
     target=../../../lib/$(ARCH64)/nss_compat.so.1
 link path=usr/lib/$(ARCH64)/nss_dns.so.1 \
@@ -1008,9 +1043,11 @@ link path=usr/lib/cfgadm/shp.so target=./shp.so.1
 link path=usr/lib/cfgadm/usb.so target=./usb.so.1
 link path=usr/lib/libadm.so target=../../lib/libadm.so.1
 link path=usr/lib/libadm.so.1 target=../../lib/libadm.so.1
+link path=usr/lib/libads.so target=./libads.so.1
 link path=usr/lib/libadutils.so target=./libadutils.so.1
 link path=usr/lib/libaio.so target=../../lib/libaio.so.1
 link path=usr/lib/libaio.so.1 target=../../lib/libaio.so.1
+link path=usr/lib/libavl.so target=../../lib/libavl.so.1
 link path=usr/lib/libavl.so.1 target=../../lib/libavl.so.1
 link path=usr/lib/libbsdmalloc.so target=./libbsdmalloc.so.1
 link path=usr/lib/libbsm.so target=../../lib/libbsm.so.1
@@ -1210,6 +1247,8 @@ link path=usr/lib/security/$(ARCH64)/pam_rhosts_auth.so \
     target=./pam_rhosts_auth.so.1
 link path=usr/lib/security/$(ARCH64)/pam_roles.so target=./pam_roles.so.1
 link path=usr/lib/security/$(ARCH64)/pam_sample.so target=./pam_sample.so.1
+link path=usr/lib/security/$(ARCH64)/pam_timestamp.so \
+    target=./pam_timestamp.so.1
 link path=usr/lib/security/$(ARCH64)/pam_tsol_account.so \
     target=./pam_tsol_account.so.1
 link path=usr/lib/security/$(ARCH64)/pam_unix_account.so \
@@ -1249,6 +1288,7 @@ link path=usr/lib/security/pam_passwd_auth.so target=./pam_passwd_auth.so.1
 link path=usr/lib/security/pam_rhosts_auth.so target=./pam_rhosts_auth.so.1
 link path=usr/lib/security/pam_roles.so target=./pam_roles.so.1
 link path=usr/lib/security/pam_sample.so target=./pam_sample.so.1
+link path=usr/lib/security/pam_timestamp.so target=./pam_timestamp.so.1
 link path=usr/lib/security/pam_tsol_account.so target=./pam_tsol_account.so.1
 link path=usr/lib/security/pam_unix_account.so target=./pam_unix_account.so.1
 link path=usr/lib/security/pam_unix_auth.so target=./pam_unix_auth.so.1

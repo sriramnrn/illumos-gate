@@ -22,8 +22,9 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
 
 /*
  * pargs examines and prints the arguments (argv), environment (environ),
@@ -83,6 +84,7 @@ typedef struct pargs_data {
 	uintptr_t *pd_argv;
 	char **pd_argv_strs;
 	size_t pd_envc;
+	size_t pd_envc_curr;
 	uintptr_t *pd_envp;
 	char **pd_envp_strs;
 	size_t pd_auxc;
@@ -633,6 +635,10 @@ build_env(void *data, struct ps_prochandle *pr, uintptr_t addr, const char *str)
 	pargs_data_t *datap = data;
 
 	if (datap->pd_envp != NULL) {
+		/* env has more items than last time, skip the newer ones */
+		if (datap->pd_envc > datap->pd_envc_curr)
+			return (0);
+
 		datap->pd_envp[datap->pd_envc] = addr;
 		if (str == NULL)
 			datap->pd_envp_strs[datap->pd_envc] = NULL;
@@ -652,6 +658,7 @@ get_env(pargs_data_t *datap)
 
 	datap->pd_envc = 0;
 	(void) Penv_iter(pr, build_env, datap);
+	datap->pd_envc_curr = datap->pd_envc;
 
 	datap->pd_envp = safe_zalloc(sizeof (uintptr_t) * datap->pd_envc);
 	datap->pd_envp_strs = safe_zalloc(sizeof (char *) * datap->pd_envc);
@@ -704,6 +711,23 @@ at_hwcap(long val, char *instr, size_t n, char *str)
 #error	"port me"
 #endif
 }
+
+/*ARGSUSED*/
+static void
+at_hwcap2(long val, char *instr, size_t n, char *str)
+{
+#if defined(__sparc) || defined(__sparcv9)
+	(void) elfcap_hw2_to_str(ELFCAP_STYLE_UC, val, str, n,
+	    ELFCAP_FMT_PIPSPACE, EM_SPARC);
+
+#elif defined(__i386) || defined(__amd64)
+	(void) elfcap_hw2_to_str(ELFCAP_STYLE_UC, val, str, n,
+	    ELFCAP_FMT_PIPSPACE, EM_386);
+#else
+#error	"port me"
+#endif
+}
+
 
 /*ARGSUSED*/
 static void
@@ -784,6 +808,7 @@ static struct aux_id aux_arr[] = {
 	{ AT_SUN_PLATFORM,	"AT_SUN_PLATFORM",	at_str	},
 	{ AT_SUN_EXECNAME,	"AT_SUN_EXECNAME",	at_str	},
 	{ AT_SUN_HWCAP,		"AT_SUN_HWCAP",		at_hwcap },
+	{ AT_SUN_HWCAP2,	"AT_SUN_HWCAP2",	at_hwcap2 },
 	{ AT_SUN_IFLUSH,	"AT_SUN_IFLUSH",	at_null	},
 	{ AT_SUN_CPU,		"AT_SUN_CPU",		at_null	},
 	{ AT_SUN_MMU,		"AT_SUN_MMU",		at_null	},
@@ -1182,7 +1207,7 @@ print_cmdline(pargs_data_t *datap)
 	 * an error message and bail.
 	 */
 	for (i = 0; i < datap->pd_argc; i++) {
-		if (datap->pd_argv[i] == NULL ||
+		if (datap->pd_argv == NULL || datap->pd_argv[i] == NULL ||
 		    datap->pd_argv_strs[i] == NULL) {
 			(void) fprintf(stderr, "%s: target has corrupted "
 			    "argument list\n", command);
@@ -1312,15 +1337,15 @@ main(int argc, char *argv[])
 
 	if (errflg || argc <= 0) {
 		(void) fprintf(stderr,
-		    "usage:  %s [-acexF] { pid | core } ...\n"
+		    "usage:  %s [-aceFlx] { pid | core } ...\n"
 		    "  (show process arguments and environment)\n"
 		    "  -a: show process arguments (default)\n"
 		    "  -c: interpret characters as 7-bit ascii regardless of "
 		    "locale\n"
 		    "  -e: show environment variables\n"
+		    "  -F: force grabbing of the target process\n"
 		    "  -l: display arguments as command line\n"
-		    "  -x: show aux vector entries\n"
-		    "  -F: force grabbing of the target process\n", command);
+		    "  -x: show aux vector entries\n", command);
 		return (2);
 	}
 

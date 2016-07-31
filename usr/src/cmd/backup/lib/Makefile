@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBRARY=	libdump.a
 
@@ -54,7 +52,7 @@ HDRS=		../include/byteorder.h \
 YFILE=		getdate.y
 YSRC=		getdate.c
 
-CLOBBERFILES=	$(YSRC) $(GLIB) *.ln
+CLOBBERFILES +=	$(LIBS) $(GLIB)
 
 LOBJS=		rmtlib.o myrcmd.o \
 		$(YSRC:%.c=%.o) \
@@ -65,6 +63,10 @@ POFILES=	$(OBJECTS:.o=.po)
 GENERAL=	../include
 GLOBAL=		../../../head
 CPPFLAGS=	-I$(GENERAL) -I$(GLOBAL) $(CPPFLAGS.master)
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-unused-variable
 LINTOUT=	lint.out
 CLEANFILES=	$(OBJECTS) $(LINTOUT) $(LINTLIB) $(DEBUGS) *.ln \
 		$(YSRC) $(LIBRARY)

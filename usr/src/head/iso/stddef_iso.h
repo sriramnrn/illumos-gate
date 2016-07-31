@@ -29,6 +29,11 @@
  */
 
 /*
+ * Copyright 2014 PALO, Richard.
+ * Copyright 2016 Joyent, Inc.
+ */
+
+/*
  * An application should not include this header directly.  Instead it
  * should be included only through the inclusion of other Sun headers.
  *
@@ -43,9 +48,9 @@
 #ifndef _ISO_STDDEF_ISO_H
 #define	_ISO_STDDEF_ISO_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI" /* SVr4.0 1.5 */
-
 #include <sys/isa_defs.h>
+#include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -53,14 +58,6 @@ extern "C" {
 
 #if __cplusplus >= 199711L
 namespace std {
-#endif
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL    0L
-#else
-#define	NULL    0
-#endif
 #endif
 
 #if !defined(_PTRDIFF_T) || __cplusplus >= 199711L
@@ -85,11 +82,22 @@ typedef unsigned int	size_t;		/* (historical version) */
 }
 #endif /* end of namespace std */
 
+#if __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 5)
+#define	offsetof(s, m) __builtin_offsetof(s, m)
+#else
 #if __cplusplus >= 199711L
 #define	offsetof(s, m)  (std::size_t)(&(((s *)0)->m))
 #else
 #define	offsetof(s, m)  (size_t)(&(((s *)0)->m))
 #endif
+#endif	/* GNUC, etc. */
+
+#if !defined(_MAX_ALIGN_T)
+#if !defined(_STRICT_SYMBOLS) || defined(_STDC_C11)
+#define	_MAX_ALIGN_T
+typedef	_MAX_ALIGNMENT_TYPE max_align_t;
+#endif /* !_STRICT_SYMBOLS || _STDC_C11 */
+#endif	/* _MAX_ALIGN_T */
 
 #ifdef	__cplusplus
 }

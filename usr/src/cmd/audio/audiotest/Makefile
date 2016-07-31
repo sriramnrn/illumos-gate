@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2015 RackTop Systems.
+#
 # Makefile for cmd/audio/audiotest
 
 PROG= audiotest
@@ -38,12 +40,13 @@ XGETFLAGS += -a -x audiotest.xcl
 all: $(PROG)
 
 $(PROG):	$(OBJS)
-	$(LINK.c) $(OBJS) -o $@
+	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
 install: all $(ROOTPROG)
 
 clean:
+	$(RM) $(OBJS)
 
 lint:	lint_SRCS
 

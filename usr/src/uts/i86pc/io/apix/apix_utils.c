@@ -26,6 +26,10 @@
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
  */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2013 Pluribus Networks, Inc.
+ */
 
 #include <sys/processor.h>
 #include <sys/time.h>
@@ -361,8 +365,11 @@ apix_pci_msi_enable_vector(apix_vector_t *vecp, dev_info_t *dip, int type,
 
 		ddi_put32(msix_p->msix_tbl_hdl,
 		    (uint32_t *)(off + PCI_MSIX_DATA_OFFSET), msi_data);
-		ddi_put64(msix_p->msix_tbl_hdl,
-		    (uint64_t *)(off + PCI_MSIX_LOWER_ADDR_OFFSET), msi_addr);
+		ddi_put32(msix_p->msix_tbl_hdl,
+		    (uint32_t *)(off + PCI_MSIX_LOWER_ADDR_OFFSET), msi_addr);
+		ddi_put32(msix_p->msix_tbl_hdl,
+		    (uint32_t *)(off + PCI_MSIX_UPPER_ADDR_OFFSET),
+		    msi_addr >> 32);
 	}
 }
 
@@ -1829,26 +1836,39 @@ ioapix_setup_intr(int irqno, iflag_t *flagp)
 	ulong_t iflag;
 	struct autovec *avp;
 
-	irqp = apic_irq_table[irqno];
 	ioapicindex = acpi_find_ioapic(irqno);
 	ASSERT(ioapicindex != 0xFF);
 	ipin = irqno - apic_io_vectbase[ioapicindex];
 
-	if ((irqp != NULL) && (irqp->airq_mps_intr_index == ACPI_INDEX)) {
+	mutex_enter(&airq_mutex);
+	irqp = apic_irq_table[irqno];
+
+	/*
+	 * The irq table entry shouldn't exist unless the interrupts are shared.
+	 * In that case, make sure it matches what we would initialize it to.
+	 */
+	if (irqp != NULL) {
+		ASSERT(irqp->airq_mps_intr_index == ACPI_INDEX);
 		ASSERT(irqp->airq_intin_no == ipin &&
 		    irqp->airq_ioapicindex == ioapicindex);
 		vecp = xv_vector(irqp->airq_cpu, irqp->airq_vector);
 		ASSERT(!IS_VECT_FREE(vecp));
+		mutex_exit(&airq_mutex);
 	} else {
-		vecp = apix_alloc_intx(NULL, 0, irqno);
+		irqp = kmem_zalloc(sizeof (apic_irq_t), KM_SLEEP);
 
-		irqp = apic_irq_table[irqno];
+		irqp->airq_cpu = IRQ_UNINIT;
+		irqp->airq_origirq = (uchar_t)irqno;
 		irqp->airq_mps_intr_index = ACPI_INDEX;
 		irqp->airq_ioapicindex = ioapicindex;
 		irqp->airq_intin_no = ipin;
 		irqp->airq_iflag = *flagp;
 		irqp->airq_share++;
-		apic_record_rdt_entry(irqp, irqno);
+
+		apic_irq_table[irqno] = irqp;
+		mutex_exit(&airq_mutex);
+
+		vecp = apix_alloc_intx(NULL, 0, irqno);
 	}
 
 	/* copy over autovect */

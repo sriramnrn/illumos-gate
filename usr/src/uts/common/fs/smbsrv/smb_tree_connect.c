@@ -20,10 +20,38 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
 #include <smbsrv/smb_share.h>
+
+static void
+smb_tcon_puterror(smb_request_t *sr, uint32_t status)
+{
+
+	switch (status) {
+
+	case NT_STATUS_BAD_NETWORK_NAME:
+		/* Intentional status=0 */
+		smbsr_error(sr, 0, ERRSRV, ERRinvnetname);
+		break;
+
+	case NT_STATUS_ACCESS_DENIED:
+		smbsr_error(sr, status, ERRSRV, ERRaccess);
+		break;
+
+	case NT_STATUS_BAD_DEVICE_TYPE:
+		smbsr_error(sr, status, ERRDOS, ERROR_BAD_DEV_TYPE);
+		break;
+
+	default:
+	case NT_STATUS_INTERNAL_ERROR:
+		/* Intentional status=0 */
+		smbsr_error(sr, 0, ERRSRV, ERRsrverror);
+		break;
+	}
+}
 
 /*
  * SmbTreeConnect: Map a share to a tree and obtain a tree-id (TID).
@@ -87,14 +115,14 @@ smb_post_tree_connect(smb_request_t *sr)
 smb_sdrc_t
 smb_com_tree_connect(smb_request_t *sr)
 {
-	smb_tree_t *tree;
+	uint32_t status;
 	int rc;
 
-	if ((tree = smb_tree_connect(sr)) == NULL)
+	status = smb_tree_connect(sr);
+	if (status) {
+		smb_tcon_puterror(sr, status);
 		return (SDRC_ERROR);
-
-	sr->smb_tid = tree->t_tid;
-	sr->tid_tree = tree;
+	}
 
 	rc = smbsr_encode_result(sr, 2, 0, "bwww",
 	    2,				/* wct */
@@ -279,17 +307,17 @@ smb_sdrc_t
 smb_com_tree_connect_andx(smb_request_t *sr)
 {
 	smb_arg_tcon_t	*tcon = &sr->sr_tcon;
-	smb_tree_t	*tree;
 	char		*service;
+	uint32_t	status;
 	int		rc;
 
-	if ((tree = smb_tree_connect(sr)) == NULL)
+	status = smb_tree_connect(sr);
+	if (status) {
+		smb_tcon_puterror(sr, status);
 		return (SDRC_ERROR);
+	}
 
-	sr->smb_tid = tree->t_tid;
-	sr->tid_tree = tree;
-
-	switch (tree->t_res_type & STYPE_MASK) {
+	switch (sr->tid_tree->t_res_type & STYPE_MASK) {
 	case STYPE_IPC:
 		service = "IPC";
 		break;
@@ -362,8 +390,7 @@ smb_sdrc_t
 smb_pre_tree_disconnect(smb_request_t *sr)
 {
 	sr->uid_user = smb_session_lookup_uid(sr->session, sr->smb_uid);
-	if (sr->uid_user != NULL)
-		sr->tid_tree = smb_user_lookup_tree(sr->uid_user, sr->smb_tid);
+	sr->tid_tree = smb_session_lookup_tree(sr->session, sr->smb_tid);
 
 	DTRACE_SMB_1(op__TreeDisconnect__start, smb_request_t *, sr);
 	return (SDRC_SUCCESS);

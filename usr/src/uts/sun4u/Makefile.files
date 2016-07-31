@@ -64,7 +64,6 @@ CORE_OBJS +=	memscrub_asm.o
 CORE_OBJS +=	ppage.o
 CORE_OBJS +=	sfmmu_kdi.o
 CORE_OBJS +=	swtch.o
-CORE_OBJS +=	xhat_sfmmu.o
 
 #
 #	Some objects must be linked at the front of the image (or
@@ -135,7 +134,6 @@ TRAPSTAT_OBJS	+= trapstat.o
 I2BSC_OBJS	+= i2bsc.o
 GPTWOCFG_OBJS	+= gptwocfg.o
 GPTWO_CPU_OBJS	+= gptwo_cpu.o
-ZULUVM_OBJS  	+= zuluvm.o zulu_asm.o zulu_hat.o zulu_hat_asm.o
 
 JBUSPPM_OBJS	+= jbusppm.o 
 RMC_COMM_OBJS	+= rmc_comm.o rmc_comm_crctab.o rmc_comm_dp.o rmc_comm_drvintf.o

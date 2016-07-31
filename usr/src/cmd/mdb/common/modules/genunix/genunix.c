@@ -21,6 +21,8 @@
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Joyent, Inc.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #include <mdb/mdb_param.h>
@@ -70,9 +72,11 @@
 #include "ctxop.h"
 #include "cyclic.h"
 #include "damap.h"
+#include "ddi_periodic.h"
 #include "devinfo.h"
 #include "findstack.h"
 #include "fm.h"
+#include "gcore.h"
 #include "group.h"
 #include "irm.h"
 #include "kgrep.h"
@@ -163,6 +167,88 @@ ps_threadprint(uintptr_t addr, const void *data, void *private)
 		mdb_printf("\tL  %?a ID: %u\n", t->t_lwp, t->t_tid);
 
 	return (WALK_NEXT);
+}
+
+static int
+pflags(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	proc_t pr;
+	struct pid pid;
+
+	static const mdb_bitmask_t p_flag_bits[] = {
+		{ "SSYS",		SSYS,		SSYS		},
+		{ "SEXITING",		SEXITING,	SEXITING	},
+		{ "SITBUSY",		SITBUSY,	SITBUSY		},
+		{ "SFORKING",		SFORKING,	SFORKING	},
+		{ "SWATCHOK",		SWATCHOK,	SWATCHOK	},
+		{ "SKILLED",		SKILLED,	SKILLED		},
+		{ "SSCONT",		SSCONT,		SSCONT		},
+		{ "SZONETOP",		SZONETOP,	SZONETOP	},
+		{ "SEXTKILLED",		SEXTKILLED,	SEXTKILLED	},
+		{ "SUGID",		SUGID,		SUGID		},
+		{ "SEXECED",		SEXECED,	SEXECED		},
+		{ "SJCTL",		SJCTL,		SJCTL		},
+		{ "SNOWAIT",		SNOWAIT,	SNOWAIT		},
+		{ "SVFORK",		SVFORK,		SVFORK		},
+		{ "SVFWAIT",		SVFWAIT,	SVFWAIT		},
+		{ "SEXITLWPS",		SEXITLWPS,	SEXITLWPS	},
+		{ "SHOLDFORK",		SHOLDFORK,	SHOLDFORK	},
+		{ "SHOLDFORK1",		SHOLDFORK1,	SHOLDFORK1	},
+		{ "SCOREDUMP",		SCOREDUMP,	SCOREDUMP	},
+		{ "SMSACCT",		SMSACCT,	SMSACCT		},
+		{ "SLWPWRAP",		SLWPWRAP,	SLWPWRAP	},
+		{ "SAUTOLPG",		SAUTOLPG,	SAUTOLPG	},
+		{ "SNOCD",		SNOCD,		SNOCD		},
+		{ "SHOLDWATCH",		SHOLDWATCH,	SHOLDWATCH	},
+		{ "SMSFORK",		SMSFORK,	SMSFORK		},
+		{ "SDOCORE",		SDOCORE,	SDOCORE		},
+		{ NULL,			0,		0		}
+	};
+
+	static const mdb_bitmask_t p_pidflag_bits[] = {
+		{ "CLDPEND",		CLDPEND,	CLDPEND		},
+		{ "CLDCONT",		CLDCONT,	CLDCONT		},
+		{ "CLDNOSIGCHLD",	CLDNOSIGCHLD,	CLDNOSIGCHLD	},
+		{ "CLDWAITPID",		CLDWAITPID,	CLDWAITPID	},
+		{ NULL,			0,		0		}
+	};
+
+	static const mdb_bitmask_t p_proc_flag_bits[] = {
+		{ "P_PR_TRACE",		P_PR_TRACE,	P_PR_TRACE	},
+		{ "P_PR_PTRACE",	P_PR_PTRACE,	P_PR_PTRACE	},
+		{ "P_PR_FORK",		P_PR_FORK,	P_PR_FORK	},
+		{ "P_PR_LOCK",		P_PR_LOCK,	P_PR_LOCK	},
+		{ "P_PR_ASYNC",		P_PR_ASYNC,	P_PR_ASYNC	},
+		{ "P_PR_EXEC",		P_PR_EXEC,	P_PR_EXEC	},
+		{ "P_PR_BPTADJ",	P_PR_BPTADJ,	P_PR_BPTADJ	},
+		{ "P_PR_RUNLCL",	P_PR_RUNLCL,	P_PR_RUNLCL	},
+		{ "P_PR_KILLCL",	P_PR_KILLCL,	P_PR_KILLCL	},
+		{ NULL,			0,		0		}
+	};
+
+	if (!(flags & DCMD_ADDRSPEC)) {
+		if (mdb_walk_dcmd("proc", "pflags", argc, argv) == -1) {
+			mdb_warn("can't walk 'proc'");
+			return (DCMD_ERR);
+		}
+		return (DCMD_OK);
+	}
+
+	if (mdb_vread(&pr, sizeof (pr), addr) == -1 ||
+	    mdb_vread(&pid, sizeof (pid), (uintptr_t)pr.p_pidp) == -1) {
+		mdb_warn("cannot read proc_t or pid");
+		return (DCMD_ERR);
+	}
+
+	mdb_printf("%p [pid %d]:\n", addr, pid.pid_id);
+	mdb_printf("\tp_flag:      %08x <%b>\n", pr.p_flag, pr.p_flag,
+	    p_flag_bits);
+	mdb_printf("\tp_pidflag:   %08x <%b>\n", pr.p_pidflag, pr.p_pidflag,
+	    p_pidflag_bits);
+	mdb_printf("\tp_proc_flag: %08x <%b>\n", pr.p_proc_flag, pr.p_proc_flag,
+	    p_proc_flag_bits);
+
+	return (DCMD_OK);
 }
 
 int
@@ -3603,8 +3689,8 @@ eqd_walk_init(mdb_walk_state_t *wsp)
 
 	/*
 	 * If eq_ptail is set, it may point to a subset of the errors on the
-	 * pending list in the event a casptr() failed; if ptail's data is
-	 * already in our stack, NULL out eq_ptail and ignore it.
+	 * pending list in the event a atomic_cas_ptr() failed; if ptail's
+	 * data is already in our stack, NULL out eq_ptail and ignore it.
 	 */
 	if (eq.eq_ptail != NULL) {
 		for (i = 0; i < eqdp->eqd_qpos; i++) {
@@ -3863,6 +3949,7 @@ static const mdb_dcmd_t dcmds[] = {
 	{ "pid2proc", "?", "convert PID to proc_t address", pid2proc },
 	{ "project", NULL, "display kernel project(s)", project },
 	{ "ps", "[-fltzTP]", "list processes (and associated thr,lwp)", ps },
+	{ "pflags", NULL, "display various proc_t flags", pflags },
 	{ "pgrep", "[-x] [-n | -o] pattern",
 		"pattern match against all processes", pgrep },
 	{ "ptree", NULL, "print process tree", ptree },
@@ -3911,6 +3998,9 @@ static const mdb_dcmd_t dcmds[] = {
 	/* from damap.c */
 	{ "damap", ":", "display a damap_t", damap, damap_help },
 
+	/* from ddi_periodic.c */
+	{ "ddi_periodic", "?[-v]", "dump ddi_periodic_impl_t info", dprinfo },
+
 	/* from devinfo.c */
 	{ "devbindings", "?[-qs] [device-name | major-num]",
 	    "print devinfo nodes bound to device-name or major-num",
@@ -3940,7 +4030,8 @@ static const mdb_dcmd_t dcmds[] = {
 	    modctl2devinfo },
 	{ "name2major", "<dev-name>", "convert dev name to major number",
 	    name2major },
-	{ "prtconf", "?[-vpc]", "print devinfo tree", prtconf, prtconf_help },
+	{ "prtconf", "?[-vpc] [-d driver]", "print devinfo tree", prtconf,
+	    prtconf_help },
 	{ "softstate", ":<instance>", "retrieve soft-state pointer",
 	    softstate },
 	{ "devinfo_fm", ":", "devinfo fault managment configuration",
@@ -4089,6 +4180,9 @@ static const mdb_dcmd_t dcmds[] = {
 
 	/* from netstack.c */
 	{ "netstack", "", "show stack instances", netstack },
+	{ "netstackid2netstack", ":",
+		"translate a netstack id to its netstack_t",
+		netstackid2netstack },
 
 	/* from nvpair.c */
 	{ NVPAIR_DCMD_NAME, NVPAIR_DCMD_USAGE, NVPAIR_DCMD_DESCR,
@@ -4179,9 +4273,16 @@ static const mdb_dcmd_t dcmds[] = {
 		pfiles_help },
 
 	/* from zone.c */
+	{ "zid2zone", ":", "find the zone_t with the given zone id",
+		zid2zone },
 	{ "zone", "?[-r [-v]]", "display kernel zone(s)", zoneprt },
 	{ "zsd", ":[-v] [zsd_key]", "display zone-specific-data entries for "
 	    "selected zones", zsd },
+
+#ifndef _KMDB
+	{ "gcore", NULL, "generate a user core for the given process",
+	    gcore_dcmd },
+#endif
 
 	{ NULL }
 };
@@ -4599,6 +4700,10 @@ _mdb_init(void)
 
 	(void) mdb_callback_add(MDB_CALLBACK_STCHG,
 	    genunix_statechange_cb, NULL);
+
+#ifndef _KMDB
+	gcore_init();
+#endif
 
 	return (&modinfo);
 }

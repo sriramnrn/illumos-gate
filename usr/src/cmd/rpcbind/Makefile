@@ -19,12 +19,11 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# cmd/rpcbind/Makefile
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+#
 
 PROG=		rpcbind
 MANIFEST=	bind.xml
@@ -44,7 +43,8 @@ ROOTMANIFESTDIR=	$(ROOTSVCNETWORKRPC)
 
 CPPFLAGS= -I. -DPORTMAP $(CPPFLAGS.master)
 CPPFLAGS += -D_REENTRANT
-LDLIBS += -lsocket -lnsl -lwrap -lscf
+$(RELEASE_BUILD)CPPFLAGS += -DNDEBUG
+LDLIBS += -lsocket -lnsl -lwrap -lscf -lumem
 
 .KEEP_STATE:
 

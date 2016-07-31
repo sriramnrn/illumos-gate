@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -34,6 +36,8 @@
  * software developed by the University of California, Berkeley, and its
  * contributors.
  */
+
+/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
 #ifndef	_SYS_SOCKET_H
 #define	_SYS_SOCKET_H
@@ -101,6 +105,14 @@ typedef	void		*_RESTRICT_KYWD Psocklen_t;
 #endif	/* !defined(_XPG4_2) || defined(__EXTENSIONS__) */
 #define	SOCK_RDM	5		/* reliably-delivered message */
 #define	SOCK_SEQPACKET	6		/* sequenced packet stream */
+#define	SOCK_TYPE_MASK	0xffff		/* type reside in these bits only */
+
+/*
+ * Flags for socket() and accept4()
+ */
+#define	SOCK_CLOEXEC	0x080000	/* like open(2) O_CLOEXEC for socket */
+#define	SOCK_NONBLOCK	0x100000	/* like O_NONBLOCK */
+#define	SOCK_NDELAY	0x200000	/* like O_NDELAY */
 
 /*
  * Option flags per-socket.
@@ -205,7 +217,7 @@ struct fil_info {
 #define	FILF_AUTO	0x2		/* automatic attach */
 #define	FILF_BYPASS	0x4		/* filter is not active */
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 /*
  * new socket open flags to identify socket and acceptor streams
  */
@@ -349,7 +361,7 @@ struct msghdr {
 #endif	/* defined(_XPG4_2) || defined(_KERNEL) */
 };
 
-#if	defined(_KERNEL)
+#if	defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  *	N.B.:  we assume that omsghdr and nmsghdr are isomorphic, with
@@ -512,8 +524,8 @@ struct cmsghdr {
 #endif /* (_XPG4_2) && !defined(_XPG5) */
 
 #if !defined(_KERNEL) || defined(_BOOT)
-#ifdef	__STDC__
 extern int accept(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t);
+extern int accept4(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t, int);
 extern int bind(int, const struct sockaddr *, socklen_t);
 extern int connect(int, const struct sockaddr *, socklen_t);
 extern int getpeername(int, struct sockaddr *_RESTRICT_KYWD, Psocklen_t);
@@ -536,26 +548,6 @@ extern int socket(int, int, int);
 #if !defined(_XPG4_2) || defined(_XPG6) || defined(__EXTENSIONS__)
 extern int sockatmark(int);
 #endif /* !defined(_XPG4_2) || defined(_XPG6) || defined(__EXTENSIONS__) */
-#else	/* __STDC__ */
-extern int accept();
-extern int bind();
-extern int connect();
-extern int getpeername();
-extern int getsockname();
-extern int getsockopt();
-extern int listen();
-extern int recv();
-extern int recvfrom();
-extern int send();
-extern int sendto();
-extern int setsockopt();
-extern int sockatmark();
-extern int socket();
-extern int recvmsg();
-extern int sendmsg();
-extern int shutdown();
-extern int socketpair();
-#endif	/* __STDC__ */
 #endif	/* !defined(_KERNEL) || defined(_BOOT) */
 
 #ifdef	__cplusplus

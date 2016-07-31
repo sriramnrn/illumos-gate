@@ -22,6 +22,10 @@
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ * Copyright (c) 2016 by Delphix. All rights reserved.
+ */
 
 /*
  * PSMI 1.1 extensions are supported only in 2.6 and later versions.
@@ -1351,7 +1355,7 @@ restart_sitka_bmc:
 
 }
 
-ddi_periodic_t apic_periodic_id;
+cyclic_id_t apic_cyclic_id;
 
 /*
  * The following functions are in the platform specific file so that they
@@ -1496,13 +1500,26 @@ apic_intrmap_init(int apic_mode)
 {
 	int suppress_brdcst_eoi = 0;
 
+	/*
+	 * Intel Software Developer's Manual 3A, 10.12.7:
+	 *
+	 * Routing of device interrupts to local APIC units operating in
+	 * x2APIC mode requires use of the interrupt-remapping architecture
+	 * specified in the Intel Virtualization Technology for Directed
+	 * I/O, Revision 1.3.  Because of this, BIOS must enumerate support
+	 * for and software must enable this interrupt remapping with
+	 * Extended Interrupt Mode Enabled before it enabling x2APIC mode in
+	 * the local APIC units.
+	 *
+	 *
+	 * In other words, to use the APIC in x2APIC mode, we need interrupt
+	 * remapping.  Since we don't start up the IOMMU by default, we
+	 * won't be able to do any interrupt remapping and therefore have to
+	 * use the APIC in traditional 'local APIC' mode with memory mapped
+	 * I/O.
+	 */
+
 	if (psm_vt_ops != NULL) {
-		/*
-		 * Since X2APIC requires the use of interrupt remapping
-		 * (though this is not documented explicitly in the Intel
-		 * documentation (yet)), initialize interrupt remapping
-		 * support before initializing the X2APIC unit.
-		 */
 		if (((apic_intrmap_ops_t *)psm_vt_ops)->
 		    apic_intrmap_init(apic_mode) == DDI_SUCCESS) {
 
@@ -1574,11 +1591,15 @@ int	apic_msix_enable = 1;
 int	apic_multi_msi_enable = 1;
 
 /*
- * check whether the system supports MSI
+ * Check whether the system supports MSI.
  *
- * If PCI-E capability is found, then this must be a PCI-E system.
- * Since MSI is required for PCI-E system, it returns PSM_SUCCESS
- * to indicate this system supports MSI.
+ * MSI is required for PCI-E and for PCI versions later than 2.2, so if we find
+ * a PCI-E bus or we find a PCI bus whose version we know is >= 2.2, then we
+ * return PSM_SUCCESS to indicate this system supports MSI.
+ *
+ * (Currently the only way we check whether a given PCI bus supports >= 2.2 is
+ * by detecting if we are running inside the KVM hypervisor, which guarantees
+ * this version number.)
  */
 int
 apic_check_msi_support()
@@ -1591,7 +1612,7 @@ apic_check_msi_support()
 
 	/*
 	 * check whether the first level children of root_node have
-	 * PCI-E capability
+	 * PCI-E or PCI capability.
 	 */
 	for (cdip = ddi_get_child(ddi_root_node()); cdip != NULL;
 	    cdip = ddi_get_next_sibling(cdip)) {
@@ -1606,6 +1627,8 @@ apic_check_msi_support()
 		    != DDI_PROP_SUCCESS)
 			continue;
 		if (strcmp(dev_type, "pciex") == 0)
+			return (PSM_SUCCESS);
+		if (strcmp(dev_type, "pci") == 0 && get_hwenv() == HW_KVM)
 			return (PSM_SUCCESS);
 	}
 

@@ -21,10 +21,13 @@
 
 /*
  * Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2016, Joyent, Inc.
  */
 
 #include <sys/mdb_modapi.h>
 #include <mdb/mdb_whatis.h>
+#include <mdb/mdb_ctf.h>
 #include <procfs.h>
 #include <ucontext.h>
 #include <siginfo.h>
@@ -94,6 +97,20 @@ d_jmp_buf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	return (DCMD_OK);
 }
 
+const mdb_bitmask_t uc_flags_bits[] = {
+	{ "UC_SIGMASK", UC_SIGMASK, UC_SIGMASK },
+	{ "UC_STACK", UC_STACK, UC_STACK },
+	{ "UC_CPU", UC_CPU, UC_CPU },
+	{ "UC_FPU", UC_FPU, UC_FPU },
+#if defined(UC_INTR)
+	{ "UC_INTR", UC_INTR, UC_INTR },
+#endif
+#if defined(UC_ASR)
+	{ "UC_ASR", UC_ASR, UC_ASR },
+#endif
+	{ NULL, 0, 0 }
+};
+
 /*ARGSUSED*/
 static int
 d_ucontext(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
@@ -108,7 +125,8 @@ d_ucontext(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
-	mdb_printf("  flags    = 0x%lx\n", uc.uc_flags);
+	mdb_printf("  flags    = 0x%lx <%b>\n", uc.uc_flags,
+	    (uint_t)uc.uc_flags, uc_flags_bits);
 	mdb_printf("  link     = 0x%p\n", uc.uc_link);
 	mdb_printf("  sigmask  = 0x%08x 0x%08x 0x%08x 0x%08x\n",
 	    uc.uc_sigmask.__sigbits[0], uc.uc_sigmask.__sigbits[1],
@@ -679,6 +697,12 @@ d_ulwp(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    prt_addr((void *)(addr + OFFSET(ul_spinlock)), 1),
 	    prt_addr((void *)(addr + OFFSET(ul_fpuenv)), 0));
 
+	HD("tmem.size             &tmem.roots");
+	mdb_printf(OFFSTR "%-21H %s\n",
+	    OFFSET(ul_tmem),
+	    ulwp.ul_tmem.tm_size,
+	    prt_addr((void *)(addr + OFFSET(ul_tmem) + sizeof (size_t)), 0));
+
 	return (DCMD_OK);
 }
 
@@ -767,6 +791,13 @@ d_uberdata(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    prt_addr((void *)(addr + OFFSET(atexit_root.exitfns_lock)), 1),
 	    prt_addr(uberdata.atexit_root.head, 1),
 	    prt_addr(uberdata.atexit_root.exit_frame_monitor, 0));
+
+	HD("&quickexit_root       head");
+	mdb_printf(OFFSTR "%s %s\n",
+	    OFFSET(quickexit_root),
+	    prt_addr((void *)(addr + OFFSET(quickexit_root.exitfns_lock)), 1),
+	    prt_addr(uberdata.quickexit_root.head, 0));
+
 
 	HD("&tsd_metadata         tsdm_nkeys tsdm_nused tsdm_destro");
 	mdb_printf(OFFSTR "%s %-10d %-10d %s\n",
@@ -1019,17 +1050,13 @@ tid2ulwp_walk(uintptr_t addr, ulwp_t *ulwp, tid2ulwp_walk_t *t2u)
 	return (WALK_NEXT);
 }
 
-/*ARGSUSED*/
 static int
-tid2ulwp(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+tid2ulwp_impl(uintptr_t tid_addr, uintptr_t *ulwp_addrp)
 {
 	tid2ulwp_walk_t t2u;
 
-	if (argc != 0)
-		return (DCMD_USAGE);
-
 	bzero(&t2u, sizeof (t2u));
-	t2u.t2u_tid = (lwpid_t)addr;
+	t2u.t2u_tid = (lwpid_t)tid_addr;
 
 	if (mdb_walk("ulwp", (mdb_walk_cb_t)tid2ulwp_walk, &t2u) != 0) {
 		mdb_warn("can't walk 'ulwp'");
@@ -1040,9 +1067,78 @@ tid2ulwp(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		mdb_warn("thread ID %d not found", t2u.t2u_tid);
 		return (DCMD_ERR);
 	}
+	*ulwp_addrp = t2u.t2u_lwp;
+	return (DCMD_OK);
+}
 
-	mdb_printf("%p\n", t2u.t2u_lwp);
+/*ARGSUSED*/
+static int
+tid2ulwp(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	uintptr_t ulwp_addr;
+	int error;
 
+	if (argc != 0)
+		return (DCMD_USAGE);
+
+	error = tid2ulwp_impl(addr, &ulwp_addr);
+	if (error == DCMD_OK)
+		mdb_printf("%p\n", ulwp_addr);
+	return (error);
+}
+
+typedef struct mdb_libc_ulwp {
+	void *ul_ftsd[TSD_NFAST];
+	tsd_t *ul_stsd;
+} mdb_libc_ulwp_t;
+
+/*
+ * Map from thread pointer to tsd for given key
+ */
+static int
+d_tsd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	mdb_libc_ulwp_t u;
+	uintptr_t ulwp_addr;
+	uintptr_t key = NULL;
+	void *element = NULL;
+
+	if (mdb_getopts(argc, argv, 'k', MDB_OPT_UINTPTR, &key, NULL) != argc)
+		return (DCMD_USAGE);
+
+	if (!(flags & DCMD_ADDRSPEC) || key == NULL)
+		return (DCMD_USAGE);
+
+	if (tid2ulwp_impl(addr, &ulwp_addr) != DCMD_OK)
+		return (DCMD_ERR);
+
+	if (mdb_ctf_vread(&u, "ulwp_t", "mdb_libc_ulwp_t", ulwp_addr, 0) == -1)
+		return (DCMD_ERR);
+
+	if (key < TSD_NFAST) {
+		element = u.ul_ftsd[key];
+	} else if (u.ul_stsd != NULL) {
+		uint_t nalloc;
+		/* tsd_t is a union, so we can't use ctf_vread() on it. */
+		if (mdb_vread(&nalloc, sizeof (nalloc),
+		    (uintptr_t)&u.ul_stsd->tsd_nalloc) == -1) {
+			mdb_warn("failed to read tsd_t at %p", u.ul_stsd);
+			return (DCMD_ERR);
+		}
+		if (key < nalloc) {
+			if (mdb_vread(&element, sizeof (element),
+			    (uintptr_t)&u.ul_stsd->tsd_data[key]) == -1) {
+				mdb_warn("failed to read tsd_t at %p",
+				    u.ul_stsd);
+				return (DCMD_ERR);
+			}
+		}
+	}
+
+	if (element == NULL && (flags & DCMD_PIPE))
+		return (DCMD_OK);
+
+	mdb_printf("%p\n", element);
 	return (DCMD_OK);
 }
 
@@ -1056,6 +1152,7 @@ static const mdb_dcmd_t dcmds[] = {
 	{ "ucontext", ":", "print ucontext_t structure", d_ucontext, NULL },
 	{ "ulwp", ":", "print ulwp_t structure", d_ulwp, NULL },
 	{ "uberdata", ":", "print uberdata_t structure", d_uberdata, NULL },
+	{ "tsd", ":-k key", "print tsd for this thread", d_tsd, NULL },
 	{ NULL }
 };
 

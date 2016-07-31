@@ -21,10 +21,13 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
+
+/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -258,7 +261,7 @@ const struct systable systable[] = {
 {"pgrpsys",	3, DEC, NOV, DEC, DEC, DEC},			/*  39 */
 {"uucopystr",	3, DEC, NOV, STG, RST, UNS},			/*  40 */
 { NULL,		8, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX},
-{"pipe",	0, DEC, DEC},					/*  42 */
+{"pipe",	2, DEC, NOV, PFD, PIP},				/*  42 */
 {"times",	1, DEC, NOV, HEX},				/*  43 */
 {"profil",	4, DEC, NOV, HEX, UNS, HEX, OCT},		/*  44 */
 {"faccessat",	4, DEC, NOV, ATC, STG, ACC, FAT},		/*  45 */
@@ -339,10 +342,10 @@ const struct systable systable[] = {
 {"fchdir",	1, DEC, NOV, DEC},				/* 120 */
 {"readv",	3, DEC, NOV, DEC, HEX, DEC},			/* 121 */
 {"writev",	3, DEC, NOV, DEC, HEX, DEC},			/* 122 */
+{"preadv",	4, DEC, NOV, DEC, HEX, DEC, DEC},		/* 123 */
+{"pwritev",	4, DEC, NOV, DEC, HEX, DEC, DEC},		/* 124 */
 { NULL,		8, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX},
-{ NULL,		8, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX},
-{ NULL,		8, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX},
-{ NULL,		8, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX, HEX},
+{"getrandom",	3, DEC, NOV, IOB, UNS, GRF},			/* 126 */
 {"mmapobj",	5, DEC, NOV, DEC, MOB, HEX, HEX, HEX},		/* 127 */
 {"setrlimit",	2, DEC, NOV, RLM, HEX},				/* 128 */
 {"getrlimit",	2, DEC, NOV, RLM, HEX},				/* 129 */
@@ -450,7 +453,7 @@ const struct systable systable[] = {
 {"so_socketpair", 1, DEC, NOV, HEX},				/* 231 */
 {"bind",	4, DEC, NOV, DEC, HEX, DEC, SKV},		/* 232 */
 {"listen",	3, DEC, NOV, DEC, DEC, SKV},			/* 233 */
-{"accept",	4, DEC, NOV, DEC, HEX, HEX, SKV},		/* 234 */
+{"accept",	5, DEC, NOV, DEC, HEX, HEX, SKV, ACF},		/* 234 */
 {"connect",	4, DEC, NOV, DEC, HEX, DEC, SKV},		/* 235 */
 {"shutdown",	3, DEC, NOV, DEC, SHT, SKV},			/* 236 */
 {"recv",	4, DEC, NOV, DEC, IOB, DEC, DEC},		/* 237 */

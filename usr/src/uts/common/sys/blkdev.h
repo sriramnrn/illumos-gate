@@ -19,7 +19,8 @@
  * CDDL HEADER END
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -41,7 +42,10 @@ extern "C" {
  * but do not need all the capabilities of SCSA.  So we make quite a few
  * simplifications:
  *
- * 1) Device block size is a multiple of 512 bytes.
+ * 1) Device block size is a power of 2 greater or equal to 512 bytes.
+ *    An optional physical block size can be reported if the underlying
+ *    device uses larger block sizes internally, so that writes can be
+ *    aligned properly.
  *
  * 2) Non-rotating media.  We assume a simple linear layout.
  *
@@ -100,6 +104,16 @@ struct bd_drive {
 	boolean_t		d_hotpluggable;
 	int			d_target;
 	int			d_lun;
+	size_t			d_vendor_len;
+	char			*d_vendor;
+	size_t			d_product_len;
+	char			*d_product;
+	size_t			d_model_len;
+	char			*d_model;
+	size_t			d_serial_len;
+	char			*d_serial;
+	size_t			d_revision_len;
+	char			*d_revision;
 };
 
 struct bd_media {
@@ -112,10 +126,15 @@ struct bd_media {
 	 * d_maxxfer field.  If the maxxfer is a power of two larger
 	 * than the block size, then this will automatically be
 	 * satisfied.
+	 *
+	 * The physical block size (m_pblksize) must be 0 or a power
+	 * of two not less than the block size.
 	 */
 	uint64_t		m_nblks;
 	uint32_t		m_blksize;
 	boolean_t		m_readonly;
+	boolean_t		m_solidstate;
+	uint32_t		m_pblksize;
 };
 
 #define	BD_INFO_FLAG_REMOVABLE		(1U << 0)
@@ -134,6 +153,34 @@ struct bd_ops {
 
 #define	BD_OPS_VERSION_0		0
 
+struct bd_errstats {
+	/* these are managed by blkdev itself */
+	kstat_named_t	bd_softerrs;
+	kstat_named_t	bd_harderrs;
+	kstat_named_t	bd_transerrs;
+	kstat_named_t	bd_model;
+	kstat_named_t	bd_vid;
+	kstat_named_t	bd_pid;
+	kstat_named_t	bd_revision;
+	kstat_named_t	bd_serial;
+	kstat_named_t	bd_capacity;
+
+	/* the following are updated on behalf of the HW driver */
+	kstat_named_t	bd_rq_media_err;
+	kstat_named_t	bd_rq_ntrdy_err;
+	kstat_named_t	bd_rq_nodev_err;
+	kstat_named_t	bd_rq_recov_err;
+	kstat_named_t	bd_rq_illrq_err;
+	kstat_named_t	bd_rq_pfa_err;
+};
+
+#define	BD_ERR_MEDIA	0
+#define	BD_ERR_NTRDY	1
+#define	BD_ERR_NODEV	2
+#define	BD_ERR_RECOV	3
+#define	BD_ERR_ILLRQ	4
+#define	BD_ERR_PFA	5
+
 /*
  * Note, one handler *per* address.  Drivers with multiple targets at
  * different addresses must use separate handles.
@@ -144,6 +191,7 @@ int		bd_attach_handle(dev_info_t *, bd_handle_t);
 int		bd_detach_handle(bd_handle_t);
 void		bd_state_change(bd_handle_t);
 void		bd_xfer_done(bd_xfer_t *, int);
+void		bd_error(bd_xfer_t *, int);
 void		bd_mod_init(struct dev_ops *);
 void		bd_mod_fini(struct dev_ops *);
 

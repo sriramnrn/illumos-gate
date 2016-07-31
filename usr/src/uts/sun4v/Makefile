@@ -294,28 +294,13 @@ globallint:
 lint:	lintlib .WAIT modlintlib .WAIT $(SPARC_LINTS) $(LINT_DEPS) \
 	$(IMPLEMENTATIONS) $(LINT_CPU_KMODS)
 
-# EXPORT DELETE START
-
-EXPORT_SRC:
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-	    < Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-
-# EXPORT DELETE END
-
 include ../Makefile.targ
 
 #
 # Cross-reference customization: build a cross-reference over all of the
 # sun4v-related directories.
 #
-SHARED_XRDIRS	= ../sun4v ../sun4 ../sfmmu ../sparc ../sun ../common
-CLOSED_XRDIRS	= $(SHARED_XRDIRS:../%=../% ../../../closed/uts/%)
-XRDIRS		= $(SHARED_XRDIRS)
-$(CLOSED_BUILD)XRDIRS	= $(CLOSED_XRDIRS:../../../closed/uts/sfmmu=)
-
+XRDIRS	= ../sun4v ../sun4 ../sfmmu ../sparc ../sun ../common
 XRPRUNE = i86pc sun4u intel
 
 cscope.out tags: FRC

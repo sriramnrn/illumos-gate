@@ -1,13 +1,13 @@
 '\" te
 .\" Copyright (c) 2009, Sun Microsystems, Inc. All Rights Reserved.
+.\" Copyright 2015, Joyent, Inc. All Rights Reserved.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License"). You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE. If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PRIVILEGES 5 "May 29, 2009"
+.TH PRIVILEGES 5 "April 9, 2016"
 .SH NAME
 privileges \- process privilege model
 .SH DESCRIPTION
-.sp
 .LP
 Solaris software implements a set of privileges that provide fine-grained
 control over the actions of processes. The possession of a certain privilege
@@ -193,6 +193,16 @@ Extensions.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_FILE_FLAG_SET\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allows a process to set immutable, nounlink or appendonly file attributes.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_FILE_LINK_ANY\fR\fR
 .ad
 .sp .6
@@ -216,6 +226,18 @@ whose parent directory has the "save text image after execution" (sticky) bit
 set. Allow a process that is not the owner of a file to mount a \fBnamefs\fR
 upon that file. Allow a process that is not the owner of a file or directory to
 modify that file's or directory's permission bits or ACL.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBPRIV_FILE_READ\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to open objects in the filesystem for reading. This
+privilege is not necessary to read from an already open file which was opened
+before dropping the \fBPRIV_FILE_READ\fR privilege.
 .RE
 
 .sp
@@ -251,11 +273,13 @@ Extensions.
 .sp
 .ne 2
 .na
-\fB\fBPRIV_FILE_FLAG_SET\fR\fR
+\fB\fBPRIV_FILE_WRITE\fR\fR
 .ad
 .sp .6
 .RS 4n
-Allows a process to set immutable, nounlink or appendonly file attributes.
+Allow a process to open objects in the filesytem for writing, or otherwise
+modify them. This privilege is not necessary to write to an already open file
+which was opened before dropping the \fBPRIV_FILE_WRITE\fR privilege.
 .RE
 
 .sp
@@ -320,6 +344,18 @@ Segment.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_NET_ACCESS\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to open a TCP, UDP, SDP, or SCTP network endpoint. This
+privilege is not necessary to communicate using an existing endpoint already
+opened before dropping the \fBPRIV_NET_ACCESS\fR privilege.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_NET_BINDMLP\fR\fR
 .ad
 .sp .6
@@ -360,6 +396,21 @@ runs in the global zone.
 .sp
 This privilege is interpreted only if the system is configured with Trusted
 Extensions.
+.RE
+
+.sp
+.ne 2
+.na
+\fB\fBPRIV_NET_MAC_IMPLICIT\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to set \fBSO_MAC_IMPLICIT\fR option by using
+\fBsetsockopt\fR(3SOCKET).  This allows a privileged process to transmit
+implicitly-labeled packets to a peer.
+.sp
+This privilege is interpreted only if the system is configured with
+Trusted Extensions.
 .RE
 
 .sp
@@ -472,6 +523,16 @@ Allow a process to lock pages in physical memory.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_PROC_MEMINFO\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to access physical memory information.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_PROC_OWNER\fR\fR
 .ad
 .sp .6
@@ -489,13 +550,23 @@ arbitrary processes to CPUs.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_PROC_PRIOUP\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to elevate its priority above its current level.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_PROC_PRIOCNTL\fR\fR
 .ad
 .sp .6
 .RS 4n
-Allow a process to elevate its priority above its current level. Allow a
-process to change its scheduling class to any scheduling class, including the
-RT class.
+Allows all that PRIV_PROC_PRIOUP allows.
+Allow a process to change its scheduling class to any scheduling class,
+including the RT class.
 .RE
 
 .sp
@@ -639,6 +710,16 @@ Allow a process to increase the size of a System V IPC Message Queue buffer.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_SYS_IPTUN_CONFIG\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allow a process to configure IP tunnel links.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_SYS_LINKDIR\fR\fR
 .ad
 .sp .6
@@ -698,10 +779,21 @@ This privilege is granted by default to exclusive IP stack instance zones.
 .sp
 .ne 2
 .na
+\fB\fBPRIV_SYS_RES_BIND\fR\fR
+.ad
+.sp .6
+.RS 4n
+Allows a process to bind processes to processor sets.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fBPRIV_SYS_RES_CONFIG\fR\fR
 .ad
 .sp .6
 .RS 4n
+Allows all that PRIV_SYS_RES_BIND allows.
 Allow a process to create and delete processor sets, assign CPUs to processor
 sets and override the \fBPSET_NOESCAPE\fR property. Allow a process to change
 the operational status of CPUs in the system using \fBp_online\fR(2). Allow a
@@ -981,7 +1073,8 @@ x86 platforms.
 .sp
 .LP
 Of the privileges listed above, the privileges \fBPRIV_FILE_LINK_ANY\fR,
-\fBPRIV_PROC_INFO\fR, \fBPRIV_PROC_SESSION\fR, \fBPRIV_PROC_FORK\fR and
+\fBPRIV_PROC_INFO\fR, \fBPRIV_PROC_SESSION\fR, \fBPRIV_PROC_FORK\fR,
+\fBPRIV_FILE_READ\fR, \fBPRIV_FILE_WRITE\fR, \fBPRIV_NET_ACCESS\fR and
 \fBPRIV_PROC_EXEC\fR are considered "basic" privileges. These are privileges
 that used to be always available to unprivileged processes. By default,
 processes still have the basic privileges.
@@ -1147,7 +1240,7 @@ with I=basic.
 .sp
 .LP
 For most privileges, absence of the privilege simply results in a failure. In
-some instances, the absense of a privilege can cause system calls to behave
+some instances, the absence of a privilege can cause system calls to behave
 differently. In other instances, the removal of a privilege can force a set-uid
 application to seriously malfunction. Privileges of this type are considered
 "unsafe". When a process is lacking any of the unsafe privileges from its limit
@@ -1155,7 +1248,6 @@ set, the system does not honor the set-uid bit of set-uid root applications.
 The following unsafe privileges have been identified: \fBproc_setid\fR,
 \fBsys_resource\fR and \fBproc_audit\fR.
 .SS "Privilege Escalation"
-.sp
 .LP
 In certain circumstances, a single privilege could lead to a process gaining
 one or more additional privileges that were not explicitly granted to that
@@ -1191,7 +1283,6 @@ privileges they need.
 Daemons that never need to \fBexec\fR subprocesses should remove the
 \fBPRIV_PROC_EXEC\fR privilege from their permitted and limit sets.
 .SS "Assigned Privileges and Safeguards"
-.sp
 .LP
 When privileges are assigned to a user, the system administrator could give
 that user more powers than intended. The administrator should consider whether
@@ -1200,7 +1291,6 @@ privilege is given to a user, the administrator should consider setting the
 \fBproject.max-locked-memory\fR resource control as well, to prevent that user
 from locking all memory.
 .SS "Privilege Debugging"
-.sp
 .LP
 When a system call fails with a permission error, it is not always immediately
 obvious what caused the problem. To debug such a problem, you can use a tool
@@ -1221,7 +1311,6 @@ set priv_debug = 1
 .LP
 On a running system, you can use \fBmdb\fR(1) to change this variable.
 .SS "Privilege Administration"
-.sp
 .LP
 The Solaris Management Console (see \fBsmc\fR(1M)) is the preferred method of
 modifying privileges for a command. Use \fBusermod\fR(1M) or \fBsmrole\fR(1M)
@@ -1229,7 +1318,6 @@ to assign privileges to or modify privileges for, respectively, a user or a
 role. Use \fBppriv\fR(1) to enumerate the privileges supported on a system and
 \fBtruss\fR(1) to determine which privileges a program requires.
 .SH SEE ALSO
-.sp
 .LP
 \fBmdb\fR(1), \fBppriv\fR(1), \fBadd_drv\fR(1M), \fBifconfig\fR(1M),
 \fBlockd\fR(1M), \fBnfsd\fR(1M), \fBpppd\fR(1M), \fBrem_drv\fR(1M),

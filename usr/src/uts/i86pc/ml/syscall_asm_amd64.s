@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 #include <sys/asm_linkage.h>
@@ -565,6 +566,33 @@ _syscall_invoke:
 	CLI(%r14)
 	CHECK_POSTSYS_NE(%r15, %r14, %ebx)
 	jne	_syscall_post
+
+	/*
+	 * We need to protect ourselves against non-canonical return values
+	 * because Intel doesn't check for them on sysret (AMD does).  Canonical
+	 * addresses on current amd64 processors only use 48-bits for VAs; an
+	 * address is canonical if all upper bits (47-63) are identical. If we
+	 * find a non-canonical %rip, we opt to go through the full
+	 * _syscall_post path which takes us into an iretq which is not
+	 * susceptible to the same problems sysret is.
+	 * 
+	 * We're checking for a canonical address by first doing an arithmetic
+	 * shift. This will fill in the remaining bits with the value of bit 63.
+	 * If the address were canonical, the register would now have either all
+	 * zeroes or all ones in it. Therefore we add one (inducing overflow)
+	 * and compare against 1. A canonical address will either be zero or one
+	 * at this point, hence the use of ja.
+	 *
+	 * At this point, r12 and r13 have the return value so we can't use
+	 * those registers.
+	 */
+	movq	REGOFF_RIP(%rsp), %rcx
+	sarq	$47, %rcx
+	incq	%rcx
+	cmpq	$1, %rcx
+	ja	_syscall_post
+
+
 	SIMPLE_SYSCALL_POSTSYS(%r15, %r14, %bx)
 
 	movq	%r12, REGOFF_RAX(%rsp)
@@ -1149,12 +1177,14 @@ sys_syscall_int()
 	ENTRY_NP(brand_sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 	BRAND_CALLBACK(BRAND_CB_INT91, BRAND_URET_FROM_INTR_STACK())
 	jmp	nopop_syscall_int
 
 	ALTENTRY(sys_syscall_int)
 	SWAPGS				/* kernel gsbase */
 	XPV_TRAP_POP
+	call	smap_enable
 
 nopop_syscall_int:
 	movq	%gs:CPU_THREAD, %r15

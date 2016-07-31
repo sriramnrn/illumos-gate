@@ -20,8 +20,9 @@
 #
 
 #
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
+# Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
 #
 
 set name=pkg.fmri value=pkg:/developer/library/lint@$(PKGVERS)
@@ -45,6 +46,7 @@ dir path=usr/xpg4/lib
 dir path=usr/xpg4/lib/$(ARCH64)
 file path=lib/$(ARCH64)/llib-ladm.ln
 file path=lib/$(ARCH64)/llib-laio.ln
+file path=lib/$(ARCH64)/llib-lavl.ln
 file path=lib/$(ARCH64)/llib-lbsm.ln
 file path=lib/$(ARCH64)/llib-lc.ln
 file path=lib/$(ARCH64)/llib-lc_db.ln
@@ -72,6 +74,7 @@ file path=lib/$(ARCH64)/llib-lmd5.ln
 file path=lib/$(ARCH64)/llib-lnsl.ln
 file path=lib/$(ARCH64)/llib-lnvpair.ln
 file path=lib/$(ARCH64)/llib-lpam.ln
+file path=lib/$(ARCH64)/llib-lproc.ln
 file path=lib/$(ARCH64)/llib-lpthread.ln
 file path=lib/$(ARCH64)/llib-lrcm.ln
 file path=lib/$(ARCH64)/llib-lresolv.ln
@@ -96,6 +99,8 @@ file path=lib/llib-ladm
 file path=lib/llib-ladm.ln
 file path=lib/llib-laio
 file path=lib/llib-laio.ln
+file path=lib/llib-lavl
+file path=lib/llib-lavl.ln
 file path=lib/llib-lbsm
 file path=lib/llib-lbsm.ln
 file path=lib/llib-lc
@@ -152,6 +157,8 @@ file path=lib/llib-lnwam
 file path=lib/llib-lnwam.ln
 file path=lib/llib-lpam
 file path=lib/llib-lpam.ln
+file path=lib/llib-lproc
+file path=lib/llib-lproc.ln
 file path=lib/llib-lpthread
 file path=lib/llib-lpthread.ln
 file path=lib/llib-lrcm
@@ -194,6 +201,7 @@ $(i386_ONLY)file path=usr/lib/$(ARCH64)/crt1.o
 file path=usr/lib/$(ARCH64)/crti.o
 file path=usr/lib/$(ARCH64)/crtn.o
 $(i386_ONLY)file path=usr/lib/$(ARCH64)/gcrt1.o
+file path=usr/lib/$(ARCH64)/llib-lads.ln
 file path=usr/lib/$(ARCH64)/llib-ladutils.ln
 file path=usr/lib/$(ARCH64)/llib-lbsdmalloc.ln
 file path=usr/lib/$(ARCH64)/llib-lcfgadm.ln
@@ -201,6 +209,7 @@ file path=usr/lib/$(ARCH64)/llib-lcommputil.ln
 file path=usr/lib/$(ARCH64)/llib-lcrypt.ln
 file path=usr/lib/$(ARCH64)/llib-lexacct.ln
 file path=usr/lib/$(ARCH64)/llib-lform.ln
+file path=usr/lib/$(ARCH64)/llib-lfstyp.ln
 file path=usr/lib/$(ARCH64)/llib-lgss.ln
 file path=usr/lib/$(ARCH64)/llib-lhotplug.ln
 file path=usr/lib/$(ARCH64)/llib-lidmap.ln
@@ -229,6 +238,8 @@ file path=usr/lib/$(ARCH64)/llib-lsldap.ln
 file path=usr/lib/$(ARCH64)/llib-lsmbios.ln
 $(sparc_ONLY)file path=usr/lib/$(ARCH64)/llib-lv12n.ln
 file path=usr/lib/$(ARCH64)/llib-lvolmgt.ln
+file path=usr/lib/$(ARCH64)/llib-lwrap.ln
+file path=usr/lib/$(ARCH64)/llib-lzoneinfo.ln
 file path=usr/lib/$(ARCH64)/values-Xa.o
 file path=usr/lib/$(ARCH64)/values-Xc.o
 file path=usr/lib/$(ARCH64)/values-Xs.o
@@ -239,6 +250,8 @@ $(i386_ONLY)file path=usr/lib/crt1.o
 file path=usr/lib/crti.o
 file path=usr/lib/crtn.o
 $(i386_ONLY)file path=usr/lib/gcrt1.o
+file path=usr/lib/llib-lads
+file path=usr/lib/llib-lads.ln
 file path=usr/lib/llib-ladutils
 file path=usr/lib/llib-ladutils.ln
 file path=usr/lib/llib-lbsdmalloc
@@ -399,6 +412,8 @@ link path=usr/lib/$(ARCH64)/llib-ladm.ln \
     target=../../../lib/$(ARCH64)/llib-ladm.ln
 link path=usr/lib/$(ARCH64)/llib-laio.ln \
     target=../../../lib/$(ARCH64)/llib-laio.ln
+link path=usr/lib/$(ARCH64)/llib-lavl.ln \
+    target=../../../lib/$(ARCH64)/llib-lavl.ln
 link path=usr/lib/$(ARCH64)/llib-lbsm.ln \
     target=../../../lib/$(ARCH64)/llib-lbsm.ln
 link path=usr/lib/$(ARCH64)/llib-lc.ln \
@@ -485,6 +500,8 @@ link path=usr/lib/llib-ladm target=../../lib/llib-ladm
 link path=usr/lib/llib-ladm.ln target=../../lib/llib-ladm.ln
 link path=usr/lib/llib-laio target=../../lib/llib-laio
 link path=usr/lib/llib-laio.ln target=../../lib/llib-laio.ln
+link path=usr/lib/llib-lavl target=../../lib/llib-lavl
+link path=usr/lib/llib-lavl.ln target=../../lib/llib-lavl.ln
 link path=usr/lib/llib-lbsm target=../../lib/llib-lbsm
 link path=usr/lib/llib-lbsm.ln target=../../lib/llib-lbsm.ln
 link path=usr/lib/llib-lc target=../../lib/llib-lc

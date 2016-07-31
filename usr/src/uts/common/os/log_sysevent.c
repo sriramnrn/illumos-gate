@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  */
 
 #include <sys/types.h>
@@ -33,6 +35,7 @@
 #include <sys/callb.h>
 #include <sys/sysevent.h>
 #include <sys/sysevent_impl.h>
+#include <sys/sysevent/dev.h>
 #include <sys/modctl.h>
 #include <sys/sysmacros.h>
 #include <sys/disp.h>
@@ -95,10 +98,10 @@ int logevent_max_q_sz = 5000;
 
 
 static int log_event_delivery = LOGEVENT_DELIVERY_HOLD;
-static char *logevent_door_upcall_filename = NULL;
-static int logevent_door_upcall_filename_size;
+static char logevent_door_upcall_filename[MAXPATHLEN];
 
 static door_handle_t event_door = NULL;		/* Door for upcalls */
+static kmutex_t event_door_mutex;		/* To protect event_door */
 
 /*
  * async thread-related variables
@@ -145,33 +148,6 @@ int sysevent_daemon_init = 0;
 static kmutex_t	event_pause_mutex;
 static kcondvar_t event_pause_cv;
 static int event_pause_state = 0;
-
-/*
- * log_event_upcall_lookup - Establish door connection with user event
- *				daemon (syseventd)
- */
-static int
-log_event_upcall_lookup()
-{
-	int	error;
-
-	if (event_door) {	/* Release our previous hold (if any) */
-		door_ki_rele(event_door);
-	}
-
-	event_door = NULL;
-
-	/*
-	 * Locate the door used for upcalls
-	 */
-	if ((error =
-	    door_ki_open(logevent_door_upcall_filename, &event_door)) != 0) {
-		return (error);
-	}
-
-	return (0);
-}
-
 
 /*ARGSUSED*/
 static void
@@ -234,23 +210,44 @@ log_event_upcall(log_event_upcall_arg_t *arg)
 	darg.desc_ptr = NULL;
 	darg.desc_num = 0;
 
-	if ((event_door == NULL) &&
-	    ((error = log_event_upcall_lookup()) != 0)) {
-		LOG_DEBUG((CE_CONT,
-		    "log_event_upcall: event_door error (%d)\n", error));
-
-		return (error);
-	}
-
 	LOG_DEBUG1((CE_CONT, "log_event_upcall: 0x%llx\n",
 	    (longlong_t)SE_SEQ((sysevent_t *)&arg->buf)));
 
 	save_arg = darg;
 	for (retry = 0; ; retry++) {
+
+		mutex_enter(&event_door_mutex);
+		if (event_door == NULL) {
+			mutex_exit(&event_door_mutex);
+
+			return (EBADF);
+		}
+
 		if ((error = door_ki_upcall_limited(event_door, &darg, NULL,
 		    SIZE_MAX, 0)) == 0) {
+			mutex_exit(&event_door_mutex);
 			break;
 		}
+
+		/*
+		 * EBADF is handled outside the switch below because we need to
+		 * hold event_door_mutex a bit longer
+		 */
+		if (error == EBADF) {
+			/* Server died */
+			door_ki_rele(event_door);
+			event_door = NULL;
+
+			mutex_exit(&event_door_mutex);
+			return (error);
+		}
+
+		mutex_exit(&event_door_mutex);
+
+		/*
+		 * The EBADF case is already handled above with event_door_mutex
+		 * held
+		 */
 		switch (error) {
 		case EINTR:
 			neintr++;
@@ -264,24 +261,6 @@ log_event_upcall(log_event_upcall_arg_t *arg)
 			nticks <<= 1;
 			if (nticks > LOG_EVENT_MAX_PAUSE)
 				nticks = LOG_EVENT_MAX_PAUSE;
-			darg = save_arg;
-			break;
-		case EBADF:
-			LOG_DEBUG((CE_CONT, "log_event_upcall: rebinding\n"));
-			/* Server may have died. Try rebinding */
-			if ((error = log_event_upcall_lookup()) != 0) {
-				LOG_DEBUG((CE_CONT,
-				    "log_event_upcall: lookup error %d\n",
-				    error));
-				return (EBADF);
-			}
-			if (retry > 4) {
-				LOG_DEBUG((CE_CONT,
-				    "log_event_upcall: ebadf\n"));
-				return (EBADF);
-			}
-			LOG_DEBUG((CE_CONT, "log_event_upcall: "
-			    "retrying upcall after lookup\n"));
 			darg = save_arg;
 			break;
 		default:
@@ -347,17 +326,17 @@ log_event_deliver()
 		q = log_eventq_head;
 
 		while (q) {
-			log_eventq_t *next;
-
-			/*
-			 * Release event queue lock during upcall to
-			 * syseventd
-			 */
 			if (log_event_delivery == LOGEVENT_DELIVERY_HOLD) {
 				upcall_err = EAGAIN;
 				break;
 			}
 
+			log_event_delivery = LOGEVENT_DELIVERY_OK;
+
+			/*
+			 * Release event queue lock during upcall to
+			 * syseventd
+			 */
 			mutex_exit(&eventq_head_mutex);
 			if ((upcall_err = log_event_upcall(&q->arg)) != 0) {
 				mutex_enter(&eventq_head_mutex);
@@ -390,6 +369,8 @@ log_event_deliver()
 				LOG_DEBUG((CE_CONT, "log_event_deliver: "
 				    "door upcall/daemon restart race\n"));
 			} else {
+				log_eventq_t *next;
+
 				/*
 				 * Move the event to the sent queue when a
 				 * successful delivery has been made.
@@ -426,12 +407,9 @@ log_event_deliver()
 			 * resumption, continue.  Otherwise, we wait until
 			 * we are signaled to continue.
 			 */
-			if (log_event_delivery == LOGEVENT_DELIVERY_CONT) {
-				log_event_delivery = LOGEVENT_DELIVERY_OK;
+			if (log_event_delivery == LOGEVENT_DELIVERY_CONT)
 				continue;
-			} else {
-				log_event_delivery = LOGEVENT_DELIVERY_HOLD;
-			}
+			log_event_delivery = LOGEVENT_DELIVERY_HOLD;
 
 			LOG_DEBUG1((CE_CONT, "log_event_deliver: EAGAIN\n"));
 			break;
@@ -465,6 +443,8 @@ log_event_deliver()
 void
 log_event_init()
 {
+	mutex_init(&event_door_mutex, NULL, MUTEX_DEFAULT, NULL);
+
 	mutex_init(&eventq_head_mutex, NULL, MUTEX_DEFAULT, NULL);
 	mutex_init(&eventq_sent_mutex, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&log_event_cv, NULL, CV_DEFAULT, NULL);
@@ -590,7 +570,7 @@ free_packed_event(sysevent_t *ev)
  */
 int
 sysevent_add_attr(sysevent_attr_list_t **ev_attr_list, char *name,
-	sysevent_value_t *se_value, int flag)
+    sysevent_value_t *se_value, int flag)
 {
 	int error;
 	nvlist_t **nvlp = (nvlist_t **)ev_attr_list;
@@ -1114,7 +1094,7 @@ find_subclass(class_lst_t *c_list, char *subclass)
 
 static void
 insert_subclass(class_lst_t *c_list, char **subclass_names,
-	int subclass_num, uint32_t sub_id)
+    int subclass_num, uint32_t sub_id)
 {
 	int i, subclass_sz;
 	subclass_lst_t *sc_list;
@@ -1178,7 +1158,7 @@ remove_all_class(sysevent_channel_descriptor_t *chan, uint32_t sub_id)
 
 static void
 remove_class(sysevent_channel_descriptor_t *chan, uint32_t sub_id,
-	char *class_name)
+    char *class_name)
 {
 	class_lst_t *c_list;
 	subclass_lst_t *sc_list;
@@ -1201,7 +1181,7 @@ remove_class(sysevent_channel_descriptor_t *chan, uint32_t sub_id,
 
 static int
 insert_class(sysevent_channel_descriptor_t *chan, char *event_class,
-	char **event_subclass_lst, int subclass_num, uint32_t sub_id)
+    char **event_subclass_lst, int subclass_num, uint32_t sub_id)
 {
 	class_lst_t *c_list;
 
@@ -1228,7 +1208,7 @@ insert_class(sysevent_channel_descriptor_t *chan, char *event_class,
 
 static int
 add_registration(sysevent_channel_descriptor_t *chan, uint32_t sub_id,
-	char *nvlbuf, size_t nvlsize)
+    char *nvlbuf, size_t nvlsize)
 {
 	uint_t num_elem;
 	char *event_class;
@@ -1269,7 +1249,7 @@ add_registration(sysevent_channel_descriptor_t *chan, uint32_t sub_id,
  */
 static int
 get_registration(sysevent_channel_descriptor_t *chan, char *databuf,
-	uint32_t *bufsz, uint32_t class_index)
+    uint32_t *bufsz, uint32_t class_index)
 {
 	int num_classes = 0;
 	char *nvlbuf = NULL;
@@ -1601,23 +1581,19 @@ log_sysevent_flushq(int cmd, uint_t flag)
 int
 log_sysevent_filename(char *file)
 {
-	/*
-	 * Called serially by syseventd init code, no need to protect door
-	 * data.
-	 */
+	mutex_enter(&event_door_mutex);
+
+	(void) strlcpy(logevent_door_upcall_filename, file,
+	    sizeof (logevent_door_upcall_filename));
+
 	/* Unbind old event door */
-	if (logevent_door_upcall_filename) {
-		kmem_free(logevent_door_upcall_filename,
-		    logevent_door_upcall_filename_size);
-		if (event_door) {
-			door_ki_rele(event_door);
-			event_door = NULL;
-		}
-	}
-	logevent_door_upcall_filename_size = strlen(file) + 1;
-	logevent_door_upcall_filename = kmem_alloc(
-	    logevent_door_upcall_filename_size, KM_SLEEP);
-	(void) strcpy(logevent_door_upcall_filename, file);
+	if (event_door != NULL)
+		door_ki_rele(event_door);
+	/* Establish door connection with user event daemon (syseventd) */
+	if (door_ki_open(logevent_door_upcall_filename, &event_door) != 0)
+		event_door = NULL;
+
+	mutex_exit(&event_door_mutex);
 
 	/*
 	 * We are called when syseventd restarts. Move all sent, but
@@ -1759,6 +1735,49 @@ log_sysevent(sysevent_t *ev, int flag, sysevent_id_t *eid)
 }
 
 /*
+ * Publish EC_DEV_ADD and EC_DEV_REMOVE events from devfsadm to lofi.
+ * This interface is needed to pass device link names to the lofi driver,
+ * to be returned via ioctl() to the lofiadm command.
+ * The problem is, if lofiadm is executed in local zone, there is no
+ * mechanism to announce the device name from the /dev tree back to lofiadm,
+ * as sysevents are not accessible from local zone and devfsadmd is only
+ * running in global zone.
+ *
+ * Delayed/missed events are not fatal for lofi, as the device name returned
+ * to lofiadm is for information and can be re-queried with listing
+ * mappings with lofiadm command.
+ *
+ * Once we have a better method, this interface should be reworked.
+ */
+static void
+notify_lofi(sysevent_t *ev)
+{
+	static evchan_t *devfs_chan = NULL;
+	nvlist_t *nvlist;
+	int ret;
+
+	if ((strcmp(EC_DEV_ADD, sysevent_get_class_name(ev)) != 0) &&
+	    (strcmp(EC_DEV_REMOVE, sysevent_get_class_name(ev)) != 0))
+		return;
+
+	/* only bind once to avoid bind/unbind storm on busy system */
+	if (devfs_chan == NULL) {
+		if ((ret = sysevent_evc_bind("devfsadm_event_channel",
+		    &devfs_chan, EVCH_CREAT | EVCH_HOLD_PEND)) != 0) {
+			cmn_err(CE_CONT, "sysevent_evc_bind failed: %d\n", ret);
+			return;
+		}
+	}
+
+	(void) sysevent_get_attr_list(ev, &nvlist);
+	(void) sysevent_evc_publish(devfs_chan, sysevent_get_class_name(ev),
+	    sysevent_get_subclass_name(ev), "illumos", EC_DEVFS, nvlist,
+	    EVCH_SLEEP);
+
+	nvlist_free(nvlist);
+}
+
+/*
  * log_usr_sysevent - user system event logger
  *			Private to devfsadm and accessible only via
  *			modctl(MODEVENTS, MODEVENTS_POST_EVENT)
@@ -1783,6 +1802,8 @@ log_usr_sysevent(sysevent_t *ev, int ev_size, sysevent_id_t *eid)
 		kmem_free(qcopy, copy_sz);
 		return (EFAULT);
 	}
+
+	notify_lofi(ev_copy);
 
 	if ((ret = queue_sysevent(ev_copy, &new_eid, SE_NOSLEEP)) != 0) {
 		if (ret == SE_ENOMEM || ret == SE_EQSIZE)

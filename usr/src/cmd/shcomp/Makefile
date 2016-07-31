@@ -61,6 +61,8 @@ CFLAGS += \
 CFLAGS64 += \
 	$(ASTCFLAGS64)
 
+CERRWARN +=	-_gcc=-Wno-parentheses
+
 ROOTCMDDIR=$(ROOT)/usr/bin
 
 PROG= shcomp
@@ -86,6 +88,9 @@ $(PROG):	$(OBJECTS)
 	$(LINK.c) $(OBJECTS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-clean lint:
+clean:
+	$(RM) $(OBJECTS)
+
+lint:
 
 include ../Makefile.targ

@@ -22,6 +22,9 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2014, 2016 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -43,6 +46,7 @@
 #include <sys/time.h>
 #include <sys/panic.h>
 #include <sys/cpu.h>
+#include <sys/sdt.h>
 
 /*
  * Using the Pentium's TSC register for gethrtime()
@@ -149,12 +153,31 @@ static hrtime_t	tsc_last = 0;
 static hrtime_t	tsc_last_jumped = 0;
 static hrtime_t	tsc_hrtime_base = 0;
 static int	tsc_jumped = 0;
+static uint32_t	tsc_wayback = 0;
+/*
+ * The cap of 1 second was chosen since it is the frequency at which the
+ * tsc_tick() function runs which means that when gethrtime() is called it
+ * should never be more than 1 second since tsc_last was updated.
+ */
+static hrtime_t tsc_resume_cap;
+static hrtime_t tsc_resume_cap_ns = NANOSEC;	 /* 1s */
 
 static hrtime_t	shadow_tsc_hrtime_base;
 static hrtime_t	shadow_tsc_last;
 static uint_t	shadow_nsec_scale;
 static uint32_t	shadow_hres_lock;
 int get_tsc_ready();
+
+static inline
+hrtime_t tsc_protect(hrtime_t a) {
+	if (a > tsc_resume_cap) {
+		atomic_inc_32(&tsc_wayback);
+		DTRACE_PROBE3(tsc__wayback, htrime_t, a, hrtime_t, tsc_last,
+		    uint32_t, tsc_wayback);
+		return (tsc_resume_cap);
+	}
+	return (a);
+}
 
 hrtime_t
 tsc_gethrtime(void)
@@ -184,6 +207,20 @@ tsc_gethrtime(void)
 			 * delta to be zero.
 			 */
 			tsc = 0;
+		} else {
+			/*
+			 * If we reach this else clause we assume that we have
+			 * gone through a suspend/resume cycle and use the
+			 * current tsc value as the delta.
+			 *
+			 * In rare cases we can reach this else clause due to
+			 * a lack of monotonicity in the TSC value.  In such
+			 * cases using the current TSC value as the delta would
+			 * cause us to return a value ~2x of what it should
+			 * be.  To protect against these cases we cap the
+			 * suspend/resume delta at tsc_resume_cap.
+			 */
+			tsc = tsc_protect(tsc);
 		}
 
 		hrt = tsc_hrtime_base;
@@ -224,12 +261,27 @@ tsc_gethrtime_delta(void)
 			tsc -= tsc_last;
 		} else if (tsc >= tsc_last - 2 * tsc_max_delta) {
 			tsc = 0;
+		} else {
+			tsc = tsc_protect(tsc);
 		}
 
 		hrt = tsc_hrtime_base;
 
 		TSC_CONVERT_AND_ADD(tsc, hrt, nsec_scale);
 	} while ((old_hres_lock & ~1) != hres_lock);
+
+	return (hrt);
+}
+
+hrtime_t
+tsc_gethrtime_tick_delta(void)
+{
+	hrtime_t hrt;
+	ulong_t flags;
+
+	flags = clear_int_flag();
+	hrt = tsc_sync_tick_delta[CPU->cpu_id];
+	restore_int_flag(flags);
 
 	return (hrt);
 }
@@ -270,6 +322,8 @@ dtrace_gethrtime(void)
 			tsc -= tsc_last;
 		else if (tsc >= tsc_last - 2*tsc_max_delta)
 			tsc = 0;
+		else
+			tsc = tsc_protect(tsc);
 
 		hrt = tsc_hrtime_base;
 
@@ -317,6 +371,8 @@ dtrace_gethrtime(void)
 			tsc -= shadow_tsc_last;
 		else if (tsc >= shadow_tsc_last - 2 * tsc_max_delta)
 			tsc = 0;
+		else
+			tsc = tsc_protect(tsc);
 
 		hrt = shadow_tsc_hrtime_base;
 
@@ -432,8 +488,7 @@ tsc_sync_master(processorid_t slave)
 	int hwtype;
 
 	hwtype = get_hwenv();
-	if (!tsc_master_slave_sync_needed || hwtype == HW_XEN_HVM ||
-	    hwtype == HW_VMWARE)
+	if (!tsc_master_slave_sync_needed || (hwtype & HW_VIRTUAL) != 0)
 		return;
 
 	flags = clear_int_flag();
@@ -512,8 +567,7 @@ tsc_sync_slave(void)
 	int hwtype;
 
 	hwtype = get_hwenv();
-	if (!tsc_master_slave_sync_needed || hwtype == HW_XEN_HVM ||
-	    hwtype == HW_VMWARE)
+	if (!tsc_master_slave_sync_needed || (hwtype & HW_VIRTUAL) != 0)
 		return;
 
 	flags = clear_int_flag();
@@ -585,6 +639,7 @@ tsc_tick(void)
 		 * resume (i.e nsec_scale remains the same).
 		 */
 		delta = now;
+		delta = tsc_protect(delta);
 		tsc_last_jumped += tsc_last;
 		tsc_jumped = 1;
 	} else {
@@ -637,6 +692,13 @@ tsc_hrtimeinit(uint64_t cpu_freq_hz)
 	 * This structure should be aligned on a multiple of cache line size.
 	 */
 	tscp = kmem_zalloc(PAGESIZE, KM_SLEEP);
+
+	/*
+	 * Convert the TSC resume cap ns value into its unscaled TSC value.
+	 * See tsc_gethrtime().
+	 */
+	if (tsc_resume_cap == 0)
+		TSC_CONVERT(tsc_resume_cap_ns, tsc_resume_cap, nsec_unscale);
 }
 
 int

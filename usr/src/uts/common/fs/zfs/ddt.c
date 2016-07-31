@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
@@ -59,7 +59,8 @@ ddt_object_create(ddt_t *ddt, enum ddt_type type, enum ddt_class class,
 	spa_t *spa = ddt->ddt_spa;
 	objset_t *os = ddt->ddt_os;
 	uint64_t *objectp = &ddt->ddt_object[type][class];
-	boolean_t prehash = zio_checksum_table[ddt->ddt_checksum].ci_dedup;
+	boolean_t prehash = zio_checksum_table[ddt->ddt_checksum].ci_flags &
+	    ZCHECKSUM_FLAG_DEDUP;
 	char name[DDT_NAMELEN];
 
 	ddt_object_name(ddt, type, class, name);
@@ -111,12 +112,12 @@ ddt_object_load(ddt_t *ddt, enum ddt_type type, enum ddt_class class)
 	error = zap_lookup(ddt->ddt_os, DMU_POOL_DIRECTORY_OBJECT, name,
 	    sizeof (uint64_t), 1, &ddt->ddt_object[type][class]);
 
-	if (error)
+	if (error != 0)
 		return (error);
 
-	error = zap_lookup(ddt->ddt_os, ddt->ddt_spa->spa_ddt_stat_object, name,
+	VERIFY0(zap_lookup(ddt->ddt_os, ddt->ddt_spa->spa_ddt_stat_object, name,
 	    sizeof (uint64_t), sizeof (ddt_histogram_t) / sizeof (uint64_t),
-	    &ddt->ddt_histogram[type][class]);
+	    &ddt->ddt_histogram[type][class]));
 
 	/*
 	 * Seed the cached statistics.
@@ -127,8 +128,7 @@ ddt_object_load(ddt_t *ddt, enum ddt_type type, enum ddt_class class)
 	ddo->ddo_dspace = doi.doi_physical_blocks_512 << 9;
 	ddo->ddo_mspace = doi.doi_fill_count * doi.doi_data_block_size;
 
-	ASSERT(error == 0);
-	return (error);
+	return (0);
 }
 
 static void
@@ -160,7 +160,7 @@ ddt_object_lookup(ddt_t *ddt, enum ddt_type type, enum ddt_class class,
     ddt_entry_t *dde)
 {
 	if (!ddt_object_exists(ddt, type, class))
-		return (ENOENT);
+		return (SET_ERROR(ENOENT));
 
 	return (ddt_ops[type]->ddt_op_lookup(ddt->ddt_os,
 	    ddt->ddt_object[type][class], dde));
@@ -221,7 +221,7 @@ ddt_object_info(ddt_t *ddt, enum ddt_type type, enum ddt_class class,
     dmu_object_info_t *doi)
 {
 	if (!ddt_object_exists(ddt, type, class))
-		return (ENOENT);
+		return (SET_ERROR(ENOENT));
 
 	return (dmu_object_info(ddt->ddt_os, ddt->ddt_object[type][class],
 	    doi));
@@ -403,7 +403,7 @@ ddt_stat_update(ddt_t *ddt, ddt_entry_t *dde, uint64_t neg)
 
 	ddt_stat_generate(ddt, dde, &dds);
 
-	bucket = highbit(dds.dds_ref_blocks) - 1;
+	bucket = highbit64(dds.dds_ref_blocks) - 1;
 	ASSERT(bucket >= 0);
 
 	ddh = &ddt->ddt_histogram[dde->dde_type][dde->dde_class];
@@ -581,7 +581,10 @@ ddt_compress(void *src, uchar_t *dst, size_t s_len, size_t d_len)
 		bcopy(src, dst, s_len);
 	}
 
-	*version = (ZFS_HOST_BYTEORDER & DDT_COMPRESS_BYTEORDER_MASK) | cpfunc;
+	*version = cpfunc;
+	/* CONSTCOND */
+	if (ZFS_HOST_BYTEORDER)
+		*version |= DDT_COMPRESS_BYTEORDER_MASK;
 
 	return (c_len + 1);
 }
@@ -598,7 +601,8 @@ ddt_decompress(uchar_t *src, void *dst, size_t s_len, size_t d_len)
 	else
 		bcopy(src, dst, d_len);
 
-	if ((version ^ ZFS_HOST_BYTEORDER) & DDT_COMPRESS_BYTEORDER_MASK)
+	if (((version & DDT_COMPRESS_BYTEORDER_MASK) != 0) !=
+	    (ZFS_HOST_BYTEORDER != 0))
 		byteswap_uint64_array(dst, d_len);
 }
 
@@ -1141,5 +1145,5 @@ ddt_walk(spa_t *spa, ddt_bookmark_t *ddb, ddt_entry_t *dde)
 		ddb->ddb_type = 0;
 	} while (++ddb->ddb_class < DDT_CLASSES);
 
-	return (ENOENT);
+	return (SET_ERROR(ENOENT));
 }

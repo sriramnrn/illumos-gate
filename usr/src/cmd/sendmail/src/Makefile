@@ -44,19 +44,13 @@ SRCS=	$(OBJS:%.o=%.c)
 MAPFILES =	$(MAPFILE.INT) $(MAPFILE.NGB)
 LDFLAGS +=	$(MAPFILES:%=-M%)
 
-# EXPORT DELETE START
-CRYPTOLIBS=	-lssl -lcrypto -lsasl
-# EXPORT DELETE END
 LDLIBS += 	../libsmutil/libsmutil.a ../libsm/libsm.a -lresolv -lsocket \
 		-lnsl ../db/libdb.a -lldap -lsldap -lwrap -lumem \
-		$(CRYPTOLIBS)
+		-lssl -lcrypto -lsasl
 
 INCPATH=	-I. -I../include -I../db
 
-# EXPORT DELETE START
-CRYPTOENVDEF=	-DSTARTTLS -DSASL=20115
-# EXPORT DELETE END
-ENVDEF=		-DNETINET6 -DTCPWRAPPERS $(CRYPTOENVDEF)
+ENVDEF=		-DNETINET6 -DTCPWRAPPERS -DSTARTTLS -DSASL=20115
 SUNENVDEF=	-DSUN_EXTENSIONS -DVENDOR_DEFAULT=VENDOR_SUN \
 		-DSUN_INIT_DOMAIN -DSUN_SIMPLIFIED_LDAP -D_FFR_LOCAL_DAEMON \
 		-D_FFR_MAIL_MACRO
@@ -65,7 +59,7 @@ CPPFLAGS = 	$(INCPATH) $(ENVDEF) $(SUNENVDEF) $(DBMDEF) $(CPPFLAGS.sm)
 
 FILEMODE= 	2555
 
-ROOTSYMLINKS=	$(ROOTUSRSBIN)/newaliases $(ROOTUSRSBIN)/sendmail
+ROOTSYMLINKS=	$(ROOTLIBSMTPSM)/newaliases
 
 # build rule
 #
@@ -80,23 +74,14 @@ $(PROG):	$(OBJS) $(MAPFILES) \
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
-install:	$(ROOTLIBPROG) $(ROOTSYMLINKS)
+install:	$(ROOTLIBSMTPSM)/sendmail $(ROOTSYMLINKS)
 
 $(ROOTSYMLINKS):
-	$(RM) $@; $(SYMLINK) ../lib/sendmail $@
+	$(RM) $@; $(SYMLINK) sendmail $@
 
 clean:
 	$(RM) $(PROG) $(OBJS)
 
 lint:	lint_SRCS
-
-# EXPORT DELETE START
-EXPORT_SRC:
-	$(RM) Makefile+
-	$(SED) -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-	    < Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-# EXPORT DELETE END
 
 include		../../Makefile.targ

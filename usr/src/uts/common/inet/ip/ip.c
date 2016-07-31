@@ -22,7 +22,8 @@
 /*
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 1990 Mentat Inc.
- * Copyright (c) 2011 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2014, OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -1027,11 +1028,12 @@ ip_ioctl_cmd_t ip_ndx_ioctl_table[] = {
 			MISC_CMD, ip_sioctl_tmysite, NULL },
 	/* 147 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
 	/* 148 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
-	/* IPSECioctls handled in ip_sioctl_copyin_setup itself */
-	/* 149 */ { SIOCFIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
-	/* 150 */ { SIOCSIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
-	/* 151 */ { SIOCDIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
-	/* 152 */ { SIOCLIPSECONFIG, 0, IPI_PRIV, MISC_CMD, NULL, NULL },
+
+	/* Old *IPSECONFIG ioctls are now deprecated, now see spdsock.c */
+	/* 149 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
+	/* 150 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
+	/* 151 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
+	/* 152 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
 
 	/* 153 */ { IPI_DONTCARE, 0, 0, 0, NULL, NULL },
 
@@ -1496,7 +1498,7 @@ icmp_inbound_v4(mblk_t *mp, ip_recv_attr_t *ira)
 		/* Compute # of milliseconds since midnight */
 		gethrestime(&now);
 		ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-		    now.tv_nsec / (NANOSEC / MILLISEC);
+		    NSEC2MSEC(now.tv_nsec);
 		*tsp++ = htonl(ts);	/* Lay in 'receive time' */
 		*tsp++ = htonl(ts);	/* Lay in 'send time' */
 		BUMP_MIB(&ipst->ips_icmp_mib, icmpOutTimestampReps);
@@ -4341,6 +4343,7 @@ static void
 ip_stack_shutdown(netstackid_t stackid, void *arg)
 {
 	ip_stack_t *ipst = (ip_stack_t *)arg;
+	kt_did_t ktid;
 
 #ifdef NS_DEBUG
 	printf("ip_stack_shutdown(%p, stack %d)\n", (void *)ipst, stackid);
@@ -4360,9 +4363,19 @@ ip_stack_shutdown(netstackid_t stackid, void *arg)
 	arp_hook_shutdown(ipst);
 
 	mutex_enter(&ipst->ips_capab_taskq_lock);
+	ktid = ipst->ips_capab_taskq_thread->t_did;
 	ipst->ips_capab_taskq_quit = B_TRUE;
 	cv_signal(&ipst->ips_capab_taskq_cv);
 	mutex_exit(&ipst->ips_capab_taskq_lock);
+
+	/*
+	 * In rare occurrences, particularly on virtual hardware where CPUs can
+	 * be de-scheduled, the thread that we just signaled will not run until
+	 * after we have gotten through parts of ip_stack_fini. If that happens
+	 * then we'll try to grab the ips_capab_taskq_lock as part of returning
+	 * from cv_wait which no longer exists.
+	 */
+	thread_join(ktid);
 }
 
 /*
@@ -4407,6 +4420,27 @@ ip_stack_fini(netstackid_t stackid, void *arg)
 
 	dce_stack_destroy(ipst);
 	ip_mrouter_stack_destroy(ipst);
+
+	/*
+	 * Quiesce all of our timers. Note we set the quiesce flags before we
+	 * call untimeout. The slowtimers may actually kick off another instance
+	 * of the non-slow timers.
+	 */
+	mutex_enter(&ipst->ips_igmp_timer_lock);
+	ipst->ips_igmp_timer_quiesce = B_TRUE;
+	mutex_exit(&ipst->ips_igmp_timer_lock);
+
+	mutex_enter(&ipst->ips_mld_timer_lock);
+	ipst->ips_mld_timer_quiesce = B_TRUE;
+	mutex_exit(&ipst->ips_mld_timer_lock);
+
+	mutex_enter(&ipst->ips_igmp_slowtimeout_lock);
+	ipst->ips_igmp_slowtimeout_quiesce = B_TRUE;
+	mutex_exit(&ipst->ips_igmp_slowtimeout_lock);
+
+	mutex_enter(&ipst->ips_mld_slowtimeout_lock);
+	ipst->ips_mld_slowtimeout_quiesce = B_TRUE;
+	mutex_exit(&ipst->ips_mld_slowtimeout_lock);
 
 	ret = untimeout(ipst->ips_igmp_timeout_id);
 	if (ret == -1) {
@@ -9104,7 +9138,7 @@ ip_forward_options(mblk_t *mp, ipha_t *ipha, ill_t *dst_ill,
 				/* Compute # of milliseconds since midnight */
 				gethrestime(&now);
 				ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-				    now.tv_nsec / (NANOSEC / MILLISEC);
+				    NSEC2MSEC(now.tv_nsec);
 				bcopy(&ts, (char *)opt + off, IPOPT_TS_TIMELEN);
 				opt[IPOPT_OFFSET] += IPOPT_TS_TIMELEN;
 				break;
@@ -9330,7 +9364,7 @@ ip_input_local_options(mblk_t *mp, ipha_t *ipha, ip_recv_attr_t *ira)
 				/* Compute # of milliseconds since midnight */
 				gethrestime(&now);
 				ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-				    now.tv_nsec / (NANOSEC / MILLISEC);
+				    NSEC2MSEC(now.tv_nsec);
 				bcopy(&ts, (char *)opt + off, IPOPT_TS_TIMELEN);
 				opt[IPOPT_OFFSET] += IPOPT_TS_TIMELEN;
 				break;
@@ -12012,7 +12046,7 @@ ip_output_local_options(ipha_t *ipha, ip_stack_t *ipst)
 				/* Compute # of milliseconds since midnight */
 				gethrestime(&now);
 				ts = (now.tv_sec % (24 * 60 * 60)) * 1000 +
-				    now.tv_nsec / (NANOSEC / MILLISEC);
+				    NSEC2MSEC(now.tv_nsec);
 				bcopy(&ts, (char *)opt + off, IPOPT_TS_TIMELEN);
 				opt[IPOPT_OFFSET] += IPOPT_TS_TIMELEN;
 				break;
@@ -12107,7 +12141,6 @@ ip_xmit_attach_llhdr(mblk_t *mp, nce_t *nce)
 		    priority;
 	}
 	return (mp1);
-#undef rptr
 }
 
 /*

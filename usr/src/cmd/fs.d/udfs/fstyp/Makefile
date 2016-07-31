@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 FSTYP_VERS=1
 FSTYPE=		udfs
@@ -38,6 +36,9 @@ MAPFILES =
 CFLAGS +=	$(C_PICFLAGS)
 DYNLIB=		$(LIBPROG)
 
+CERRWARN +=	-_gcc=-Wno-unused-function
+CERRWARN +=	-_gcc=-Wno-uninitialized
+
 LDLIBS += -lnvpair -ladm -lc
 
 LINTFLAGS += -erroff=E_STATIC_UNUSED -erroff=E_NAME_DEF_NOT_USED2
@@ -47,6 +48,9 @@ LINTFLAGS64 += -erroff=E_STATIC_UNUSED -erroff=E_NAME_DEF_NOT_USED2
 # Override PMAP dependency
 #
 PMAP=
+
+# No msg catalog here.
+POFILE=
 
 OBJS= fstyp.o ud_lib.o
 
@@ -77,6 +81,4 @@ cstyle:
 	$(CSTYLE) $(SRCS)
 
 clean:     
-	$(RM) $(LIBPROG)
-
-clobber: clean
+	$(RM) $(OBJS)

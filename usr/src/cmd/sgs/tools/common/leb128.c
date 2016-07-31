@@ -99,8 +99,8 @@
  *
  */
 
-uint64_t
-uleb_extract(unsigned char *data, uint64_t *dotp)
+dwarf_error_t
+uleb_extract(unsigned char *data, uint64_t *dotp, size_t len, uint64_t *ret)
 {
 	uint64_t	dot = *dotp;
 	uint64_t	res = 0;
@@ -111,6 +111,9 @@ uleb_extract(unsigned char *data, uint64_t *dotp)
 	data += dot;
 
 	while (more) {
+		if (dot > len)
+			return (DW_OVERFLOW);
+
 		/*
 		 * Pull off lower 7 bits
 		 */
@@ -134,11 +137,12 @@ uleb_extract(unsigned char *data, uint64_t *dotp)
 		more = ((*data++) & 0x80) >> 7;
 	}
 	*dotp = dot;
-	return (res);
+	*ret = res;
+	return (DW_SUCCESS);
 }
 
-int64_t
-sleb_extract(unsigned char *data, uint64_t *dotp)
+dwarf_error_t
+sleb_extract(unsigned char *data, uint64_t *dotp, size_t len, int64_t *ret)
 {
 	uint64_t	dot = *dotp;
 	int64_t		res = 0;
@@ -149,6 +153,9 @@ sleb_extract(unsigned char *data, uint64_t *dotp)
 	data += dot;
 
 	while (more) {
+		if (dot > len)
+			return (DW_OVERFLOW);
+
 		/*
 		 * Pull off lower 7 bits
 		 */
@@ -177,8 +184,8 @@ sleb_extract(unsigned char *data, uint64_t *dotp)
 	 * Make sure value is properly sign extended.
 	 */
 	res = (res << (64 - shift)) >> (64 - shift);
-
-	return (res);
+	*ret = res;
+	return (DW_SUCCESS);
 }
 
 /*
@@ -190,12 +197,17 @@ sleb_extract(unsigned char *data, uint64_t *dotp)
  *		at which the desired datum starts.
  *	ehe_flags - DWARF encoding
  *	eident - ELF header e_ident[] array for object being processed
+ *	frame_hdr - Boolean, true if we're extracting from .eh_frame_hdr
  *	sh_base - Base address of ELF section containing desired datum
  *	sh_offset - Offset relative to sh_base of desired datum.
+ *	dbase - The base address to which DW_EH_PE_datarel is relative
+ *		(if frame_hdr is false)
  */
-uint64_t
-dwarf_ehe_extract(unsigned char *data, uint64_t *dotp, uint_t ehe_flags,
-    unsigned char *eident, uint64_t sh_base, uint64_t sh_offset)
+dwarf_error_t
+dwarf_ehe_extract(unsigned char *data, size_t len, uint64_t *dotp,
+    uint64_t *ret, uint_t ehe_flags, unsigned char *eident,
+    boolean_t frame_hdr, uint64_t sh_base, uint64_t sh_offset,
+    uint64_t dbase)
 {
 	uint64_t    dot = *dotp;
 	uint_t	    lsb;
@@ -215,7 +227,8 @@ dwarf_ehe_extract(unsigned char *data, uint64_t *dotp, uint_t ehe_flags,
 
 	switch (ehe_flags & 0x0f) {
 	case DW_EH_PE_omit:
-		return (0);
+		*ret = 0;
+		return (DW_SUCCESS);
 	case DW_EH_PE_absptr:
 		fsize = wordsize;
 		break;
@@ -232,11 +245,12 @@ dwarf_ehe_extract(unsigned char *data, uint64_t *dotp, uint_t ehe_flags,
 		fsize = 2;
 		break;
 	case DW_EH_PE_uleb128:
-		return (uleb_extract(data, dotp));
+		return (uleb_extract(data, dotp, len, ret));
 	case DW_EH_PE_sleb128:
-		return ((uint64_t)sleb_extract(data, dotp));
+		return (sleb_extract(data, dotp, len, (int64_t *)ret));
 	default:
-		return (0);
+		*ret = 0;
+		return (DW_BAD_ENCODING);
 	}
 
 	if (lsb) {
@@ -249,6 +263,9 @@ dwarf_ehe_extract(unsigned char *data, uint64_t *dotp, uint_t ehe_flags,
 		for (cnt = 0; cnt < fsize;
 		    cnt++, dot++) {
 			uint64_t val;
+
+			if (dot > len)
+				return (DW_OVERFLOW);
 			val = data[dot];
 			result |= val << (cnt * 8);
 		}
@@ -260,7 +277,10 @@ dwarf_ehe_extract(unsigned char *data, uint64_t *dotp, uint_t ehe_flags,
 		result = 0;
 		for (cnt = 0; cnt < fsize;
 		    cnt++, dot++) {
-			uint64_t	val;
+			uint64_t val;
+
+			if (dot > len)
+				return (DW_OVERFLOW);
 			val = data[dot];
 			result |= val << ((fsize - cnt - 1) * 8);
 		}
@@ -281,17 +301,28 @@ dwarf_ehe_extract(unsigned char *data, uint64_t *dotp, uint_t ehe_flags,
 	/*
 	 * If value is relative to a base address, adjust it
 	 */
-	if (result) {
-		switch (ehe_flags & 0xf0) {
-		case DW_EH_PE_pcrel:
-			result += sh_base + sh_offset;
-			break;
+	switch (ehe_flags & 0xf0) {
+	case DW_EH_PE_pcrel:
+		result += sh_base + sh_offset;
+		break;
 
-		case DW_EH_PE_datarel:
+	/*
+	 * datarel is relative to .eh_frame_hdr if within .eh_frame,
+	 * but GOT if not.
+	 */
+	case DW_EH_PE_datarel:
+		if (frame_hdr)
 			result += sh_base;
-			break;
-		}
+		else
+			result += dbase;
+		break;
 	}
+
+	/* Truncate the result to its specified size */
+	result = (result << ((sizeof (uint64_t) - fsize) * 8)) >>
+	    ((sizeof (uint64_t) - fsize) * 8);
+
 	*dotp = dot;
-	return (result);
+	*ret = result;
+	return (DW_SUCCESS);
 }

@@ -31,6 +31,9 @@ ROOTTZSRCD=	$(ROOTSHLIB)/zoneinfo/src
 ROOTTZTABD=	$(ROOTSHLIB)/zoneinfo/tab
 DIRS=  $(ROOTTZSRCD) $(ROOTTZTABD)
 
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-uninitialized
+
 ROOTLIBTZSRCFILES=	$(SRCFILES:%=$(ROOTTZSRCD)/%)
 ROOTLIBTZTABFILES=	$(TABFILES:%=$(ROOTTZTABD)/%)
 ROOTKSHPROG=	$(ROOTBIN)/$(KSHPROG)
@@ -47,6 +50,9 @@ POFILES3=$(TABFILES)
 TEXT_DOMAIN2=SUNW_OST_ZONEINFO
 MSGDOMAIN2=$(MSGROOT)/$(TEXT_DOMAIN2)
 
+# NB: $(POFILE2) is under SCM.
+CLOBBERFILES += $(POFILE) $(POFILE3)
+
 .KEEP_STATE:
 
 all: $(PROG) $(NPROG) $(KSHPROG)
@@ -55,11 +61,12 @@ $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-install: all $(DIRS) $(ROOTTZSRCD) $(ROOTTZTABD) $(ROOTUSRSBINPROG) $(ROOTLIBTZSRCFILES) $(ROOTLIBTZTABFILES) $(ROOTKSHPROG)
+install: all $(DIRS) $(ROOTTZSRCD) $(ROOTTZTABD) $(ROOTUSRSBINPROG) \
+		$(ROOTLIBTZSRCFILES) $(ROOTLIBTZTABFILES) $(ROOTKSHPROG)
 	$(NPROG) -d $(ROOTTZD) $(TZFILES)
 
 $(NPROG): $(NATIVE) $(NOBJS)
-	$(NATIVECC) -o $@ $(NOBJS)
+	$(NATIVECC) $(NATIVE_CFLAGS) -o $@ $(NOBJS)
 
 #
 # XXX
@@ -88,15 +95,9 @@ clean:
 lint: lint_SRCS
 
 $(NOBJS): $$(@F:.o=.c)
-	$(NATIVECC) -O $(NCPPFLAGS) -c -o $@ $(@F:.o=.c)
+	$(NATIVECC) -O $(NATIVE_CFLAGS) $(NCPPFLAGS) -c -o $@ $(@F:.o=.c)
 
 $(NATIVE)/zic.o: $(NATIVE)/tzfile.h
-
-#$(NATIVE)/scheck.o: scheck.c
-#	$(NATIVECC) -c -o $@ scheck.c
-
-#$(NATIVE)/ialloc.o: ialloc.c
-#	$(NATIVECC) -c -o $@ ialloc.c
 
 $(NATIVE)/tzfile.h: $(ROOT)/usr/include/tzfile.h
 	$(RM) $@; cp $(ROOT)/usr/include/tzfile.h $@

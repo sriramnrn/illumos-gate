@@ -20,11 +20,12 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
  */
 
 #include <sys/zfs_context.h>
 #include <sys/spa.h>
+#include <sys/spa_impl.h>
 #include <sys/vdev_file.h>
 #include <sys/vdev_impl.h>
 #include <sys/zio.h>
@@ -61,7 +62,7 @@ vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	 */
 	if (vd->vdev_path == NULL || vd->vdev_path[0] != '/') {
 		vd->vdev_stat.vs_aux = VDEV_AUX_BAD_LABEL;
-		return (EINVAL);
+		return (SET_ERROR(EINVAL));
 	}
 
 	/*
@@ -99,7 +100,7 @@ vdev_file_open(vdev_t *vd, uint64_t *psize, uint64_t *max_psize,
 	 */
 	if (vp->v_type != VREG) {
 		vd->vdev_stat.vs_aux = VDEV_AUX_OPEN_FAILED;
-		return (ENODEV);
+		return (SET_ERROR(ENODEV));
 	}
 #endif
 
@@ -140,18 +141,61 @@ vdev_file_close(vdev_t *vd)
 	vd->vdev_tsd = NULL;
 }
 
-static int
+/*
+ * Implements the interrupt side for file vdev types. This routine will be
+ * called when the I/O completes allowing us to transfer the I/O to the
+ * interrupt taskqs. For consistency, the code structure mimics disk vdev
+ * types.
+ */
+static void
+vdev_file_io_intr(buf_t *bp)
+{
+	vdev_buf_t *vb = (vdev_buf_t *)bp;
+	zio_t *zio = vb->vb_io;
+
+	zio->io_error = (geterror(bp) != 0 ? EIO : 0);
+	if (zio->io_error == 0 && bp->b_resid != 0)
+		zio->io_error = SET_ERROR(ENOSPC);
+
+	kmem_free(vb, sizeof (vdev_buf_t));
+	zio_delay_interrupt(zio);
+}
+
+static void
+vdev_file_io_strategy(void *arg)
+{
+	buf_t *bp = arg;
+	vnode_t *vp = bp->b_private;
+	ssize_t resid;
+	int error;
+
+	error = vn_rdwr((bp->b_flags & B_READ) ? UIO_READ : UIO_WRITE,
+	    vp, bp->b_un.b_addr, bp->b_bcount, ldbtob(bp->b_lblkno),
+	    UIO_SYSSPACE, 0, RLIM64_INFINITY, kcred, &resid);
+
+	if (error == 0) {
+		bp->b_resid = resid;
+		biodone(bp);
+	} else {
+		bioerror(bp, error);
+		biodone(bp);
+	}
+}
+
+static void
 vdev_file_io_start(zio_t *zio)
 {
 	vdev_t *vd = zio->io_vd;
 	vdev_file_t *vf = vd->vdev_tsd;
-	ssize_t resid;
+	vdev_buf_t *vb;
+	buf_t *bp;
 
 	if (zio->io_type == ZIO_TYPE_IOCTL) {
 		/* XXPOLICY */
 		if (!vdev_readable(vd)) {
-			zio->io_error = ENXIO;
-			return (ZIO_PIPELINE_CONTINUE);
+			zio->io_error = SET_ERROR(ENXIO);
+			zio_interrupt(zio);
+			return;
 		}
 
 		switch (zio->io_cmd) {
@@ -160,23 +204,32 @@ vdev_file_io_start(zio_t *zio)
 			    kcred, NULL);
 			break;
 		default:
-			zio->io_error = ENOTSUP;
+			zio->io_error = SET_ERROR(ENOTSUP);
 		}
 
-		return (ZIO_PIPELINE_CONTINUE);
+		zio_execute(zio);
+		return;
 	}
 
-	zio->io_error = vn_rdwr(zio->io_type == ZIO_TYPE_READ ?
-	    UIO_READ : UIO_WRITE, vf->vf_vnode, zio->io_data,
-	    zio->io_size, zio->io_offset, UIO_SYSSPACE,
-	    0, RLIM64_INFINITY, kcred, &resid);
+	ASSERT(zio->io_type == ZIO_TYPE_READ || zio->io_type == ZIO_TYPE_WRITE);
+	zio->io_target_timestamp = zio_handle_io_delay(zio);
 
-	if (resid != 0 && zio->io_error == 0)
-		zio->io_error = ENOSPC;
+	vb = kmem_alloc(sizeof (vdev_buf_t), KM_SLEEP);
 
-	zio_interrupt(zio);
+	vb->vb_io = zio;
+	bp = &vb->vb_buf;
 
-	return (ZIO_PIPELINE_STOP);
+	bioinit(bp);
+	bp->b_flags = (zio->io_type == ZIO_TYPE_READ ? B_READ : B_WRITE);
+	bp->b_bcount = zio->io_size;
+	bp->b_un.b_addr = zio->io_data;
+	bp->b_lblkno = lbtodb(zio->io_offset);
+	bp->b_bufsize = zio->io_size;
+	bp->b_private = vf->vf_vnode;
+	bp->b_iodone = (int (*)())vdev_file_io_intr;
+
+	VERIFY3U(taskq_dispatch(system_taskq, vdev_file_io_strategy, bp,
+	    TQ_SLEEP), !=, 0);
 }
 
 /* ARGSUSED */

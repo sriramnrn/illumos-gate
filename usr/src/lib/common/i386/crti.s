@@ -23,6 +23,9 @@
  * Copyright (c) 2001 by Sun Microsystems, Inc.
  * All rights reserved.
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
 
 /*
  * These crt*.o modules are provided as the bare minimum required
@@ -34,8 +37,19 @@
  * For further details - see bug#4433015
  */
 
-	.ident	"%Z%%M%	%I%	%E% SMI"
 	.file	"crti.s"
+
+/*
+ * Note that when _init and _fini are called the stack needs to be 16-byte
+ * aligned with a 4-byte bias.  See comment in lib/libc/i386/gen/makectxt.c.
+ *
+ * Note: If you change it, you need to change it in the following files as
+ * well:
+ *
+ *  - lib/libc/i386/threads/machdep.c
+ *  - lib/libc/i386/gen/makectxt.c
+ *  - lib/common/i386/crt1.s
+ */
 
 /*
  * _init function prologue
@@ -47,6 +61,8 @@
 _init:
 	pushl	%ebp
 	movl	%esp, %ebp
+	andl	$-16,%esp
+	subl	$12,%esp
 	pushl	%ebx
 	call	.L1
 .L1:	popl	%ebx
@@ -62,6 +78,8 @@ _init:
 _fini:
 	pushl	%ebp
 	movl	%esp, %ebp
+	andl	$-16,%esp
+	subl	$12,%esp
 	pushl	%ebx
 	call	.L2
 .L2:	popl	%ebx

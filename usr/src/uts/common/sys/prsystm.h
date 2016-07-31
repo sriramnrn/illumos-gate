@@ -27,6 +27,9 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ */
 
 #ifndef _SYS_PRSYSTM_H
 #define	_SYS_PRSYSTM_H
@@ -105,9 +108,9 @@ extern int  pr_watch_emul(struct regs *, caddr_t, enum seg_rw);
 extern void pr_free_watched_pages(proc_t *);
 extern int  pr_allstopped(proc_t *, int);
 #if defined(__sparc)
-struct gwindows;
+struct _gwindows;
 extern	int	prnwindows(klwp_t *);
-extern	void	prgetwindows(klwp_t *, struct gwindows *);
+extern	void	prgetwindows(klwp_t *, struct _gwindows *);
 #if defined(__sparcv9) /* 32-bit adb macros should not see these defs */
 extern	void	prgetasregs(klwp_t *, asrset_t);
 extern	void	prsetasregs(klwp_t *, asrset_t);
@@ -129,6 +132,8 @@ extern void prgetstatus32(proc_t *, struct pstatus32 *, zone_t *);
 extern void prgetlwpstatus32(kthread_t *, struct lwpstatus32 *, zone_t *);
 extern void prgetpsinfo32(proc_t *, struct psinfo32 *);
 extern void prgetlwpsinfo32(kthread_t *, struct lwpsinfo32 *);
+extern void lwpsinfo_kto32(const struct lwpsinfo *src, struct lwpsinfo32 *dest);
+extern void psinfo_kto32(const struct psinfo *src, struct psinfo32 *dest);
 extern void prgetprfpregs32(klwp_t *, struct prfpregset32 *);
 #if defined(__sparc)
 struct gwindows32;

@@ -11,7 +11,8 @@
 
 /*
  * Copyright 2010,2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright 2012 Garrett D'Amore <garrett@damore.org>  All rights reserved.
+ * Copyright 2012 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2013 DEY Storage Systems, Inc.
  */
 
 /*
@@ -27,6 +28,7 @@
 #include <ctype.h>
 #include <wctype.h>
 #include <unistd.h>
+#include "_ctype.h"
 #include "localedef.h"
 #include "parser.tab.h"
 #include "runefile.h"
@@ -42,6 +44,13 @@ typedef struct ctype_node {
 	int32_t	tolower;
 	avl_node_t avl;
 } ctype_node_t;
+
+typedef struct width_node {
+	wchar_t start;
+	wchar_t end;
+	int8_t width;
+	avl_node_t avl;
+} width_node_t;
 
 static int
 ctype_compare(const void *n1, const void *n2)
@@ -178,6 +187,48 @@ add_ctype_range(int end)
 
 }
 
+/*
+ * A word about widths: if the width mask is specified, then libc
+ * unconditionally honors it.  Otherwise, it assumes printable
+ * characters have width 1, and non-printable characters have width
+ * -1 (except for NULL which is special with with 0).  Hence, we have
+ * no need to inject defaults here -- the "default" unset value of 0
+ * indicates that libc should use its own logic in wcwidth as described.
+ */
+void
+add_width(int wc, int width)
+{
+	ctype_node_t	*ctn;
+
+	if ((ctn = get_ctype(wc)) == NULL) {
+		INTERR;
+		return;
+	}
+	ctn->ctype &= ~(_CTYPE_SWM);
+	switch (width) {
+	case 0:
+		ctn->ctype |= _CTYPE_SW0;
+		break;
+	case 1:
+		ctn->ctype |= _CTYPE_SW1;
+		break;
+	case 2:
+		ctn->ctype |= _CTYPE_SW2;
+		break;
+	case 3:
+		ctn->ctype |= _CTYPE_SW3;
+		break;
+	}
+}
+
+void
+add_width_range(int start, int end, int width)
+{
+	for (; start <= end; start++) {
+		add_width(start, width);
+	}
+}
+
 void
 add_caseconv(int val, int wc)
 {
@@ -211,6 +262,7 @@ dump_ctype(void)
 	_FileRuneEntry	*ct = NULL;
 	_FileRuneEntry	*lo = NULL;
 	_FileRuneEntry	*up = NULL;
+	wchar_t		wc;
 
 	(void) memset(&rl, 0, sizeof (rl));
 	last_ct = NULL;
@@ -223,10 +275,19 @@ dump_ctype(void)
 	(void) memcpy(rl.magic, _FILE_RUNE_MAGIC_1, 8);
 	(void) strncpy(rl.encoding, get_wide_encoding(), sizeof (rl.encoding));
 
-	for (ctn = avl_first(&ctypes); ctn; ctn = AVL_NEXT(&ctypes, ctn)) {
+	/*
+	 * Initialize the identity map.
+	 */
+	for (wc = 0; (unsigned)wc < _CACHED_RUNES; wc++) {
+		rl.maplower[wc] = wc;
+		rl.mapupper[wc] = wc;
+	}
 
-		wchar_t	wc = ctn->wc;
+	for (ctn = avl_first(&ctypes); ctn; ctn = AVL_NEXT(&ctypes, ctn)) {
 		int conflict = 0;
+
+
+		wc = ctn->wc;
 
 		/*
 		 * POSIX requires certain portable characters have
@@ -239,6 +300,8 @@ dump_ctype(void)
 				ctn->ctype |= _ISLOWER;
 			if ((wc >= '0') && (wc <= '9'))
 				ctn->ctype |= _ISDIGIT;
+			if (wc == ' ')
+				ctn->ctype |= _ISPRINT;
 			if (strchr(" \f\n\r\t\v", (char)wc) != NULL)
 				ctn->ctype |= _ISSPACE;
 			if (strchr("0123456789ABCDEFabcdef", (char)wc) != NULL)
@@ -305,8 +368,10 @@ dump_ctype(void)
 		 */
 		if ((unsigned)wc < _CACHED_RUNES) {
 			rl.runetype[wc] = ctn->ctype;
-			rl.maplower[wc] = ctn->tolower ? ctn->tolower : wc;
-			rl.mapupper[wc] = ctn->toupper ? ctn->toupper : wc;
+			if (ctn->tolower)
+				rl.maplower[wc] = ctn->tolower;
+			if (ctn->toupper)
+				rl.mapupper[wc] = ctn->toupper;
 			continue;
 		}
 

@@ -20,13 +20,16 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/errno.h>
 #include <sys/avl.h>
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+#include <sys/debug.h>
+#include <sys/kmem.h>
 #include <sys/systm.h>
 #include <sys/sysmacros.h>
 #include <acl/acl_common.h>
@@ -221,7 +224,7 @@ cmp2acls(void *a, void *b)
 static void *
 cacl_realloc(void *ptr, size_t size, size_t new_size)
 {
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	void *tmp;
 
 	tmp = kmem_alloc(new_size, KM_SLEEP);
@@ -236,7 +239,7 @@ cacl_realloc(void *ptr, size_t size, size_t new_size)
 static int
 cacl_malloc(void **ptr, size_t size)
 {
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	*ptr = kmem_zalloc(size, KM_SLEEP);
 	return (0);
 #else
@@ -252,7 +255,7 @@ cacl_malloc(void **ptr, size_t size)
 static void
 cacl_free(void *ptr, size_t size)
 {
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 	kmem_free(ptr, size);
 #else
 	free(ptr);
@@ -1462,7 +1465,7 @@ convert_ace_to_aent(ace_t *acebufp, int acecnt, boolean_t isdir,
 	int error = 0;
 	aclent_t *aclentp, *dfaclentp;
 	int aclcnt, dfaclcnt;
-	int aclsz, dfaclsz;
+	int aclsz, dfaclsz = 0;
 
 	error = ln_ace_to_aent(acebufp, acecnt, owner, group,
 	    &aclentp, &aclcnt, &dfaclentp, &dfaclcnt, isdir);
@@ -1553,11 +1556,11 @@ acl_translate(acl_t *aclp, int target_flavor, boolean_t isdir, uid_t owner,
 
 out:
 
-#if !defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
+	return (error);
+#else
 	errno = error;
 	return (-1);
-#else
-	return (error);
 #endif
 }
 
@@ -1575,7 +1578,8 @@ acl_trivial_access_masks(mode_t mode, boolean_t isdir, trivial_acl_t *masks)
 	uint32_t write_mask = ACE_WRITE_DATA|ACE_APPEND_DATA;
 	uint32_t execute_mask = ACE_EXECUTE;
 
-	(void) isdir;	/* will need this later */
+	if (isdir)
+		write_mask |= ACE_DELETE_CHILD;
 
 	masks->deny1 = 0;
 	if (!(mode & S_IRUSR) && (mode & (S_IRGRP|S_IROTH)))
@@ -1719,10 +1723,17 @@ ace_trivial_common(void *acep, int aclcnt,
 			return (1);
 
 		/*
-		 * Delete permissions are never set by default
+		 * Delete permission is never set by default
 		 */
-		if (mask & (ACE_DELETE|ACE_DELETE_CHILD))
+		if (mask & ACE_DELETE)
 			return (1);
+
+		/*
+		 * Child delete permission should be accompanied by write
+		 */
+		if ((mask & ACE_DELETE_CHILD) && !(mask & ACE_WRITE_DATA))
+			return (1);
+
 		/*
 		 * only allow owner@ to have
 		 * write_acl/write_owner/write_attributes/write_xattr/

@@ -23,8 +23,9 @@
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2015 Joyent, Inc.
+ */
 
 /*
  * User Process Target Intel 32-bit component
@@ -39,10 +40,13 @@
 #include <mdb/mdb_ia32util.h>
 #include <mdb/mdb.h>
 
+#include <sys/ucontext.h>
 #include <sys/frame.h>
 #include <libproc.h>
 #include <sys/fp.h>
 #include <ieeefp.h>
+
+#include <stddef.h>
 
 const mdb_tgt_regdesc_t pt_regdesc[] = {
 	{ "gs", GS, MDB_TGT_R_EXPORT },
@@ -50,19 +54,36 @@ const mdb_tgt_regdesc_t pt_regdesc[] = {
 	{ "es", ES, MDB_TGT_R_EXPORT },
 	{ "ds", DS, MDB_TGT_R_EXPORT },
 	{ "edi", EDI, MDB_TGT_R_EXPORT },
+	{ "di",	EDI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "esi", ESI, MDB_TGT_R_EXPORT },
+	{ "si", ESI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "ebp", EBP, MDB_TGT_R_EXPORT },
+	{ "bp", EBP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "kesp", ESP, MDB_TGT_R_EXPORT },
+	{ "ksp", ESP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "ebx", EBX, MDB_TGT_R_EXPORT },
+	{ "bx", EBX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "bh", EBX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "bl", EBX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "edx", EDX, MDB_TGT_R_EXPORT },
+	{ "dx", EDX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "dh", EDX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "dl", EDX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "ecx", ECX, MDB_TGT_R_EXPORT },
+	{ "cx", ECX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "ch", ECX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "cl", ECX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "eax", EAX, MDB_TGT_R_EXPORT },
+	{ "ax", EAX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "ah", EAX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "al", EAX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "trapno", TRAPNO, MDB_TGT_R_EXPORT },
 	{ "err", ERR, MDB_TGT_R_EXPORT },
 	{ "eip", EIP, MDB_TGT_R_EXPORT },
 	{ "cs", CS, MDB_TGT_R_EXPORT },
 	{ "eflags", EFL, MDB_TGT_R_EXPORT },
 	{ "esp", UESP, MDB_TGT_R_EXPORT },
+	{ "sp", UESP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "ss", SS, MDB_TGT_R_EXPORT },
 	{ NULL, 0, 0 }
 };
@@ -90,9 +111,37 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	mdb_tgt_tid_t tid;
 	prgregset_t grs;
 	prgreg_t eflags;
+	boolean_t from_ucontext = B_FALSE;
 
-	if (argc != 0)
+	if (mdb_getopts(argc, argv,
+	    'u', MDB_OPT_SETBITS, B_TRUE, &from_ucontext, NULL) != argc) {
 		return (DCMD_USAGE);
+	}
+
+	if (from_ucontext) {
+		int off;
+		int o0, o1;
+
+		if (!(flags & DCMD_ADDRSPEC)) {
+			mdb_warn("-u requires a ucontext_t address\n");
+			return (DCMD_ERR);
+		}
+
+		o0 = mdb_ctf_offsetof_by_name("ucontext_t", "uc_mcontext");
+		o1 = mdb_ctf_offsetof_by_name("mcontext_t", "gregs");
+		if (o0 == -1 || o1 == -1) {
+			off = offsetof(ucontext_t, uc_mcontext) +
+			    offsetof(mcontext_t, gregs);
+		} else {
+			off = o0 + o1;
+		}
+
+		if (mdb_vread(&grs, sizeof (grs), addr + off) != sizeof (grs)) {
+			mdb_warn("failed to read from ucontext_t %p", addr);
+			return (DCMD_ERR);
+		}
+		goto print_regs;
+	}
 
 	if (t->t_pshandle == NULL || Pstate(t->t_pshandle) == PS_UNDEAD) {
 		mdb_warn("no process active\n");
@@ -114,6 +163,7 @@ pt_regs(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		return (DCMD_ERR);
 	}
 
+print_regs:
 	eflags = grs[EFL];
 
 	mdb_printf("%%cs = 0x%04x\t\t%%eax = 0x%0?p %A\n",

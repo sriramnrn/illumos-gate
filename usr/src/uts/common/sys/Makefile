@@ -18,8 +18,14 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014, Joyent, Inc. All rights reserved.
+# Copyright 2013 Garrett D'Amore <garrett@damore.org>
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
+# Copyright 2016 Nexenta Systems, Inc.
 #
 
 include $(SRC)/uts/Makefile.uts
@@ -86,7 +92,6 @@ CHKHDRS=			\
 	bitset.h		\
 	bl.h			\
 	blkdev.h		\
-	bmc_intf.h		\
 	bofi.h			\
 	bofi_impl.h		\
 	bpp_io.h		\
@@ -157,7 +162,7 @@ CHKHDRS=			\
 	ddi_impldefs.h		\
 	ddi_implfuncs.h		\
 	ddi_obsolete.h		\
-	ddi_timer.h		\
+	ddi_periodic.h		\
 	ddidevmap.h		\
 	ddidmareq.h		\
 	ddimapreq.h		\
@@ -200,6 +205,7 @@ CHKHDRS=			\
 	ecppio.h		\
 	ecppreg.h		\
 	ecppvar.h		\
+	edonr.h			\
 	efi_partition.h		\
 	elf.h			\
 	elf_386.h		\
@@ -211,6 +217,7 @@ CHKHDRS=			\
 	emul64cmd.h		\
 	emul64var.h		\
 	epm.h			\
+	epoll.h			\
 	errno.h			\
 	errorq.h		\
 	errorq_impl.h		\
@@ -218,6 +225,7 @@ CHKHDRS=			\
 	ethernet.h		\
 	euc.h			\
 	eucioctl.h		\
+	eventfd.h		\
 	exacct.h		\
 	exacct_catalog.h	\
 	exacct_impl.h		\
@@ -278,6 +286,8 @@ CHKHDRS=			\
 	ipc.h			\
 	ipc_impl.h		\
 	ipc_rctl.h		\
+	ipd.h			\
+	ipmi.h			\
 	isa_defs.h		\
 	iscsi_authclient.h	\
 	iscsi_authclientglue.h	\
@@ -406,6 +416,7 @@ CHKHDRS=			\
 	netstack.h		\
 	nexusdefs.h		\
 	note.h			\
+	null.h			\
 	nvpair.h		\
 	nvpair_impl.h		\
 	objfs.h			\
@@ -500,6 +511,8 @@ CHKHDRS=			\
 	sid.h			\
 	siginfo.h		\
 	signal.h		\
+	signalfd.h		\
+	skein.h			\
 	sleepq.h		\
 	smbios.h		\
 	smbios_impl.h		\
@@ -578,6 +591,7 @@ CHKHDRS=			\
 	time_std_impl.h		\
 	timeb.h			\
 	timer.h			\
+	timerfd.h		\
 	times.h			\
 	timex.h			\
 	timod.h			\
@@ -840,13 +854,6 @@ FMIOHDRS=			\
 
 FSHDRS=				\
 	autofs.h		\
-	cachefs_dir.h		\
-	cachefs_dlog.h		\
-	cachefs_filegrp.h	\
-	cachefs_fs.h		\
-	cachefs_fscache.h	\
-	cachefs_ioctl.h		\
-	cachefs_log.h		\
 	decomp.h		\
 	dv_node.h		\
 	sdev_impl.h		\
@@ -888,19 +895,12 @@ FSHDRS=				\
 	zfs.h			\
 	zut.h
 
-PCMCIAHDRS=		\
-	pcata.h		\
-	pcser_conf.h	\
-	pcser_io.h	\
-	pcser_reg.h	\
-	pcser_manuspec.h \
-	pcser_var.h
-
 SCSIHDRS=		\
 	scsi.h		\
 	scsi_address.h	\
 	scsi_ctl.h	\
 	scsi_fm.h	\
+	scsi_names.h	\
 	scsi_params.h	\
 	scsi_pkt.h	\
 	scsi_resource.h	\
@@ -1016,13 +1016,6 @@ USBHDRS=	\
 	usba.h	\
 	usbai.h
 
-UWBHDRS=	\
-	uwb.h	\
-	uwbai.h
-
-UWBAHDRS=	\
-	uwba.h
-
 USBAUDHDRS=           \
 	usb_audio.h
 
@@ -1032,9 +1025,6 @@ USBHUBDHDRS=		\
 
 USBHIDHDRS=		\
 	hid.h
-
-USBHWARCHDRS=		\
-	hwarc.h
 
 USBMSHDRS=		\
 	usb_bulkonly.h	\
@@ -1189,7 +1179,6 @@ CHECKHDRS=						\
 	$(FMIOHDRS:%.h=fm/io/%.check)			\
 	$(FSHDRS:%.h=fs/%.check)			\
 	$(LVMHDRS:%.h=lvm/%.check)			\
-	$(PCMCIAHDRS:%.h=pcmcia/%.check)		\
 	$(SCSIHDRS:%.h=scsi/%.check)			\
 	$(SCSIADHDRS:%.h=scsi/adapters/%.check)		\
 	$(SCSICONFHDRS:%.h=scsi/conf/%.check)		\
@@ -1205,7 +1194,6 @@ CHECKHDRS=						\
 	$(USBAUDHDRS:%.h=usb/clients/audio/%.check)   \
 	$(USBHUBDHDRS:%.h=usb/hubd/%.check)		\
 	$(USBHIDHDRS:%.h=usb/clients/hid/%.check)	\
-	$(USBHWARCHDRS:%.h=usb/clients/hwarc/%.check)	\
 	$(USBMSHDRS:%.h=usb/clients/mass_storage/%.check)	\
 	$(USBPRNHDRS:%.h=usb/clients/printer/%.check)   \
 	$(USBCDCHDRS:%.h=usb/clients/usbcdc/%.check)	\
@@ -1213,8 +1201,6 @@ CHECKHDRS=						\
 	$(USBWCMHDRS:%.h=usb/clients/usbinput/usbwcm/%.check)	\
 	$(UGENHDRS:%.h=usb/clients/ugen/%.check)   \
 	$(USBHDRS:%.h=usb/%.check)                      \
-	$(UWBHDRS:%.h=uwb/%.check)                      \
-	$(UWBAHDRS:%.h=uwb/uwba/%.check)                      \
 	$(I1394HDRS:%.h=1394/%.check)			\
 	$(RSMHDRS:%.h=rsm/%.check)			\
 	$(TSOLHDRS:%.h=tsol/%.check)			\
@@ -1259,7 +1245,6 @@ CHECKHDRS=						\
 	$(ROOTHERMONHDRS)	\
 	$(ROOTMLNXHDRS)		\
 	$(ROOTLVMHDRS)		\
-	$(ROOTPCMCIAHDRS)	\
 	$(ROOTSCSIHDRS)		\
 	$(ROOTSCSIADHDRS)	\
 	$(ROOTSCSICONFHDRS)	\
@@ -1329,7 +1314,6 @@ install_h:			\
 	$(ROOTHERMONHDRS)	\
 	$(ROOTMLNXHDRS)		\
 	$(ROOTLVMHDRS)		\
-	$(ROOTPCMCIAHDRS)	\
 	$(ROOTSCSIHDRS)		\
 	$(ROOTSCSIADHDRS)	\
 	$(ROOTSCSIISCSIHDRS)	\
@@ -1363,35 +1347,23 @@ install_h:			\
 all_h: $(GENHDRS)
 
 priv_const.h: $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v privhfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v privhfile=$@
 
 priv_names.h: $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pubhfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pubhfile=$@
 
 usb/usbdevs.h: $(USBDEVS_AWK) $(USBDEVS_DATA)
-	$(NAWK) -f $(USBDEVS_AWK) $(USBDEVS_DATA) -H > $@
+	$(AWK) -f $(USBDEVS_AWK) $(USBDEVS_DATA) -H > $@
 
 LVMDERIVED_H:
-	cd $(SRC)/uts/common/sys/lvm; pwd; $(MAKE)
+	cd $(SRC)/uts/common/sys/lvm; pwd; $(MAKE) all_h
 
 clean:
 	$(RM) $(GENHDRS)
 
-clobber:	clean
+clobber: clean
+	cd $(SRC)/uts/common/sys/lvm; pwd; $(MAKE) clobber
 
 check:	$(CHECKHDRS)
 
 FRC:
-
-# EXPORT DELETE START
-EXPORT_SRC:
-	$(RM) wanboot_impl.h+ Makefile+
-	sed -e "/EXPORT DELETE START/,/EXPORT DELETE END/d" \
-		< wanboot_impl.h > wanboot_impl.h+
-	$(MV) wanboot_impl.h+ wanboot_impl.h
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-		< Makefile > Makefile+
-	$(RM) Makefile
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile wanboot_impl.h
-# EXPORT DELETE END

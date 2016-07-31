@@ -23,8 +23,10 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ */
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -487,6 +489,7 @@ static void
 print_probe_info(const dtrace_probeinfo_t *p)
 {
 	char buf[BUFSIZ];
+	char *user;
 	int i;
 
 	oprintf("\n\tProbe Description Attributes\n");
@@ -510,10 +513,14 @@ print_probe_info(const dtrace_probeinfo_t *p)
 	oprintf("\n\tArgument Types\n");
 
 	for (i = 0; i < p->dtp_argc; i++) {
+		if (p->dtp_argv[i].dtt_flags & DTT_FL_USER)
+			user = "userland ";
+		else
+			user = "";
 		if (ctf_type_name(p->dtp_argv[i].dtt_ctfp,
 		    p->dtp_argv[i].dtt_type, buf, sizeof (buf)) == NULL)
 			(void) strlcpy(buf, "(unknown)", sizeof (buf));
-		oprintf("\t\targs[%d]: %s\n", i, buf);
+		oprintf("\t\targs[%d]: %s%s\n", i, user, buf);
 	}
 
 	if (p->dtp_argc == 0)
@@ -1339,6 +1346,7 @@ main(int argc, char *argv[])
 
 	(void) dtrace_setopt(g_dtp, "bufsize", "4m");
 	(void) dtrace_setopt(g_dtp, "aggsize", "4m");
+	(void) dtrace_setopt(g_dtp, "temporal", "yes");
 
 	/*
 	 * If -G is specified, enable -xlink=dynamic and -xunodefs to permit

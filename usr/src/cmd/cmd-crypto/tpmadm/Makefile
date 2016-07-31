@@ -35,8 +35,10 @@ POFILE = $(PROG)_msg.po
 MSGFILES=$(SRCS:%.c=%.i)
 
 CPPFLAGS += -xCC
-LINTFLAGS += -XCC  -L/usr/lib
+LINTFLAGS += -XCC  -L$(ADJUNCT_PROTO)/usr/lib
 LDLIBS += -ltspi -luuid
+
+CLOBBERFILES = C.ln $(POFILE) $(POFILES)
 
 .KEEP_STATE:
 

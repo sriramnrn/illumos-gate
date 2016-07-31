@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright 2011, 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2013 Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -48,7 +51,7 @@ static vfsdef_t vfw4 = {
 	VFSDEF_VERSION,
 	"nfs4",
 	nfs4init,
-	VSW_CANREMOUNT|VSW_NOTZONESAFE|VSW_STATS|VSW_ZMOUNT,
+	VSW_CANREMOUNT|VSW_NOTZONESAFE|VSW_STATS,
 	NULL
 };
 
@@ -58,9 +61,9 @@ struct modlfs modlfs4 = {
 	&vfw4
 };
 
-static uint_t nfs4_max_transfer_size = 32 * 1024;
-static uint_t nfs4_max_transfer_size_cots = 1024 * 1024;
-static uint_t nfs4_max_transfer_size_rdma = 1024 * 1024;
+uint_t nfs4_max_transfer_size = 32 * 1024;
+uint_t nfs4_max_transfer_size_cots = 1024 * 1024;
+uint_t nfs4_max_transfer_size_rdma = 1024 * 1024;
 
 int
 nfs4tsize(void)

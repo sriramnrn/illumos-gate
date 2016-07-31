@@ -1,59 +1,62 @@
 '\" te
-.\" Copyright 2012 Nexenta Systems, Inc. All rights reserved.
-.TH BEADM 1M "Feb 26, 2011"
+.\" Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+.\" Copyright 2015 Toomas Soome <tsoome@me.com>
+.TH BEADM 1M "Mar 2, 2015"
 .SH NAME
 beadm \- utility for managing zfs boot environments
 .SH SYNOPSIS
 .LP
 .nf
-\fBbeadm\fR create [\fB-a\fR] [\fB-d\fR \fIdescription\fR]
+\fBbeadm\fR \fBcreate\fR [\fB-a\fR] [\fB-d\fR \fIdescription\fR]
      [\fB-e\fR \fInon-activeBeName\fR | \fIbeName@snapshot\fR]
-     [\fB-o\fR \fIproperty=value\fR] ... [\fB-p\fR \fIzpool\FI] \fIbeName\fR
+     [\fB-o\fR \fIproperty=value\fR] ... [\fB-p\fR \fIzpool\fR]
+     [\fB-v\fR] \fIbeName\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBcreate\fR \fIbeName@snapshot\fR
+\fBbeadm\fR \fBcreate\fR [\fB-v\fR] \fIbeName@snapshot\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBdestroy\fR [\fB-fFs\fR] \fIbeName\fR | \fIbeName@snapshot\fR
+\fBbeadm\fR \fBdestroy\fR [\fB-fFsv\fR] \fIbeName\fR | \fIbeName@snapshot\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBlist\fR [\fB-a\fR | \fB-ds\fR] [\fB-H\fR] [\fIbeName\fR]
+\fBbeadm\fR \fBlist\fR [\fB-a\fR | \fB-ds\fR] [\fB-H\fR]
+    [\fB-k\fR|\fB-K\fR \fBdate\fR | \fBname\fR | \fBspace\fR] [\fB-v\fR] [\fIbeName\fR]
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBmount\fR \fIbeName\fR \fImountpoint\fR
+\fBbeadm\fR \fBmount\fR [\fB-s\fR \fBro\fR|\fBrw\fR] [\fB-v\fR] \fIbeName\fR \fImountpoint\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBunmount\fR [\fB-f\fR] \fIbeName\fR | \fImountpoint\fR
+\fBbeadm\fR \fBunmount\fR [\fB-fv\fR] \fIbeName\fR | \fImountpoint\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBrename\fR \fIbeName\fR \fInewBeName\fR
+\fBbeadm\fR \fBrename\fR [\fB-v\fR] \fIbeName\fR \fInewBeName\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBactivate\fR \fIbeName\fR
+\fBbeadm\fR \fBactivate\fR [\fB-v\fR] \fIbeName\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBrollback\fR \fIbeName\fR \fIsnapshot\fR
+\fBbeadm\fR \fBrollback\fR [\fB-v\fR] \fIbeName\fR \fIsnapshot\fR
 .fi
 
 .LP
 .nf
-\fBbeadm\fR \fBrollback\fR \fIbeName@snapshot\fR
+\fBbeadm\fR \fBrollback\fR [\fB-v\fR] \fIbeName@snapshot\fR
 .fi
 
 .SH DESCRIPTION
@@ -160,9 +163,9 @@ Displays command usage.
 .ne 2
 .na
 \fBbeadm\fR \fBcreate\fR [\fB-a\fR] [\fB-d\fR \fIdescription\fR]
-[\fB-e\fR \fInon-activeBeName\fR | \fIbeName@snapshot\fR]
-         [\fB-o\fR
-\fIproperty=value\fR] ... [\fB-p\fR \fIzpool\fR] \fIbeName\fR
+     [\fB-e\fR \fInon-activeBeName\fR | \fIbeName@snapshot\fR]
+     [\fB-o\fR \fIproperty=value\fR] ... [\fB-p\fR \fIzpool\fR]
+     [\fB-v\fR] \fIbeName\fR
 
 .ad
 .sp .6
@@ -238,23 +241,42 @@ the
 Create the new BE in the specified zpool.  If this is not provided, the
 default
 behavior is to create the new BE in the same pool as as the origin BE.
+This option is not supported in non-global zone.
+.RE
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
 .RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBcreate\fR \fIbeName@snapshot\fR
+\fBbeadm\fR \fBcreate\fR [\fB-v\fR] \fIbeName@snapshot\fR
 .ad
 .sp .6
 .RS 4n
 Creates a snapshot of the existing BE named beName.
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBdestroy\fR [\fB-fFs\fR] \fIbeName\fR | \fIbeName@snapshot\fR
+\fBbeadm\fR \fBdestroy\fR [\fB-fFsv\fR] \fIbeName\fR | \fIbeName@snapshot\fR
 .ad
 .sp .6
 .RS 4n
@@ -294,12 +316,22 @@ environment.
 Destroy all snapshots of the boot
 environment.
 .RE
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBlist\fR [\fB-a\fR | \fB-ds\fR] [\fB-H\fR] [\fIbeName\fR]
+\fBbeadm\fR \fBlist\fR [\fB-a\fR | \fB-ds\fR] [\fB-H\fR]
+    [\fB-k\fR|\fB-K\fR \fBdate\fR | \fBname\fR | \fBspace\fR] [\fB-v\fR] [\fIbeName\fR]
 .ad
 .sp .6
 .RS 4n
@@ -310,7 +342,12 @@ The 'Active'
 field indicates whether the boot environment is active now,
 represented
 by 'N'; active on reboot, represented by 'R'; or both, represented
-by 'NR'.
+by 'NR'. In non-global zone the 'Active' field also indicates whether the
+boot environment has a non-active parent BE, represented by 'x'; is active
+on boot in a non-active parent BE, represented by 'b'. Activate, rollback
+and snapshot operations for boot environments from non-active global parent
+BE aren't supported, destroy is allowed if these boot environments aren't
+active on boot.
 .sp
 Each line in the machine parasable output has the boot environment name as the
 first field.  The 'Space' field is displayed in bytes and the 'Created' field
@@ -318,7 +355,8 @@ is displayed in UTC format.  The \fB-H\fR option used with no other options
 gives
 the boot environment's uuid in the second field.  This field will be
 blank if
-the boot environment does not have a uuid.  See the EXAMPLES section.
+the boot environment does not have a uuid. See the EXAMPLES section.
+In non-global zones, this field shows the uuid of the parent BE.
 .sp
 .ne 2
 .na
@@ -358,23 +396,86 @@ Lists information about the snapshots of the boot environment.
 Do not list header information.  Each field in the list information is
 separated by a semicolon.
 .RE
+.sp
+.ne 2
+.na
+\fB-k\fR \fBdate\fR
+.ad
+.sp .6
+.RS 4n
+Sort BEs by date of creation in ascending order. This is default.
+.RE
+.sp
+.ne 2
+.na
+\fB-k\fR \fBname\fR
+.ad
+.sp .6
+.RS 4n
+Lexical sort of BEs by name in ascending order.
+.RE
+.sp
+.ne 2
+.na
+\fB-k\fR \fBspace\fR
+.ad
+.sp .6
+.RS 4n
+Sort BEs by space in ascending order.
+.RE
+.sp
+.ne 2
+.na
+\fB-K date\fR | \fBname\fR | \fBspace\fR
+.ad
+.sp .6
+.RS 4n
+Same as the \fB-k\fR option, but sorts in descending order.
+.RE
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBmount\fR \fIbeName\fR \fImountpoint\fR
+\fBbeadm\fR \fBmount\fR [\fB-s\fR \fBro\fR|\fBrw\fR] [\fB-v\fR] \fIbeName\fR \fImountpoint\fR
 .ad
 .sp .6
 .RS 4n
 Mounts a boot environment named beName at mountpoint.  mountpoint must be an
 already existing empty directory.
+.sp
+.ne 2
+.na
+\fB-s\fR \fBro\fR|\fBrw\fR
+.ad
+.sp .6
+.RS 4n
+Mount the shared filesystems of the BE in read-only or read-write mode.
+.RE
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBunmount\fR [\fB-f\fR] \fIbeName\fR | \fImountpoint\fR
+\fBbeadm\fR \fBunmount\fR [\fB-fv\fR] \fIbeName\fR | \fImountpoint\fR
 .ad
 .sp .6
 .RS 4n
@@ -389,37 +490,73 @@ beName mount point on the system.
 .RS 4n
 Forcefully unmount the boot environment even if its currently busy.
 .RE
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBrename\fR \fIbeName\fR \fInewBeName\fR
+\fBbeadm\fR \fBrename\fR [\fB-v\fR] \fIbeName\fR \fInewBeName\fR
 .ad
 .sp .6
 .RS 4n
 Renames the boot environment named \fIbeName\fR to \fInewBeName\fR.
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBrollback\fR \fIbeName\fR \fIsnapshot\fR | \fIbeName@snapshot\fR
+\fBbeadm\fR \fBrollback\fR [\fB-v\fR] \fIbeName\fR \fIsnapshot\fR | \fIbeName@snapshot\fR
 .ad
 .sp .6
 .RS 4n
 Roll back the boot environment named \fIbeName\fR to existing snapshot
 of the boot environment named \fIbeName@snapshot\fR.
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .sp
 .ne 2
 .na
-\fBbeadm\fR \fBactivate\fR \fIbeName\fR
+\fBbeadm\fR \fBactivate\fR [\fB-v\fR] \fIbeName\fR
 .ad
 .sp .6
 .RS 4n
 Makes beName the active BE on next reboot.
+.sp
+.ne 2
+.na
+\fB-v\fR
+.ad
+.sp .6
+.RS 4n
+Verbose mode. Displays verbose error messages from \fBbeadm\fR.
+.RE
 .RE
 
 .SH ALTERNATE BE LOCATION
@@ -664,7 +801,6 @@ BE5;215b8387-4968-627c-d2d0-f4a011414bab;NR;/;7786206208;static;1221004384
 .sp
 
 .SH EXIT STATUS
-.sp
 .LP
 The following exit values are returned:
 .sp
@@ -689,7 +825,6 @@ Failure
 
 
 .SH FILES
-.sp
 .LP
 .sp
 .ne 2
@@ -726,7 +861,6 @@ Contains default value for BENAME_STARTS_WITH parameter
 .RE
 
 .SH ATTRIBUTES
-.sp
 .LP
 See \fBattributes\fR(5) for descriptions of the  following  attributes:
 .sp
@@ -743,6 +877,5 @@ Interface Stability	Uncommitted
 
 
 .SH SEE ALSO
-.sp
 .LP
 .BR zfs (1M)

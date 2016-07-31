@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
 #ifndef	_INSTALLGRUB_H
@@ -42,7 +43,7 @@ typedef struct _device_data {
 	int		disk_fd;
 	int		slice;
 	int		partition;
-	uint32_t	start_sector;
+	uint64_t	start_sector;
 	char		boot_sector[SECTOR_SIZE];
 } ig_device_t;
 
@@ -53,6 +54,7 @@ typedef struct _stage2_data {
 	multiboot_header_t	*mboot;
 	uint32_t		mboot_off;
 	uint32_t		file_size;
+	uint32_t		extra_size;
 	uint32_t		buf_size;
 	uint32_t		first_sector;
 	uint32_t		pcfs_first_sectors[2];
@@ -66,10 +68,12 @@ typedef struct _ig_data {
 
 enum ig_devtype_t {
 	IG_DEV_X86BOOTPAR = 1,
-	IG_DEV_SOLVTOC
+	IG_DEV_SOLVTOC,
+	IG_DEV_EFI
 };
 
 #define	is_bootpar(type)	(type == IG_DEV_X86BOOTPAR)
+#define	is_efi(type)		(type == IG_DEV_EFI)
 
 #define	STAGE2_MEMADDR		(0x8000)	/* loading addr of stage2 */
 
@@ -84,7 +88,14 @@ enum ig_devtype_t {
 #define	STAGE2_BLOCKLIST	(SECTOR_SIZE - 0x8)
 #define	STAGE2_INSTALLPART	(SECTOR_SIZE + 0x8)
 #define	STAGE2_FORCE_LBA	(SECTOR_SIZE + 0x11)
-#define	STAGE2_BLKOFF		(50)	/* offset from start of fdisk part */
+#define	STAGE2_BLKOFF(type)	\
+	(is_efi(type) ? 1024 : 50)	/* offset from start of part */
+
+/*
+ * Maximum size of stage2 on EFI-labeled disks. Must not be larger than
+ * VDEV_BOOT_SIZE, defined in usr/src/uts/common/fs/zfs/sys/vdev_impl.h
+ */
+#define	STAGE2_MAXSIZE		(1ULL << 19)
 
 #ifdef	__cplusplus
 }

@@ -27,11 +27,13 @@
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.
+ */
 
 #ifndef _SYS_FLOCK_H
 #define	_SYS_FLOCK_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/fcntl.h>
@@ -40,6 +42,9 @@
 #include <sys/callb.h>
 #include <sys/param.h>
 #include <sys/zone.h>
+#if defined(_KERNEL)
+#include <sys/file.h>
+#endif
 
 #ifdef	__cplusplus
 extern "C" {
@@ -200,7 +205,7 @@ typedef enum {
     FLK_LOCKMGR_DOWN
 } flk_lockmgr_status_t;
 
-#if defined(_KERNEL)
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * The following structure is used to hold a list of locks returned
@@ -220,6 +225,10 @@ typedef struct locklist {
 #define	FLK_QUERY_ACTIVE	0x1
 #define	FLK_QUERY_SLEEPING	0x2
 
+#if defined(_KERNEL)
+int	ofdlock(file_t *, int, struct flock64 *, int, u_offset_t);
+void	ofdcleanlock(file_t *);
+#endif
 int	reclock(struct vnode *, struct flock64 *, int, int, u_offset_t,
 		flk_callback_t *);
 int	chklock(struct vnode *, int, u_offset_t, ssize_t, int,
@@ -238,6 +247,7 @@ int	flk_check_lock_data(u_offset_t, u_offset_t, offset_t);
 int	flk_has_remote_locks(struct vnode *vp);
 void	flk_set_lockmgr_status(flk_lockmgr_status_t status);
 int	flk_sysid_has_locks(int sysid, int chklck);
+int	flk_has_remote_locks_for_sysid(vnode_t *vp, int);
 void	flk_init_callback(flk_callback_t *,
 		callb_cpr_t *(*)(flk_cb_when_t, void *), void *);
 void	flk_add_callback(flk_callback_t *,

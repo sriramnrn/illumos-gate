@@ -26,6 +26,11 @@
  * rewritten from UCB 4.13 83/09/25
  * rewritten from SunOS 4.1 SID 1.18 89/10/06
  */
+/*
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 James S. Blachly, MD. All rights reserved.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -422,14 +427,14 @@ show_disk_header(void *v1, void *v2, void *data)
  *
  * 0---------1--------2---------3---------4---------5---------6---------7-------
  *    tty        sd0           sd1           sd2           sd3           cpu
- *  tin tout kps tps serv  kps tps serv  kps tps serv  kps tps serv  us sy wt id
+ *  tin tout kps tps serv  kps tps serv  kps tps serv  kps tps serv  us sy dt id
  *  NNN NNNN NNN NNN NNNN  NNN NNN NNNN  NNN NNN NNNN  NNN NNN NNNN  NN NN NN NN
  *
  * When -D is specified, the disk header looks as follows (worst case):
  *
  * 0---------1--------2---------3---------4---------5---------6---------7-------
  *     tty        sd0           sd1             sd2          sd3          cpu
- *   tin tout rps wps util  rps wps util  rps wps util  rps wps util us sy wt id
+ *   tin tout rps wps util  rps wps util  rps wps util  rps wps util us sy dt id
  *   NNN NNNN NNN NNN NNNN  NNN NNN NNNN  NNN NNN NNNN  NNN NNN NNNN NN NN NN NN
  */
 static void
@@ -940,7 +945,7 @@ usage(void)
 	    "Usage: iostat [-cCdDeEiImMnpPrstxXYz] "
 	    " [-l n] [-T d|u] [disk ...] [interval [count]]\n"
 	    "\t\t-c: 	report percentage of time system has spent\n"
-	    "\t\t\tin user/system/wait/idle mode\n"
+	    "\t\t\tin user/system/dtrace/idle mode\n"
 	    "\t\t-C: 	report disk statistics by controller\n"
 	    "\t\t-d: 	display disk Kb/sec, transfers/sec, avg. \n"
 	    "\t\t\tservice time in milliseconds  \n"
@@ -1012,18 +1017,28 @@ show_disk_errors(void *v1, void *v2, void *d)
 
 		switch (knp[i].data_type) {
 			case KSTAT_DATA_CHAR:
+			case KSTAT_DATA_STRING:
 				if ((strcmp(knp[i].name, "Serial No") == 0) &&
 				    do_devid) {
 					if (disk->is_devid) {
 						push_out("Device Id: %s ",
 						    disk->is_devid);
 						col += strlen(disk->is_devid);
-					} else
+					} else {
 						push_out("Device Id: ");
-				} else {
+					}
+
+					break;
+				}
+				if (knp[i].data_type == KSTAT_DATA_CHAR) {
 					push_out("%s: %-.16s ", knp[i].name,
 					    &knp[i].value.c[0]);
-					col += strlen(&knp[i].value.c[0]);
+					col += strnlen(&knp[i].value.c[0], 16);
+				} else {
+					push_out("%s: %s ", knp[i].name,
+					    KSTAT_NAMED_STR_PTR(&knp[i]));
+					col +=
+					    KSTAT_NAMED_STR_BUFLEN(&knp[i]) - 1;
 				}
 				break;
 			case KSTAT_DATA_ULONG:
@@ -1033,11 +1048,13 @@ show_disk_errors(void *v1, void *v2, void *d)
 				break;
 			case KSTAT_DATA_ULONGLONG:
 				if (strcmp(knp[i].name, "Size") == 0) {
-					push_out("%s: %2.2fGB <%llu bytes>\n",
+					do_newline();
+					push_out("%s: %2.2fGB <%llu bytes>",
 					    knp[i].name,
 					    (float)knp[i].value.ui64 /
 					    DISK_GIGABYTE,
 					    knp[i].value.ui64);
+					do_newline();
 					col = 0;
 					break;
 				}
@@ -1254,7 +1271,7 @@ do_args(int argc, char **argv)
 void
 do_format(void)
 {
-	char	header[SMALL_SCRATCH_BUFLEN];
+	char	header[SMALL_SCRATCH_BUFLEN] = {0};
 	char 	ch;
 	char 	iosz;
 	const char    *fstr;
@@ -1267,8 +1284,7 @@ do_format(void)
 			(void) sprintf(header, "s/w h/w trn tot ");
 		} else
 			(void) sprintf(header, "s/w,h/w,trn,tot");
-	} else
-		*header = NULL;
+	}
 	switch (do_disk & DISK_IO_MASK) {
 		case DISK_OLD:
 			if (do_raw == 0)
@@ -1305,8 +1321,15 @@ do_format(void)
 					    sizeof (disk_header),
 					    "device,r/%c,w/%c,%cr/%c,%cw/%c,"
 					    "wait,actv,svc_t,%%%%w,"
-					    "%%%%b,%s",
-					    ch, ch, iosz, ch, iosz, ch, header);
+					    "%%%%b%s%s",
+					    ch, ch, iosz, ch, iosz, ch,
+					    *header == '\0' ? "" : ",",
+					    header);
+					/*
+					 * if no -e flag, header == '\0...'
+					 * Ternary operator above is to prevent
+					 * trailing comma in full disk_header
+					 */
 				}
 			} else {
 				/* with -n option */
@@ -1318,6 +1341,18 @@ do_format(void)
 					fstr = "r/%c,w/%c,%cr/%c,%cw/%c,"
 					    "wait,actv,wsvc_t,asvc_t,"
 					    "%%%%w,%%%%b,%sdevice";
+					/*
+					 * if -rnxe, "tot" (from -e) and
+					 * "device" are run together
+					 * due to lack of trailing comma
+					 * in 'header'. However, adding
+					 * trailing comma to header at
+					 * its definition leads to prob-
+					 * lems elsewhere so it's added
+					 * here in this edge case -rnxe
+					 */
+					if (*header != '\0')
+						(void) strcat(header, ",");
 				}
 				(void) snprintf(disk_header,
 				    sizeof (disk_header),
@@ -1489,9 +1524,9 @@ print_cpu_hdr2(void)
 	char *dstr;
 
 	if (do_raw == 0)
-		dstr = " us sy wt id";
+		dstr = " us sy dt id";
 	else
-		dstr = "us,sy,wt,id";
+		dstr = "us,sy,dt,id";
 	push_out(dstr);
 }
 
@@ -1534,7 +1569,8 @@ print_cpu_data(void)
 	uint64_t idle;
 	uint64_t user;
 	uint64_t kern;
-	uint64_t wait;
+	uint64_t dtrace;
+	uint64_t nsec_elapsed;
 	kstat_t *oldks = NULL;
 
 	if (oldss)
@@ -1548,9 +1584,13 @@ print_cpu_data(void)
 	idle = kstat_delta(oldks, &newss->s_sys.ss_agg_sys, "cpu_ticks_idle");
 	user = kstat_delta(oldks, &newss->s_sys.ss_agg_sys, "cpu_ticks_user");
 	kern = kstat_delta(oldks, &newss->s_sys.ss_agg_sys, "cpu_ticks_kernel");
-	wait = kstat_delta(oldks, &newss->s_sys.ss_agg_sys, "cpu_ticks_wait");
+	dtrace = kstat_delta(oldks, &newss->s_sys.ss_agg_sys,
+	    "cpu_nsec_dtrace");
+	nsec_elapsed = newss->s_sys.ss_agg_sys.ks_snaptime -
+	    (oldks == NULL ? 0 : oldks->ks_snaptime);
 	push_out(fstr, user * percent, kern * percent,
-	    wait * percent, idle * percent);
+	    dtrace * 100.0 / nsec_elapsed / newss->s_nr_active_cpus,
+	    idle * percent);
 }
 
 /*

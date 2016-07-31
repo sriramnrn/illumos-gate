@@ -19,9 +19,9 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
  * Copyright (c) 2012 Gary Mills
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
  */
 
 /*
@@ -120,24 +120,12 @@ static struct regspec asy_regs[] = {
 
 /* Serial port interrupt vectors for COM1 to COM4. */
 static int asy_intrs[] = {0x4, 0x3, 0x4, 0x3};
+/* Bitfield indicating which interrupts are overridden by eeprom config */
+static uchar_t asy_intr_override = 0;
 
 /*
  *      Local data
  */
-static ddi_dma_lim_t ISA_dma_limits = {
-	0,		/* address low				*/
-	0x00ffffff,	/* address high				*/
-	0,		/* counter max				*/
-	1,		/* burstsize				*/
-	DMA_UNIT_8,	/* minimum xfer				*/
-	0,		/* dma speed				*/
-	(uint_t)DMALIM_VER0, /* version				*/
-	0x0000ffff,	/* address register			*/
-	0x0000ffff,	/* counter register			*/
-	1,		/* sector size				*/
-	0x00000001,	/* scatter/gather list length		*/
-	(uint_t)0xffffffff /* request size			*/
-};
 
 static ddi_dma_attr_t ISA_dma_attr = {
 	DMA_ATTR_V0,
@@ -255,9 +243,29 @@ int
 _init(void)
 {
 	int	err;
+	char tty_irq_param[9] = "ttyX-irq";
+	char *tty_irq;
+	int i;
 
 	if ((err = mod_install(&modlinkage)) != 0)
 		return (err);
+
+	/* Check if any tty irqs are overridden by eeprom config */
+	for (i = 0; i < num_BIOS_serial; i++) {
+		tty_irq_param[3] = 'a' + i;
+		if (ddi_prop_lookup_string(DDI_DEV_T_ANY, ddi_root_node(),
+		    DDI_PROP_DONTPASS, tty_irq_param, &tty_irq)
+		    == DDI_PROP_SUCCESS) {
+			long data;
+
+			if (ddi_strtol(tty_irq, NULL, 0, &data) == 0) {
+				asy_intrs[i] = (int)data;
+				asy_intr_override |= 1<<i;
+			}
+
+			ddi_prop_free(tty_irq);
+		}
+	}
 
 	impl_bus_add_probe(isa_enumerate);
 	return (0);
@@ -556,7 +564,6 @@ isa_dma_mctl(dev_info_t *dip, dev_info_t *rdip,
     off_t *offp, size_t *lenp, caddr_t *objp, uint_t flags)
 {
 	int rval;
-	ddi_dma_lim_t defalt;
 	int arg = (int)(uintptr_t)objp;
 
 	switch (request) {
@@ -596,10 +603,6 @@ isa_dma_mctl(dev_info_t *dip, dev_info_t *rdip,
 		i_dmae_swstart(rdip, arg);
 		return (DDI_SUCCESS);
 
-	case DDI_DMA_E_GETLIM:
-		bcopy(&ISA_dma_limits, objp, sizeof (ddi_dma_lim_t));
-		return (DDI_SUCCESS);
-
 	case DDI_DMA_E_GETATTR:
 		bcopy(&ISA_dma_attr, objp, sizeof (ddi_dma_attr_t));
 		return (DDI_SUCCESS);
@@ -617,14 +620,13 @@ isa_dma_mctl(dev_info_t *dip, dev_info_t *rdip,
 			return (i_dmae_prog(rdip, &req1stpty, NULL, arg));
 		}
 
-	case DDI_DMA_IOPB_ALLOC:	/* get contiguous DMA-able memory */
-	case DDI_DMA_SMEM_ALLOC:
-		if (!offp) {
-			defalt = ISA_dma_limits;
-			offp = (off_t *)&defalt;
-		}
-		/*FALLTHROUGH*/
 	default:
+		/*
+		 * We pass to rootnex, but it turns out that rootnex will just
+		 * return failure, as we don't use ddi_dma_mctl() except
+		 * for DMA engine (ISA) and DVMA (SPARC).  Arguably we could
+		 * just return an error direclty here, instead.
+		 */
 		rval = ddi_dma_mctl(dip, rdip, handle, request, offp,
 		    lenp, objp, flags);
 	}
@@ -1328,8 +1330,15 @@ enumerate_BIOS_serial(dev_info_t *isa_dip)
 			 */
 			ddi_prop_free(tmpregs);
 
-			if (found)
+			if (found) {
+				if (asy_intr_override & 1<<i) {
+					(void) ndi_prop_update_int(
+					    DDI_DEV_T_NONE, xdip,
+					    "interrupts", asy_intrs[i]);
+				}
+
 				break;
+			}
 		}
 
 		/* If not found, then add it */

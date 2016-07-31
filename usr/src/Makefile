@@ -18,9 +18,14 @@
 #
 # CDDL HEADER END
 #
+
 #
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+# Copyright 2015 OmniTI Computer Consulting, Inc. All rights reserved.
 #
+
 #
 # Makefile for system source
 #
@@ -31,7 +36,7 @@ include Makefile.master
 # it defines TARGETDIRS and ROOTDIRS.
 include Targetdirs
 
-COMMON_SUBDIRS=	uts lib cmd ucblib ucbcmd psm man
+COMMON_SUBDIRS=	uts lib cmd ucblib ucbcmd psm man test
 sparc_SUBDIRS= stand
 i386_SUBDIRS= grub
 
@@ -62,6 +67,9 @@ PARALLEL_DIRS = uts lib man
 # The check target also causes smf(5) service manifests to be validated.
 CHKMFSTSUBDIRS=	cmd
 
+# And man page formats
+CHKMANSUBDIRS = man
+
 MSGSUBDIRS=	cmd ucbcmd lib
 DOMAINS= \
 	SUNW_OST_ADMIN \
@@ -74,8 +82,8 @@ DOMAINS= \
 MSGDDIRS=       $(DOMAINS:%=$(MSGROOT)/%)
 MSGDIRS=        $(MSGROOT) $(MSGDDIRS) $(MSGROOT)/LC_TIME
 
-all all_xmod :=		TARGET= all
-install install_xmod :=	TARGET= install
+all :=			TARGET= all
+install :=		TARGET= install
 install1 :=		TARGET= install
 install2 :=		TARGET= install
 install_h :=		TARGET= install_h
@@ -115,7 +123,7 @@ install1: mapfiles closedbins sgs
 
 install2: install1 $(SUBDIRS)
 
-_msg: _msgdirs rootdirs install2 FRC
+_msg: _msgdirs rootdirs FRC
 	@for m in $(MSGSUBDIRS); do \
 		cd $$m; pwd; $(MAKE) _msg; cd ..; \
 	done
@@ -123,23 +131,38 @@ _msg: _msgdirs rootdirs install2 FRC
 mapfiles: bldtools
 	@cd common/mapfiles; pwd; $(MAKE) install
 
-clean clobber: $(SUBDIRS) head pkg
+clean: $(SUBDIRS) head pkg
+clobber: $(SUBDIRS) head pkg clobber_local
+clobber_local:
+	@cd tools; pwd; $(MAKE) clobber
+	@cd common/mapfiles; pwd; $(MAKE) clobber
+	@cd msg; pwd; $(MAKE) clobber
 
-closedbins: FRC $(ROOTDIRS)
+# If the tarballs are included inside ON_CLOSED_BINS, use those to extract and
+# preserve the permissions (in case a distro ships them).
+
+closedbins: bldtools $(ROOTDIRS) FRC
 	@CLOSED_ROOT="$$ON_CLOSED_BINS/root_$(MACH)$${RELEASE_BUILD+-nd}"; \
-	if [ "$$CLOSED_IS_PRESENT" = no ]; then \
-		if [ ! -d "$$CLOSED_ROOT" ]; then \
-			$(ECHO) "Error: if closed sources are not present," \
-			    "ON_CLOSED_BINS must point to closed binaries."; \
-			$(ECHO) "root_$(MACH)$${RELEASE_BUILD+-nd} is not" \
-			    "present in $$ON_CLOSED_BINS."; \
-			exit 1; \
-		fi; \
-		$(ECHO) "Copying closed binaries from $$CLOSED_ROOT"; \
-		(cd $$CLOSED_ROOT; \
-		    $(TAR) cfX - $(CODEMGR_WS)/exception_lists/closed-bins .) | \
-		    (cd $(ROOT); $(TAR) xBpf -); \
-	fi
+	if [ -f "$$ON_CLOSED_BINS/on-closed-bins$${RELEASE_BUILD+-nd}.$(MACH).tar.bz2" ]; then \
+		$(ECHO) "Extracting tarball $$ON_CLOSED_BINS/on-closed-bins$${RELEASE_BUILD+-nd}.$(MACH).tar.bz2"; \
+		(cd $(CODEMGR_WS); \
+		   $(TAR) xjpf $$ON_CLOSED_BINS/on-closed-bins$${RELEASE_BUILD+-nd}.$(MACH).tar.bz2); \
+		CLOSED_ROOT="$(CODEMGR_WS)/closed/root_$(MACH)$${RELEASE_BUILD+-nd}"; \
+	fi; \
+	if [ ! -d "$$CLOSED_ROOT" ]; then \
+		$(ECHO) "Error: ON_CLOSED_BINS must point to closed" \
+		    "binaries."; \
+		$(ECHO) "root_$(MACH)$${RELEASE_BUILD+-nd} is not" \
+		    "present in $$ON_CLOSED_BINS."; \
+		exit 1; \
+	fi; \
+	$(ECHO) "Copying closed binaries from $$CLOSED_ROOT"; \
+	(cd $$CLOSED_ROOT; \
+	    $(TAR) cfX - $(CODEMGR_WS)/exception_lists/closed-bins .) | \
+	    (cd $(ROOT); $(TAR) xBpf -); \
+	( cd $(ROOT); $(CTFSTRIP) $$(cd $$CLOSED_ROOT; $(FIND) \
+	    ./kernel ./usr/kernel ./platform/*/kernel -type f -a -perm -u+x | \
+	    $(EGREP) -vf $(CODEMGR_WS)/exception_lists/closed-bins) )
 
 #
 # Declare what parts can be built in parallel
@@ -196,138 +219,19 @@ cmdheaders: FRC
 	@cd cmd/fm; pwd; $(MAKE) install_h
 	@cd cmd/mdb; pwd; $(MAKE) install_h
 
-# each xmod target depends on a corresponding MACH-specific pseudotarget
-# before doing common xmod work
-#
-all_xmod install_xmod: $$@_$(MACH)
-	@cd uts/common/sys; pwd; $(MAKE) svvs_h
-
-all_xmod_sparc install_xmod_sparc: FRC
-	@cd uts/sparc; pwd; \
-	  $(MAKE) TARGET=$(TARGET) svvs pm wsdrv
-
-all_xmod_i386 install_xmod_i386: FRC
-	@cd uts/i86; pwd; $(MAKE) TARGET=$(TARGET) svvs
-
-check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS)
+check:	$(CHKHDRSUBDIRS) $(CHKMFSTSUBDIRS) $(CHKMANSUBDIRS)
 
 #
 # Cross-reference customization: skip all of the subdirectories that
 # don't contain actual source code.
 #
-$(CLOSED_BUILD)XRDIRS += ../closed
-XRPRUNE = pkg prototypes xmod
+XRPRUNE = pkg prototypes
 XRINCDIRS = uts/common head ucbhead
-$(CLOSED_BUILD)XRINCDIRS = uts/common ../closed/uts/common head ucbhead
 
 cscope.out tags: FRC
 	$(XREF) -f -x $@
 
 FRC:
-
-# EXPORT DELETE START
-
-XMOD_DELETE_FILES:sh = cat xmod/xmod_files
-
-EXPORT_SRC:
-	@cd $(CLOSED)/cmd/cmd-inet/usr.lib/in.iked;  pwd; $(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/cmd/cmd-inet/usr.lib/ike-certutils;  pwd; \
-	    $(MAKE) EXPORT_SRC
-	@cd cmd/cmd-inet/usr.sbin; pwd; $(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/cmd/cmd-crypto/etc; pwd; $(MAKE) EXPORT_SRC
-	@cd cmd/crypt;	  pwd; $(MAKE) EXPORT_SRC
-	@cd cmd/gss/gssd;         pwd; $(MAKE) EXPORT_SRC
-	@cd cmd/krb5/kadmin;  pwd; $(MAKE) EXPORT_SRC
-	@cd cmd/sendmail/src; pwd; $(MAKE) EXPORT_SRC
-	@cd common/crypto/aes;	  pwd; $(MAKE) EXPORT_SRC
-	@cd common/crypto/arcfour; pwd; $(MAKE) EXPORT_SRC
-	@cd common/crypto/blowfish;	  pwd; $(MAKE) EXPORT_SRC
-	@cd common/crypto/des;	  pwd; $(MAKE) EXPORT_SRC
-	@cd common/crypto/rsa;	  pwd; $(MAKE) EXPORT_SRC
-	@cd lib/crypt_modules/bsdbf; pwd ; $(MAKE) EXPORT_SRC
-	@cd lib/gss_mechs/mech_dummy;   pwd; $(MAKE) EXPORT_SRC
-	@cd lib/gss_mechs/mech_dh/backend;	pwd; $(MAKE) EXPORT_SRC
-	@cd lib/gss_mechs/mech_krb5;		pwd; $(MAKE) EXPORT_SRC
-	@cd lib/gss_mechs/mech_spnego;		pwd; $(MAKE) EXPORT_SRC
-	@cd lib/libcrypt; pwd; $(MAKE) EXPORT_SRC
-	@cd lib/libgss;   pwd; $(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/lib/libike;   pwd; $(MAKE) EXPORT_SRC
-	@cd lib/libnsl;	  pwd; $(MAKE) EXPORT_SRC
-	@cd lib/pkcs11/pkcs11_softtoken/common;  pwd; $(MAKE) EXPORT_SRC
-	@cd lib/libsldap; pwd; $(MAKE) EXPORT_SRC
-	@cd lib/libsasl; pwd; $(MAKE) EXPORT_SRC
-	@cd lib/sasl_plugins; pwd; $(MAKE) EXPORT_SRC
-	@cd lib/pam_modules/krb5;   pwd; $(MAKE) EXPORT_SRC
-	@cd psm/stand/boot; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/crypto/io; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/des; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/rpc; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/sys; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/gssapi/include;		pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/gssapi;			pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/gssapi/mechs/dummy;	pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common/gssapi/mechs/krb5;	pwd; $(MAKE) EXPORT_SRC
-	@cd uts/common; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/sparc; pwd; $(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/uts/sun4u/forthdebug; pwd; $(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/uts/sun4v/forthdebug; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/intel; pwd; $(MAKE) EXPORT_SRC
-	@cd uts/sun4u; pwd; $(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/uts/sun4v/io/ncp;	pwd;	$(MAKE) EXPORT_SRC
-	@cd $(CLOSED)/uts/sun4v/io/n2cp; pwd;	$(MAKE) EXPORT_SRC
-	@cd pkg; pwd;	$(MAKE) EXPORT_SRC
-	$(RM) -r $(XMOD_DELETE_FILES)
-	$(RM) Targetdirs+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-			< Targetdirs > Targetdirs+
-	$(MV) Targetdirs+ Targetdirs
-	$(CHMOD) 444 Targetdirs
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-			< Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-	$(RM) Makefile.master+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-			< Makefile.master > Makefile.master+
-	$(MV) Makefile.master+ Makefile.master
-	$(CHMOD) 444 Makefile.master
-
-CRYPT_SRC:
-	@cd $(CLOSED)/cmd/cmd-crypto/etc;  pwd; $(MAKE) CRYPT_SRC
-	@cd $(CLOSED)/cmd/cmd-inet/usr.lib/in.iked;  pwd; $(MAKE) CRYPT_SRC
-	@cd $(CLOSED)/cmd/cmd-inet/usr.lib/ike-certutils;  pwd; \
-	    $(MAKE) CRYPT_SRC
-	@cd lib/crypt_modules/bsdbf; pwd ; $(MAKE) CRYPT_SRC
-	@cd lib/gss_mechs/mech_dummy;   pwd; $(MAKE) CRYPT_SRC
-	@cd lib/gss_mechs/mech_dh/backend; pwd; $(MAKE) CRYPT_SRC
-	@cd lib/gss_mechs/mech_krb5; pwd; $(MAKE) CRYPT_SRC
-	@cd lib/gss_mechs/mech_spnego; pwd; $(MAKE) CRYPT_SRC
-	@cd $(CLOSED)/lib/libike;   pwd; $(MAKE) CRYPT_SRC
-	@cd lib/libnsl;	 pwd; $(MAKE) CRYPT_SRC
-	@cd lib/libsasl;	 pwd; $(MAKE) CRYPT_SRC
-	@cd lib/sasl_plugins; pwd; $(MAKE) CRYPT_SRC
-	@cd lib/pam_modules/krb5;   pwd; $(MAKE) CRYPT_SRC
-	@cd uts/common/gssapi;    pwd; $(MAKE) CRYPT_SRC
-	@cd uts/common/gssapi/include;    pwd; $(MAKE) CRYPT_SRC
-	@cd uts/common/gssapi/mechs/dummy;        pwd; $(MAKE) CRYPT_SRC
-	@cd uts/common/gssapi/mechs/krb5; pwd; $(MAKE) CRYPT_SRC
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-			< Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-	$(RM) Makefile.master+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-			< Makefile.master > Makefile.master+
-	$(MV) Makefile.master+ Makefile.master
-	$(CHMOD) 444 Makefile.master
-
-# EXPORT DELETE END
-
-ONC_PLUS:
-	@cd cmd/login; pwd; $(MAKE) ONC_PLUS
-	@cd uts; pwd; $(MAKE) ONC_PLUS
 
 #
 # Targets for reporting compiler versions; nightly uses these.

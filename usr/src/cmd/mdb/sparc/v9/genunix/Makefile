@@ -24,7 +24,6 @@
 # Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 
 MODULE = genunix.so
 MDBTGT = kvm
@@ -51,7 +50,7 @@ include ../../../../Makefile.cmd.64
 include ../../Makefile.sparcv9
 include ../../../Makefile.module
 
-dmod/$(MODULE) := LDLIBS += -lm
+dmod/$(MODULE) := LDLIBS += -lm -lproc
 
 #
 # We are not actually hardwiring some dependency on sun4u, we just need to
@@ -65,3 +64,13 @@ CPPFLAGS += -I$(SRC)/uts/sun4u
 CPPFLAGS += -I$(SRC)/uts/common
 # Needed to find include file mutex_impl.h
 CPPFLAGS += -I$(SRC)/uts/sparc/v9
+
+CERRWARN += -_gcc=-Wno-char-subscripts
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-type-limits
+
+LINTFLAGS64 += -erroff=E_EMPTY_TRANSLATION_UNIT
+
+MODSRCS_DIR = ../../../sparc/modules/genunix

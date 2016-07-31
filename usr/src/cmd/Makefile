@@ -20,14 +20,16 @@
 #
 
 # Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
-# Copyright 2011 Joyent, Inc.  All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright (c) 2012 Joyent, Inc.  All rights reserved.
 # Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2013 DEY Storage Systems, Inc. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 
 include ../Makefile.master
 
 #
-#	Note that the commands 'agents', 'lp', 'perl', and 'man' are first in
+#	Note that the commands 'lp', and 'perl' are first in
 #	the list, violating alphabetical order.  This is because they are very
 #	long-running and should be given the most wall-clock time for a
 #	parallel build.
@@ -51,7 +53,6 @@ COMMON_SUBDIRS=		\
 	availdevs	\
 	lp		\
 	perl		\
-	man		\
 	Adm		\
 	abi		\
 	adbgen		\
@@ -73,7 +74,6 @@ COMMON_SUBDIRS=		\
 	bc		\
 	bdiff		\
 	beadm		\
-	bfs		\
 	bnu		\
 	boot		\
 	busstat		\
@@ -156,7 +156,6 @@ COMMON_SUBDIRS=		\
 	filesync	\
 	fgrep		\
 	file		\
-	filebench	\
 	find		\
 	flowadm		\
 	flowstat	\
@@ -206,6 +205,7 @@ COMMON_SUBDIRS=		\
 	intrstat	\
 	ipcrm		\
 	ipcs		\
+	ipdadm		\
 	ipf		\
 	isainfo		\
 	isalist		\
@@ -215,13 +215,11 @@ COMMON_SUBDIRS=		\
 	iscsitsvc	\
 	isns		\
 	itadm		\
-	java		\
 	kbd		\
 	keyserv		\
 	killall		\
 	krb5		\
 	ksh		\
-	kstat		\
 	kvmstat		\
 	last		\
 	lastcomm	\
@@ -248,10 +246,13 @@ COMMON_SUBDIRS=		\
 	luxadm		\
 	lvm		\
 	mach		\
-	machid		\
 	mail		\
+	mailwrapper	\
 	mailx		\
+	make		\
 	makekey		\
+	man		\
+	mandoc		\
 	mdb		\
 	mesg		\
 	mkdir		\
@@ -431,6 +432,7 @@ COMMON_SUBDIRS=		\
 	users		\
 	utmp_update	\
 	utmpd		\
+	uuidgen		\
 	valtools	\
 	vgrind		\
 	vi		\
@@ -446,7 +448,6 @@ COMMON_SUBDIRS=		\
 	whodo		\
 	wracct		\
 	write		\
-	wusbadm		\
 	xargs		\
 	xstr		\
 	yes		\
@@ -469,27 +470,12 @@ COMMON_SUBDIRS=		\
 	zstreamdump	\
 	ztest
 
-$(CLOSED_BUILD)COMMON_SUBDIRS += \
-	$(CLOSED)/cmd/iconv	\
-	$(CLOSED)/cmd/ksh	\
-	$(CLOSED)/cmd/localedef	\
-	$(CLOSED)/cmd/more_xpg4	\
-	$(CLOSED)/cmd/mtst	\
-	$(CLOSED)/cmd/od	\
-	$(CLOSED)/cmd/patch	\
-	$(CLOSED)/cmd/pax	\
-	$(CLOSED)/cmd/printf	\
-	$(CLOSED)/cmd/sed	\
-	$(CLOSED)/cmd/sed_xpg4
-
 i386_SUBDIRS=		\
 	acpihpd		\
 	addbadsec	\
 	biosdev		\
 	diskscan	\
 	lms		\
-	ntfsprogs	\
-	parted		\
 	rtc		\
 	ucodeadm	\
 	xvm
@@ -511,12 +497,11 @@ sparc_SUBDIRS=		\
 	vntsd
 
 #
-# Commands that are messaged.  Note that 'lp' and 'man' come first
-# (see previous comment about 'lp' and 'man').
+# Commands that are messaged.  Note that 'lp' comes first
+# (see previous comment about 'lp'.)
 #
 MSGSUBDIRS=		\
 	lp		\
-	man		\
 	abi		\
 	acctadm		\
 	allocate	\
@@ -617,7 +602,6 @@ MSGSUBDIRS=		\
 	kbd		\
 	krb5		\
 	ksh		\
-	kstat		\
 	last		\
 	ldap		\
 	ldapcachemgr	\
@@ -631,6 +615,8 @@ MSGSUBDIRS=		\
 	luxadm		\
 	lvm		\
 	mailx		\
+	make		\
+	man		\
 	mesg		\
 	mkdir		\
 	mkpwdict	\
@@ -738,7 +724,6 @@ MSGSUBDIRS=		\
 	whodo		\
 	wracct		\
 	write		\
-	wusbadm		\
 	xargs		\
 	yppasswd	\
 	zdump		\
@@ -751,18 +736,6 @@ MSGSUBDIRS=		\
 	zonename	\
 	zpool		\
 	zonestat
-
-$(CLOSED_BUILD)MSGSUBDIRS += \
-	$(CLOSED)/cmd/iconv	\
-	$(CLOSED)/cmd/ksh	\
-	$(CLOSED)/cmd/localedef	\
-	$(CLOSED)/cmd/more_xpg4	\
-	$(CLOSED)/cmd/od	\
-	$(CLOSED)/cmd/patch	\
-	$(CLOSED)/cmd/pax	\
-	$(CLOSED)/cmd/printf	\
-	$(CLOSED)/cmd/sed	\
-	$(CLOSED)/cmd/sed_xpg4
 
 sparc_MSGSUBDIRS=	\
 	fruadm		\
@@ -789,9 +762,6 @@ DCSUBDIRS=		\
 	who		\
 	whodo		\
 	write
-
-$(CLOSED_BUILD)DCSUBDIRS += \
-	$(CLOSED)/cmd/pax
 
 #
 # commands that belong only to audit.
@@ -857,6 +827,7 @@ fs.d: fstyp
 ksh:	shcomp isaexec
 mdb:	terminfo
 print:	lp
+fmt:	mailx
 
 $(FIRST_SUBDIRS) $(BWOSDIRS) $(SUBDIRS) $(AUDITSUBDIRS): FRC
 	@if [ -f $@/Makefile  ]; then \

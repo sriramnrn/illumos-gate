@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1994, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -95,7 +96,7 @@ u_longlong_t nfs2_srv_caller_id;
 /* ARGSUSED */
 void
 rfs_getattr(fhandle_t *fhp, struct nfsattrstat *ns, struct exportinfo *exi,
-	struct svc_req *req, cred_t *cr)
+    struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	vnode_t *vp;
@@ -139,9 +140,10 @@ rfs_getattr_getfh(fhandle_t *fhp)
  * Sets the attributes of the file with the given fhandle.  Returns
  * the new attributes.
  */
+/* ARGSUSED */
 void
 rfs_setattr(struct nfssaargs *args, struct nfsattrstat *ns,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	int flag;
@@ -159,7 +161,7 @@ rfs_setattr(struct nfssaargs *args, struct nfsattrstat *ns,
 		return;
 	}
 
-	if (rdonly(exi, req) || vn_is_readonly(vp)) {
+	if (rdonly(ro, vp)) {
 		VN_RELE(vp);
 		ns->ns_status = NFSERR_ROFS;
 		return;
@@ -333,7 +335,7 @@ rfs_setattr_getfh(struct nfssaargs *args)
 /* ARGSUSED */
 void
 rfs_lookup(struct nfsdiropargs *da, struct nfsdiropres *dr,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	vnode_t *dvp;
@@ -483,7 +485,7 @@ rfs_lookup_getfh(struct nfsdiropargs *da)
 /* ARGSUSED */
 void
 rfs_readlink(fhandle_t *fhp, struct nfsrdlnres *rl, struct exportinfo *exi,
-	struct svc_req *req, cred_t *cr)
+    struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	struct iovec iov;
@@ -630,7 +632,7 @@ static int rdma_setup_read_data2(struct nfsreadargs *, struct nfsrdresult *);
 /* ARGSUSED */
 void
 rfs_read(struct nfsreadargs *ra, struct nfsrdresult *rr,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	vnode_t *vp;
 	int error;
@@ -911,9 +913,10 @@ static int rfs_write_sync_misses = 0;
  * Any changes made here, especially in error handling might have
  * to also be done in rfs_write (which clusters write requests).
  */
+/* ARGSUSED */
 void
 rfs_write_sync(struct nfswriteargs *wa, struct nfsattrstat *ns,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	vnode_t *vp;
@@ -934,7 +937,7 @@ rfs_write_sync(struct nfswriteargs *wa, struct nfsattrstat *ns,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, vp)) {
 		VN_RELE(vp);
 		ns->ns_status = NFSERR_ROFS;
 		return;
@@ -1133,6 +1136,7 @@ struct rfs_async_write {
 	struct nfsattrstat *ns;
 	struct svc_req *req;
 	cred_t *cr;
+	bool_t ro;
 	kthread_t *thread;
 	struct rfs_async_write *list;
 };
@@ -1162,7 +1166,7 @@ static int rfs_write_misses = 0;
  */
 void
 rfs_write(struct nfswriteargs *wa, struct nfsattrstat *ns,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	vnode_t *vp;
@@ -1193,7 +1197,7 @@ rfs_write(struct nfswriteargs *wa, struct nfsattrstat *ns,
 	caller_context_t ct;
 
 	if (!rfs_write_async) {
-		rfs_write_sync(wa, ns, exi, req, cr);
+		rfs_write_sync(wa, ns, exi, req, cr, ro);
 		return;
 	}
 
@@ -1208,6 +1212,7 @@ rfs_write(struct nfswriteargs *wa, struct nfsattrstat *ns,
 	nrp->ns = ns;
 	nrp->req = req;
 	nrp->cr = cr;
+	nrp->ro = ro;
 	nrp->thread = curthread;
 
 	ASSERT(curthread->t_schedflag & TS_DONT_SWAP);
@@ -1414,7 +1419,7 @@ rfs_write(struct nfswriteargs *wa, struct nfsattrstat *ns,
 	off = rp->wa->wa_offset;
 	len = (uint_t)0;
 	do {
-		if (rdonly(exi, rp->req)) {
+		if (rdonly(rp->ro, vp)) {
 			rp->ns->ns_status = NFSERR_ROFS;
 			t_flag = curthread->t_flag & T_WOULDBLOCK;
 			rp->thread->t_flag |= t_flag;
@@ -1667,7 +1672,7 @@ rfs_write_getfh(struct nfswriteargs *wa)
  */
 void
 rfs_create(struct nfscreatargs *args, struct nfsdiropres *dr,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	int lookuperr;
@@ -1786,7 +1791,7 @@ rfs_create(struct nfscreatargs *args, struct nfsdiropres *dr,
 	}
 
 	if (!lookup_ok) {
-		if (rdonly(exi, req)) {
+		if (rdonly(ro, dvp)) {
 			error = EROFS;
 		} else if (va.va_type != VREG && va.va_type != VFIFO &&
 		    va.va_type != VSOCK && secpolicy_sys_devices(cr) != 0) {
@@ -1932,9 +1937,10 @@ rfs_create_getfh(struct nfscreatargs *args)
  * Remove a file.
  * Remove named file from parent directory.
  */
+/* ARGSUSED */
 void
 rfs_remove(struct nfsdiropargs *da, enum nfsstat *status,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error = 0;
 	vnode_t *vp;
@@ -1955,7 +1961,7 @@ rfs_remove(struct nfsdiropargs *da, enum nfsstat *status,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, vp)) {
 		VN_RELE(vp);
 		*status = NFSERR_ROFS;
 		return;
@@ -2023,9 +2029,10 @@ rfs_remove_getfh(struct nfsdiropargs *da)
  * rename a file
  * Give a file (from) a new name (to).
  */
+/* ARGSUSED */
 void
 rfs_rename(struct nfsrnmargs *args, enum nfsstat *status,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error = 0;
 	vnode_t *fromvp;
@@ -2082,7 +2089,7 @@ rfs_rename(struct nfsrnmargs *args, enum nfsstat *status,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, tovp)) {
 		VN_RELE(tovp);
 		VN_RELE(fromvp);
 		*status = NFSERR_ROFS;
@@ -2171,9 +2178,10 @@ rfs_rename_getfh(struct nfsrnmargs *args)
  * Link to a file.
  * Create a file (to) which is a hard link to the given file (from).
  */
+/* ARGSUSED */
 void
 rfs_link(struct nfslinkargs *args, enum nfsstat *status,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	vnode_t *fromvp;
@@ -2225,7 +2233,7 @@ rfs_link(struct nfslinkargs *args, enum nfsstat *status,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, tovp)) {
 		VN_RELE(tovp);
 		VN_RELE(fromvp);
 		*status = NFSERR_ROFS;
@@ -2259,7 +2267,7 @@ rfs_link_getfh(struct nfslinkargs *args)
  */
 void
 rfs_symlink(struct nfsslargs *args, enum nfsstat *status,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	struct vattr va;
@@ -2283,7 +2291,7 @@ rfs_symlink(struct nfsslargs *args, enum nfsstat *status,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, vp)) {
 		VN_RELE(vp);
 		*status = NFSERR_ROFS;
 		return;
@@ -2350,9 +2358,10 @@ rfs_symlink_getfh(struct nfsslargs *args)
  * Create a directory with the given name, parent directory, and attributes.
  * Returns a file handle and attributes for the new directory.
  */
+/* ARGSUSED */
 void
 rfs_mkdir(struct nfscreatargs *args, struct nfsdiropres *dr,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	struct vattr va;
@@ -2374,7 +2383,7 @@ rfs_mkdir(struct nfscreatargs *args, struct nfsdiropres *dr,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, vp)) {
 		VN_RELE(vp);
 		dr->dr_status = NFSERR_ROFS;
 		return;
@@ -2441,13 +2450,13 @@ rfs_mkdir_getfh(struct nfscreatargs *args)
  * Remove a directory.
  * Remove the given directory name from the given parent directory.
  */
+/* ARGSUSED */
 void
 rfs_rmdir(struct nfsdiropargs *da, enum nfsstat *status,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	vnode_t *vp;
-
 
 	/*
 	 * Disallow NULL paths
@@ -2463,14 +2472,14 @@ rfs_rmdir(struct nfsdiropargs *da, enum nfsstat *status,
 		return;
 	}
 
-	if (rdonly(exi, req)) {
+	if (rdonly(ro, vp)) {
 		VN_RELE(vp);
 		*status = NFSERR_ROFS;
 		return;
 	}
 
 	/*
-	 * VOP_RMDIR now takes a new third argument (the current
+	 * VOP_RMDIR takes a third argument (the current
 	 * directory of the process).  That's because someone
 	 * wants to return EINVAL if one tries to remove ".".
 	 * Of course, NFS servers have no idea what their
@@ -2508,7 +2517,7 @@ rfs_rmdir_getfh(struct nfsdiropargs *da)
 /* ARGSUSED */
 void
 rfs_readdir(struct nfsrddirargs *rda, struct nfsrddirres *rd,
-	struct exportinfo *exi, struct svc_req *req, cred_t *cr)
+    struct exportinfo *exi, struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	int iseof;
@@ -2653,7 +2662,7 @@ rfs_rddirfree(struct nfsrddirres *rd)
 /* ARGSUSED */
 void
 rfs_statfs(fhandle_t *fh, struct nfsstatfs *fs, struct exportinfo *exi,
-	struct svc_req *req, cred_t *cr)
+    struct svc_req *req, cred_t *cr, bool_t ro)
 {
 	int error;
 	struct statvfs64 sb;

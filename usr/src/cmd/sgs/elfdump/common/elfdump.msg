@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 1997, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
 #
 
 @ _START_
@@ -131,6 +132,7 @@
 			 version definitions available: 0-%d\n"
 @ MSG_ERR_NOTSTRTAB	"%s: section[%d] is not a string table as expected \
 			 by section[%d]\n";
+@ MSG_ERR_BADCHAINIDX	"%s: %s: invalid chain index %d for bucket %d (max %d)\n"
 
 @ MSG_ERR_LDYNNOTADJ	"%s: bad dynamic symbol table layout: %s and %s \
 			 sections are not adjacent\n"
@@ -160,6 +162,7 @@
 			 range (0 - %d): %d\n";
 @ MSG_ERR_BADSIDYNTAG	"%s: [%d: %s][%d]: dynamic element \
 			 [%d: %s][%d] should have type %s: %s\n";
+@ MSG_ERR_BADCIEFDELEN	"%s: %s: invalid CIE/FDE length: %#llx at %#llx\n"
 
 
 @ MSG_WARN_INVINTERP1	"%s: PT_INTERP header has no associated section\n"
@@ -179,6 +182,10 @@
 
 @ MSG_INFO_LINUXOSABI	"%s: %s object has Linux .note.ABI-tag section. \
 			Assuming %s\n"
+
+@ MSG_ERR_DWOVRFLW	"%s: %s: encoded DWARF data exceeds section size\n"
+@ MSG_ERR_DWBADENC	"%s: %s: bad DWARF encoding: %#x\n"
+@ MSG_ERR_DWNOCIE	"%s: %s: no CIE prior to FDE\n"
 
 # exception_range_entry table entries.
 # TRANSLATION_NOTE - the following entries provide for a series of one or more
@@ -302,6 +309,7 @@
 			 architecture: %s\n"
 @ MSG_NOTE_BADCOREDATA	"%s: elfdump core file note data truncated or \
 			 otherwise malformed\n"
+@ MSG_NOTE_BADCORETYPE	"%s: unknown note type %#x\n"
 
 @ _END_
 
@@ -395,7 +403,7 @@
 @ MSG_UNW_CIECALGN	" codealign: %#llx  dataalign: %lld  \
 			  retaddr: %d"
 @ MSG_UNW_CIEAXVAL	" Augmentation Data:"
-@ MSG_UNW_CIEAXSIZ	"   size: %d"
+@ MSG_UNW_CIEAXSIZ	"   size: %lld"
 @ MSG_UNW_CIEAXPERS	"   personality:"
 @ MSG_UNW_CIEAXPERSENC	"       encoding: 0x%02x %s"
 @ MSG_UNW_CIEAXPERSRTN	"       routine:  %#08llx"
@@ -457,6 +465,7 @@
 @ MSG_CNOTE_DESC_PSINFO_T		"desc: (psinfo_t)"
 @ MSG_CNOTE_DESC_PSTATUS_T		"desc: (pstatus_t)"
 @ MSG_CNOTE_DESC_STRUCT_UTSNAME		"desc: (struct utsname)"
+@ MSG_CNOTE_DESC_PRFDINFO_T		"desc: (prfdinfo_t)"
 
 
 @ MSG_CNOTE_FMT_LINE		"%*s%-*s%s"
@@ -615,6 +624,17 @@
 @ MSG_CNOTE_T_UTS_RELEASE		"release:"
 @ MSG_CNOTE_T_UTS_SYSNAME		"sysname:"
 @ MSG_CNOTE_T_UTS_VERSION		"version:"
+@ MSG_CNOTE_T_PR_FD			"pr_fd:"
+@ MSG_CNOTE_T_PR_MODE			"pr_mode:"
+@ MSG_CNOTE_T_PR_PATH			"pr_path:"
+@ MSG_CNOTE_T_PR_MAJOR			"pr_major:"
+@ MSG_CNOTE_T_PR_MINOR			"pr_minor:"
+@ MSG_CNOTE_T_PR_RMAJOR			"pr_rmajor:"
+@ MSG_CNOTE_T_PR_RMINOR			"pr_rminor:"
+@ MSG_CNOTE_T_PR_OFFSET			"pr_offset:"
+@ MSG_CNOTE_T_PR_INO			"pr_ino:"
+@ MSG_CNOTE_T_PR_FILEFLAGS		"pr_fileflags:"
+@ MSG_CNOTE_T_PR_FDFLAGS		"pr_fdflags:"
 
 
 # Names of fake sections generated from program header data

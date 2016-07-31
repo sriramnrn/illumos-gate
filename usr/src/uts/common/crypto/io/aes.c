@@ -57,17 +57,6 @@ static struct modlinkage modlinkage = {
 };
 
 /*
- * The following definitions are to keep EXPORT_SRC happy.
- */
-#ifndef AES_MIN_KEY_BYTES
-#define	AES_MIN_KEY_BYTES		0
-#endif
-
-#ifndef AES_MAX_KEY_BYTES
-#define	AES_MAX_KEY_BYTES		0
-#endif
-
-/*
  * Mechanism info structure passed to KCF during registration.
  */
 static crypto_mech_info_t aes_mech_info_tab[] = {
@@ -306,8 +295,6 @@ aes_check_mech_param(crypto_mechanism_t *mechanism, aes_ctx_t **ctx, int kmflag)
 	return (rv);
 }
 
-/* EXPORT DELETE START */
-
 /*
  * Initialize key schedules for AES
  */
@@ -335,8 +322,6 @@ init_keysched(crypto_key_t *key, void *newbie)
 	aes_init_keysched(key->ck_data, key->ck_length, newbie);
 	return (CRYPTO_SUCCESS);
 }
-
-/* EXPORT DELETE END */
 
 /*
  * KCF software provider control entry points.
@@ -372,9 +357,6 @@ aes_common_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
     crypto_key_t *key, crypto_spi_ctx_template_t template,
     crypto_req_handle_t req, boolean_t is_encrypt_init)
 {
-
-/* EXPORT DELETE START */
-
 	aes_ctx_t *aes_ctx;
 	int rv;
 	int kmflag;
@@ -400,8 +382,6 @@ aes_common_init(crypto_ctx_t *ctx, crypto_mechanism_t *mechanism,
 
 	ctx->cc_provider_private = aes_ctx;
 
-/* EXPORT DELETE END */
-
 	return (CRYPTO_SUCCESS);
 }
 
@@ -426,8 +406,6 @@ aes_encrypt(crypto_ctx_t *ctx, crypto_data_t *plaintext,
     crypto_data_t *ciphertext, crypto_req_handle_t req)
 {
 	int ret = CRYPTO_FAILED;
-
-/* EXPORT DELETE START */
 
 	aes_ctx_t *aes_ctx;
 	size_t saved_length, saved_offset, length_needed;
@@ -534,8 +512,6 @@ aes_encrypt(crypto_ctx_t *ctx, crypto_data_t *plaintext,
 	ASSERT(aes_ctx->ac_remainder_len == 0);
 	(void) aes_free_context(ctx);
 
-/* EXPORT DELETE END */
-
 	return (ret);
 }
 
@@ -545,8 +521,6 @@ aes_decrypt(crypto_ctx_t *ctx, crypto_data_t *ciphertext,
     crypto_data_t *plaintext, crypto_req_handle_t req)
 {
 	int ret = CRYPTO_FAILED;
-
-/* EXPORT DELETE START */
 
 	aes_ctx_t *aes_ctx;
 	off_t saved_offset;
@@ -651,8 +625,6 @@ aes_decrypt(crypto_ctx_t *ctx, crypto_data_t *ciphertext,
 
 cleanup:
 	(void) aes_free_context(ctx);
-
-/* EXPORT DELETE END */
 
 	return (ret);
 }
@@ -825,9 +797,6 @@ static int
 aes_encrypt_final(crypto_ctx_t *ctx, crypto_data_t *data,
     crypto_req_handle_t req)
 {
-
-/* EXPORT DELETE START */
-
 	aes_ctx_t *aes_ctx;
 	int ret;
 
@@ -878,8 +847,6 @@ aes_encrypt_final(crypto_ctx_t *ctx, crypto_data_t *data,
 
 	(void) aes_free_context(ctx);
 
-/* EXPORT DELETE END */
-
 	return (CRYPTO_SUCCESS);
 }
 
@@ -888,9 +855,6 @@ static int
 aes_decrypt_final(crypto_ctx_t *ctx, crypto_data_t *data,
     crypto_req_handle_t req)
 {
-
-/* EXPORT DELETE START */
-
 	aes_ctx_t *aes_ctx;
 	int ret;
 	off_t saved_offset;
@@ -986,8 +950,6 @@ aes_decrypt_final(crypto_ctx_t *ctx, crypto_data_t *data,
 	}
 
 	(void) aes_free_context(ctx);
-
-/* EXPORT DELETE END */
 
 	return (CRYPTO_SUCCESS);
 }
@@ -1294,9 +1256,6 @@ aes_create_ctx_template(crypto_provider_handle_t provider,
     crypto_mechanism_t *mechanism, crypto_key_t *key,
     crypto_spi_ctx_template_t *tmpl, size_t *tmpl_size, crypto_req_handle_t req)
 {
-
-/* EXPORT DELETE START */
-
 	void *keysched;
 	size_t size;
 	int rv;
@@ -1327,8 +1286,6 @@ aes_create_ctx_template(crypto_provider_handle_t provider,
 	*tmpl = keysched;
 	*tmpl_size = size;
 
-/* EXPORT DELETE END */
-
 	return (CRYPTO_SUCCESS);
 }
 
@@ -1336,9 +1293,6 @@ aes_create_ctx_template(crypto_provider_handle_t provider,
 static int
 aes_free_context(crypto_ctx_t *ctx)
 {
-
-/* EXPORT DELETE START */
-
 	aes_ctx_t *aes_ctx = ctx->cc_provider_private;
 
 	if (aes_ctx != NULL) {
@@ -1352,8 +1306,6 @@ aes_free_context(crypto_ctx_t *ctx)
 		ctx->cc_provider_private = NULL;
 	}
 
-/* EXPORT DELETE END */
-
 	return (CRYPTO_SUCCESS);
 }
 
@@ -1364,9 +1316,6 @@ aes_common_init_ctx(aes_ctx_t *aes_ctx, crypto_spi_ctx_template_t *template,
     boolean_t is_encrypt_init)
 {
 	int rv = CRYPTO_SUCCESS;
-
-/* EXPORT DELETE START */
-
 	void *keysched;
 	size_t size;
 
@@ -1443,8 +1392,6 @@ aes_common_init_ctx(aes_ctx_t *aes_ctx, crypto_spi_ctx_template_t *template,
 			kmem_free(keysched, size);
 		}
 	}
-
-/* EXPORT DELETE END */
 
 	return (rv);
 }

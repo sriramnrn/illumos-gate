@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 /*
@@ -166,12 +167,11 @@ static struct _cpu_pause_info {
 	int		cp_count;	/* # of CPUs to pause */
 	ksema_t		cp_sem;		/* synch pause_cpus & cpu_pause */
 	kthread_id_t	cp_paused;
+	void		*(*cp_func)(void *);
 } cpu_pause_info;
 
 static kmutex_t pause_free_mutex;
 static kcondvar_t pause_free_cv;
-
-void *(*cpu_pause_func)(void *) = NULL;
 
 
 static struct cpu_sys_stats_ks_data {
@@ -182,9 +182,11 @@ static struct cpu_sys_stats_ks_data {
 	kstat_named_t cpu_nsec_idle;
 	kstat_named_t cpu_nsec_user;
 	kstat_named_t cpu_nsec_kernel;
+	kstat_named_t cpu_nsec_dtrace;
 	kstat_named_t cpu_nsec_intr;
 	kstat_named_t cpu_load_intr;
 	kstat_named_t wait_ticks_io;
+	kstat_named_t dtrace_probes;
 	kstat_named_t bread;
 	kstat_named_t bwrite;
 	kstat_named_t lread;
@@ -232,61 +234,63 @@ static struct cpu_sys_stats_ks_data {
 	kstat_named_t bawrite;
 	kstat_named_t iowait;
 } cpu_sys_stats_ks_data_template = {
-	{ "cpu_ticks_idle", 	KSTAT_DATA_UINT64 },
-	{ "cpu_ticks_user", 	KSTAT_DATA_UINT64 },
-	{ "cpu_ticks_kernel", 	KSTAT_DATA_UINT64 },
-	{ "cpu_ticks_wait", 	KSTAT_DATA_UINT64 },
+	{ "cpu_ticks_idle",	KSTAT_DATA_UINT64 },
+	{ "cpu_ticks_user",	KSTAT_DATA_UINT64 },
+	{ "cpu_ticks_kernel",	KSTAT_DATA_UINT64 },
+	{ "cpu_ticks_wait",	KSTAT_DATA_UINT64 },
 	{ "cpu_nsec_idle",	KSTAT_DATA_UINT64 },
 	{ "cpu_nsec_user",	KSTAT_DATA_UINT64 },
 	{ "cpu_nsec_kernel",	KSTAT_DATA_UINT64 },
+	{ "cpu_nsec_dtrace",	KSTAT_DATA_UINT64 },
 	{ "cpu_nsec_intr",	KSTAT_DATA_UINT64 },
 	{ "cpu_load_intr",	KSTAT_DATA_UINT64 },
-	{ "wait_ticks_io", 	KSTAT_DATA_UINT64 },
-	{ "bread", 		KSTAT_DATA_UINT64 },
-	{ "bwrite", 		KSTAT_DATA_UINT64 },
-	{ "lread", 		KSTAT_DATA_UINT64 },
-	{ "lwrite", 		KSTAT_DATA_UINT64 },
-	{ "phread", 		KSTAT_DATA_UINT64 },
-	{ "phwrite", 		KSTAT_DATA_UINT64 },
-	{ "pswitch", 		KSTAT_DATA_UINT64 },
-	{ "trap", 		KSTAT_DATA_UINT64 },
-	{ "intr", 		KSTAT_DATA_UINT64 },
-	{ "syscall", 		KSTAT_DATA_UINT64 },
-	{ "sysread", 		KSTAT_DATA_UINT64 },
-	{ "syswrite", 		KSTAT_DATA_UINT64 },
-	{ "sysfork", 		KSTAT_DATA_UINT64 },
-	{ "sysvfork", 		KSTAT_DATA_UINT64 },
-	{ "sysexec", 		KSTAT_DATA_UINT64 },
-	{ "readch", 		KSTAT_DATA_UINT64 },
-	{ "writech", 		KSTAT_DATA_UINT64 },
-	{ "rcvint", 		KSTAT_DATA_UINT64 },
-	{ "xmtint", 		KSTAT_DATA_UINT64 },
-	{ "mdmint", 		KSTAT_DATA_UINT64 },
-	{ "rawch", 		KSTAT_DATA_UINT64 },
-	{ "canch", 		KSTAT_DATA_UINT64 },
-	{ "outch", 		KSTAT_DATA_UINT64 },
-	{ "msg", 		KSTAT_DATA_UINT64 },
-	{ "sema", 		KSTAT_DATA_UINT64 },
-	{ "namei", 		KSTAT_DATA_UINT64 },
-	{ "ufsiget", 		KSTAT_DATA_UINT64 },
-	{ "ufsdirblk", 		KSTAT_DATA_UINT64 },
-	{ "ufsipage", 		KSTAT_DATA_UINT64 },
-	{ "ufsinopage", 	KSTAT_DATA_UINT64 },
-	{ "procovf", 		KSTAT_DATA_UINT64 },
-	{ "intrthread", 	KSTAT_DATA_UINT64 },
-	{ "intrblk", 		KSTAT_DATA_UINT64 },
+	{ "wait_ticks_io",	KSTAT_DATA_UINT64 },
+	{ "dtrace_probes",	KSTAT_DATA_UINT64 },
+	{ "bread",		KSTAT_DATA_UINT64 },
+	{ "bwrite",		KSTAT_DATA_UINT64 },
+	{ "lread",		KSTAT_DATA_UINT64 },
+	{ "lwrite",		KSTAT_DATA_UINT64 },
+	{ "phread",		KSTAT_DATA_UINT64 },
+	{ "phwrite",		KSTAT_DATA_UINT64 },
+	{ "pswitch",		KSTAT_DATA_UINT64 },
+	{ "trap",		KSTAT_DATA_UINT64 },
+	{ "intr",		KSTAT_DATA_UINT64 },
+	{ "syscall",		KSTAT_DATA_UINT64 },
+	{ "sysread",		KSTAT_DATA_UINT64 },
+	{ "syswrite",		KSTAT_DATA_UINT64 },
+	{ "sysfork",		KSTAT_DATA_UINT64 },
+	{ "sysvfork",		KSTAT_DATA_UINT64 },
+	{ "sysexec",		KSTAT_DATA_UINT64 },
+	{ "readch",		KSTAT_DATA_UINT64 },
+	{ "writech",		KSTAT_DATA_UINT64 },
+	{ "rcvint",		KSTAT_DATA_UINT64 },
+	{ "xmtint",		KSTAT_DATA_UINT64 },
+	{ "mdmint",		KSTAT_DATA_UINT64 },
+	{ "rawch",		KSTAT_DATA_UINT64 },
+	{ "canch",		KSTAT_DATA_UINT64 },
+	{ "outch",		KSTAT_DATA_UINT64 },
+	{ "msg",		KSTAT_DATA_UINT64 },
+	{ "sema",		KSTAT_DATA_UINT64 },
+	{ "namei",		KSTAT_DATA_UINT64 },
+	{ "ufsiget",		KSTAT_DATA_UINT64 },
+	{ "ufsdirblk",		KSTAT_DATA_UINT64 },
+	{ "ufsipage",		KSTAT_DATA_UINT64 },
+	{ "ufsinopage",		KSTAT_DATA_UINT64 },
+	{ "procovf",		KSTAT_DATA_UINT64 },
+	{ "intrthread",		KSTAT_DATA_UINT64 },
+	{ "intrblk",		KSTAT_DATA_UINT64 },
 	{ "intrunpin",		KSTAT_DATA_UINT64 },
-	{ "idlethread", 	KSTAT_DATA_UINT64 },
-	{ "inv_swtch", 		KSTAT_DATA_UINT64 },
-	{ "nthreads", 		KSTAT_DATA_UINT64 },
-	{ "cpumigrate", 	KSTAT_DATA_UINT64 },
-	{ "xcalls", 		KSTAT_DATA_UINT64 },
-	{ "mutex_adenters", 	KSTAT_DATA_UINT64 },
-	{ "rw_rdfails", 	KSTAT_DATA_UINT64 },
-	{ "rw_wrfails", 	KSTAT_DATA_UINT64 },
-	{ "modload", 		KSTAT_DATA_UINT64 },
-	{ "modunload", 		KSTAT_DATA_UINT64 },
-	{ "bawrite", 		KSTAT_DATA_UINT64 },
+	{ "idlethread",		KSTAT_DATA_UINT64 },
+	{ "inv_swtch",		KSTAT_DATA_UINT64 },
+	{ "nthreads",		KSTAT_DATA_UINT64 },
+	{ "cpumigrate",		KSTAT_DATA_UINT64 },
+	{ "xcalls",		KSTAT_DATA_UINT64 },
+	{ "mutex_adenters",	KSTAT_DATA_UINT64 },
+	{ "rw_rdfails",		KSTAT_DATA_UINT64 },
+	{ "rw_wrfails",		KSTAT_DATA_UINT64 },
+	{ "modload",		KSTAT_DATA_UINT64 },
+	{ "modunload",		KSTAT_DATA_UINT64 },
+	{ "bawrite",		KSTAT_DATA_UINT64 },
 	{ "iowait",		KSTAT_DATA_UINT64 },
 };
 
@@ -787,15 +791,15 @@ cpu_pause(int index)
 		 */
 		s = splhigh();
 		/*
-		 * if cpu_pause_func() has been set then call it using
-		 * index as the argument, currently only used by
-		 * cpr_suspend_cpus().  This function is used as the
-		 * code to execute on the "paused" cpu's when a machine
-		 * comes out of a sleep state and CPU's were powered off.
-		 * (could also be used for hotplugging CPU's).
+		 * if cp_func has been set then call it using index as the
+		 * argument, currently only used by cpr_suspend_cpus().
+		 * This function is used as the code to execute on the
+		 * "paused" cpu's when a machine comes out of a sleep state
+		 * and CPU's were powered off.  (could also be used for
+		 * hotplugging CPU's).
 		 */
-		if (cpu_pause_func != NULL)
-			(*cpu_pause_func)((void *)lindex);
+		if (cpi->cp_func != NULL)
+			(*cpi->cp_func)((void *)lindex);
 
 		mach_cpu_pause(safe);
 
@@ -983,7 +987,7 @@ cpu_pause_start(processorid_t cpu_id)
  * context.
  */
 void
-pause_cpus(cpu_t *off_cp)
+pause_cpus(cpu_t *off_cp, void *(*func)(void *))
 {
 	processorid_t	cpu_id;
 	int		i;
@@ -996,6 +1000,8 @@ pause_cpus(cpu_t *off_cp)
 	for (i = 0; i < NCPU; i++)
 		safe_list[i] = PAUSE_IDLE;
 	kpreempt_disable();
+
+	cpi->cp_func = func;
 
 	/*
 	 * If running on the cpu that is going offline, get off it.
@@ -1201,7 +1207,7 @@ cpu_online(cpu_t *cp)
 	error = mp_cpu_start(cp);	/* arch-dep hook */
 	if (error == 0) {
 		pg_cpupart_in(cp, cp->cpu_part);
-		pause_cpus(NULL);
+		pause_cpus(NULL, NULL);
 		cpu_add_active_internal(cp);
 		if (cp->cpu_flags & CPU_FAULTED) {
 			cp->cpu_flags &= ~CPU_FAULTED;
@@ -1400,7 +1406,7 @@ again:	for (loop_count = 0; (*bound_func)(cp, 0); loop_count++) {
 		 * Put all the cpus into a known safe place.
 		 * No mutexes can be entered while CPUs are paused.
 		 */
-		pause_cpus(cp);
+		pause_cpus(cp, NULL);
 		/*
 		 * Repeat the operation, if necessary, to make sure that
 		 * all outstanding low-level interrupts run to completion
@@ -1753,7 +1759,7 @@ cpu_add_unit(cpu_t *cp)
 	 * adding the cpu to the list.
 	 */
 	cp->cpu_part = &cp_default;
-	(void) pause_cpus(NULL);
+	pause_cpus(NULL, NULL);
 	cp->cpu_next = cpu_list;
 	cp->cpu_prev = cpu_list->cpu_prev;
 	cpu_list->cpu_prev->cpu_next = cp;
@@ -1848,7 +1854,7 @@ cpu_del_unit(int cpuid)
 	 * has been updated so that we don't waste time
 	 * trying to pause the cpu we're trying to delete.
 	 */
-	(void) pause_cpus(NULL);
+	pause_cpus(NULL, NULL);
 
 	cpnext = cp->cpu_next;
 	cp->cpu_prev->cpu_next = cp->cpu_next;
@@ -1920,7 +1926,7 @@ cpu_add_active(cpu_t *cp)
 {
 	pg_cpupart_in(cp, cp->cpu_part);
 
-	pause_cpus(NULL);
+	pause_cpus(NULL, NULL);
 	cpu_add_active_internal(cp);
 	start_cpus();
 
@@ -3206,6 +3212,8 @@ cpu_sys_stats_ks_update(kstat_t *ksp, int rw)
 	    NSEC_TO_TICK(csskd->cpu_nsec_user.value.ui64);
 	csskd->cpu_ticks_kernel.value.ui64 =
 	    NSEC_TO_TICK(csskd->cpu_nsec_kernel.value.ui64);
+	csskd->cpu_nsec_dtrace.value.ui64 = cp->cpu_dtrace_nsec;
+	csskd->dtrace_probes.value.ui64 = cp->cpu_dtrace_probes;
 	csskd->cpu_nsec_intr.value.ui64 = cp->cpu_intrlast;
 	csskd->cpu_load_intr.value.ui64 = cp->cpu_intrload;
 	csskd->bread.value.ui64 = css->bread;

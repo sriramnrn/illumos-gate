@@ -21,6 +21,8 @@
 /*
  * Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2014 Josef "Jeff" Sipek <jeffpc@josefsipek.net>
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
@@ -30,7 +32,7 @@
  * Portions Copyright 2009 Advanced Micro Devices, Inc.
  */
 /*
- * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  */
 /*
  * Various routines to handle identification
@@ -119,7 +121,6 @@ uint_t x86_type = X86_TYPE_OTHER;
 uint_t x86_clflush_size = 0;
 
 uint_t pentiumpro_bug4046376;
-uint_t pentiumpro_bug4064495;
 
 uchar_t x86_featureset[BT_SIZEOFMAP(NUM_X86_FEATURES)];
 
@@ -161,7 +162,16 @@ static char *x86_feature_names[NUM_X86_FEATURES] = {
 	"avx",
 	"vmx",
 	"svm",
-	"topoext"
+	"topoext",
+	"f16c",
+	"rdrand",
+	"x2apic",
+	"avx2",
+	"bmi1",
+	"bmi2",
+	"fma",
+	"smep",
+	"smap"
 };
 
 boolean_t
@@ -211,14 +221,13 @@ print_x86_featureset(void *featureset)
 	}
 }
 
-uint_t enable486;
-
 static size_t xsave_state_size = 0;
 uint64_t xsave_bv_all = (XFEATURE_LEGACY_FP | XFEATURE_SSE);
 boolean_t xsave_force_disable = B_FALSE;
+extern int disable_smap;
 
 /*
- * This is set to platform type Solaris is running on.
+ * This is set to platform type we are running on.
  */
 static int platform_type = -1;
 
@@ -269,7 +278,7 @@ struct xsave_info {
  * remaining elements are accessible via the cpuid instruction.
  */
 
-#define	NMAX_CPI_STD	6		/* eax = 0 .. 5 */
+#define	NMAX_CPI_STD	8		/* eax = 0 .. 7 */
 #define	NMAX_CPI_EXTD	0x1f		/* eax = 0x80000000 .. 0x8000001e */
 
 /*
@@ -311,7 +320,7 @@ struct cpuid_info {
 	id_t cpi_last_lvl_cacheid;	/* fn 4: %eax: derived cache id */
 	uint_t cpi_std_4_size;		/* fn 4: number of fn 4 elements */
 	struct cpuid_regs **cpi_std_4;	/* fn 4: %ecx == 0 .. fn4_size */
-	struct cpuid_regs cpi_std[NMAX_CPI_STD];	/* 0 .. 5 */
+	struct cpuid_regs cpi_std[NMAX_CPI_STD];	/* 0 .. 7 */
 	/*
 	 * extended function information
 	 */
@@ -328,12 +337,13 @@ struct cpuid_info {
 	/*
 	 * supported feature information
 	 */
-	uint32_t cpi_support[5];
+	uint32_t cpi_support[6];
 #define	STD_EDX_FEATURES	0
 #define	AMD_EDX_FEATURES	1
 #define	TM_EDX_FEATURES		2
 #define	STD_ECX_FEATURES	3
 #define	AMD_ECX_FEATURES	4
+#define	STD_EBX_FEATURES	5
 	/*
 	 * Synthesized information, where known.
 	 */
@@ -370,6 +380,7 @@ static struct cpuid_info cpuid_info0;
 #define	CPI_FEATURES_ECX(cpi)		((cpi)->cpi_std[1].cp_ecx)
 #define	CPI_FEATURES_XTD_EDX(cpi)	((cpi)->cpi_extd[1].cp_edx)
 #define	CPI_FEATURES_XTD_ECX(cpi)	((cpi)->cpi_extd[1].cp_ecx)
+#define	CPI_FEATURES_7_0_EBX(cpi)	((cpi)->cpi_std[7].cp_ebx)
 
 #define	CPI_BRANDID(cpi)	BITX((cpi)->cpi_std[1].cp_ebx, 7, 0)
 #define	CPI_CHUNKS(cpi)		BITX((cpi)->cpi_std[1].cp_ebx, 15, 7)
@@ -595,20 +606,20 @@ cpuid_free_space(cpu_t *cpu)
 }
 
 #if !defined(__xpv)
-
 /*
  * Determine the type of the underlying platform. This is used to customize
  * initialization of various subsystems (e.g. TSC). determine_platform() must
  * only ever be called once to prevent two processors from seeing different
- * values of platform_type, it must be called before cpuid_pass1(), the
- * earliest consumer to execute.
+ * values of platform_type. Must be called before cpuid_pass1(), the earliest
+ * consumer to execute (uses _cpuid_chiprev --> synth_amd_info --> get_hwenv).
  */
 void
 determine_platform(void)
 {
 	struct cpuid_regs cp;
-	char *xen_str;
-	uint32_t xen_signature[4], base;
+	uint32_t base;
+	uint32_t regs[4];
+	char *hvstr = (char *)regs;
 
 	ASSERT(platform_type == -1);
 
@@ -618,31 +629,75 @@ determine_platform(void)
 		return;
 
 	/*
-	 * In a fully virtualized domain, Xen's pseudo-cpuid function
-	 * returns a string representing the Xen signature in %ebx, %ecx,
-	 * and %edx. %eax contains the maximum supported cpuid function.
-	 * We need at least a (base + 2) leaf value to do what we want
-	 * to do. Try different base values, since the hypervisor might
-	 * use a different one depending on whether hyper-v emulation
-	 * is switched on by default or not.
+	 * If Hypervisor CPUID bit is set, try to determine hypervisor
+	 * vendor signature, and set platform type accordingly.
+	 *
+	 * References:
+	 * http://lkml.org/lkml/2008/10/1/246
+	 * http://kb.vmware.com/kb/1009458
 	 */
-	for (base = 0x40000000; base < 0x40010000; base += 0x100) {
-		cp.cp_eax = base;
+	cp.cp_eax = 0x1;
+	(void) __cpuid_insn(&cp);
+	if ((cp.cp_ecx & CPUID_INTC_ECX_HV) != 0) {
+		cp.cp_eax = 0x40000000;
 		(void) __cpuid_insn(&cp);
-		xen_signature[0] = cp.cp_ebx;
-		xen_signature[1] = cp.cp_ecx;
-		xen_signature[2] = cp.cp_edx;
-		xen_signature[3] = 0;
-		xen_str = (char *)xen_signature;
-		if (strcmp("XenVMMXenVMM", xen_str) == 0 &&
-		    cp.cp_eax >= (base + 2)) {
+		regs[0] = cp.cp_ebx;
+		regs[1] = cp.cp_ecx;
+		regs[2] = cp.cp_edx;
+		regs[3] = 0;
+		if (strcmp(hvstr, HVSIG_XEN_HVM) == 0) {
 			platform_type = HW_XEN_HVM;
+			return;
+		}
+		if (strcmp(hvstr, HVSIG_VMWARE) == 0) {
+			platform_type = HW_VMWARE;
+			return;
+		}
+		if (strcmp(hvstr, HVSIG_KVM) == 0) {
+			platform_type = HW_KVM;
+			return;
+		}
+		if (strcmp(hvstr, HVSIG_MICROSOFT) == 0)
+			platform_type = HW_MICROSOFT;
+	} else {
+		/*
+		 * Check older VMware hardware versions. VMware hypervisor is
+		 * detected by performing an IN operation to VMware hypervisor
+		 * port and checking that value returned in %ebx is VMware
+		 * hypervisor magic value.
+		 *
+		 * References: http://kb.vmware.com/kb/1009458
+		 */
+		vmware_port(VMWARE_HVCMD_GETVERSION, regs);
+		if (regs[1] == VMWARE_HVMAGIC) {
+			platform_type = HW_VMWARE;
 			return;
 		}
 	}
 
-	if (vmware_platform()) /* running under vmware hypervisor? */
-		platform_type = HW_VMWARE;
+	/*
+	 * Check Xen hypervisor. In a fully virtualized domain,
+	 * Xen's pseudo-cpuid function returns a string representing the
+	 * Xen signature in %ebx, %ecx, and %edx. %eax contains the maximum
+	 * supported cpuid function. We need at least a (base + 2) leaf value
+	 * to do what we want to do. Try different base values, since the
+	 * hypervisor might use a different one depending on whether Hyper-V
+	 * emulation is switched on by default or not.
+	 */
+	for (base = 0x40000000; base < 0x40010000; base += 0x100) {
+		cp.cp_eax = base;
+		(void) __cpuid_insn(&cp);
+		regs[0] = cp.cp_ebx;
+		regs[1] = cp.cp_ecx;
+		regs[2] = cp.cp_edx;
+		regs[3] = 0;
+		if (strcmp(hvstr, HVSIG_XEN_HVM) == 0 &&
+		    cp.cp_eax >= (base + 2)) {
+			platform_type &= ~HW_NATIVE;
+			platform_type |= HW_XEN_HVM;
+			return;
+		}
+	}
 }
 
 int
@@ -986,7 +1041,6 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 		else if (IS_LEGACY_P6(cpi)) {
 			x86_type = X86_TYPE_P6;
 			pentiumpro_bug4046376 = 1;
-			pentiumpro_bug4064495 = 1;
 			/*
 			 * Clear the SEP bit when it was set erroneously
 			 */
@@ -1155,6 +1209,8 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 	if (xsave_force_disable) {
 		mask_ecx &= ~CPUID_INTC_ECX_XSAVE;
 		mask_ecx &= ~CPUID_INTC_ECX_AVX;
+		mask_ecx &= ~CPUID_INTC_ECX_F16C;
+		mask_ecx &= ~CPUID_INTC_ECX_FMA;
 	}
 
 	/*
@@ -1172,6 +1228,43 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 	 * workarounds applied above first)
 	 */
 	platform_cpuid_mangle(cpi->cpi_vendor, 1, cp);
+
+	/*
+	 * In addition to ecx and edx, Intel is storing a bunch of instruction
+	 * set extensions in leaf 7's ebx.
+	 */
+	if (cpi->cpi_vendor == X86_VENDOR_Intel && cpi->cpi_maxeax >= 7) {
+		struct cpuid_regs *ecp;
+		ecp = &cpi->cpi_std[7];
+		ecp->cp_eax = 7;
+		ecp->cp_ecx = 0;
+		(void) __cpuid_insn(ecp);
+		/*
+		 * If XSAVE has been disabled, just ignore all of the AVX
+		 * dependent flags here.
+		 */
+		if (xsave_force_disable) {
+			ecp->cp_ebx &= ~CPUID_INTC_EBX_7_0_BMI1;
+			ecp->cp_ebx &= ~CPUID_INTC_EBX_7_0_BMI2;
+			ecp->cp_ebx &= ~CPUID_INTC_EBX_7_0_AVX2;
+		}
+
+		if (ecp->cp_ebx & CPUID_INTC_EBX_7_0_SMEP)
+			add_x86_feature(featureset, X86FSET_SMEP);
+
+		/*
+		 * We check disable_smap here in addition to in startup_smap()
+		 * to ensure CPUs that aren't the boot CPU don't accidentally
+		 * include it in the feature set and thus generate a mismatched
+		 * x86 feature set across CPUs. Note that at this time we only
+		 * enable SMAP for the 64-bit kernel.
+		 */
+#if defined(__amd64)
+		if (ecp->cp_ebx & CPUID_INTC_EBX_7_0_SMAP &&
+		    disable_smap == 0)
+			add_x86_feature(featureset, X86FSET_SMAP);
+#endif
+	}
 
 	/*
 	 * fold in overrides from the "eeprom" mechanism
@@ -1255,12 +1348,43 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 
 		if (cp->cp_ecx & CPUID_INTC_ECX_XSAVE) {
 			add_x86_feature(featureset, X86FSET_XSAVE);
+
 			/* We only test AVX when there is XSAVE */
 			if (cp->cp_ecx & CPUID_INTC_ECX_AVX) {
 				add_x86_feature(featureset,
 				    X86FSET_AVX);
+
+				/*
+				 * Intel says we can't check these without also
+				 * checking AVX.
+				 */
+				if (cp->cp_ecx & CPUID_INTC_ECX_F16C)
+					add_x86_feature(featureset,
+					    X86FSET_F16C);
+
+				if (cp->cp_ecx & CPUID_INTC_ECX_FMA)
+					add_x86_feature(featureset,
+					    X86FSET_FMA);
+
+				if (cpi->cpi_std[7].cp_ebx &
+				    CPUID_INTC_EBX_7_0_BMI1)
+					add_x86_feature(featureset,
+					    X86FSET_BMI1);
+
+				if (cpi->cpi_std[7].cp_ebx &
+				    CPUID_INTC_EBX_7_0_BMI2)
+					add_x86_feature(featureset,
+					    X86FSET_BMI2);
+
+				if (cpi->cpi_std[7].cp_ebx &
+				    CPUID_INTC_EBX_7_0_AVX2)
+					add_x86_feature(featureset,
+					    X86FSET_AVX2);
 			}
 		}
+	}
+	if (cp->cp_ecx & CPUID_INTC_ECX_X2APIC) {
+		add_x86_feature(featureset, X86FSET_X2APIC);
 	}
 	if (cp->cp_edx & CPUID_INTC_EDX_DE) {
 		add_x86_feature(featureset, X86FSET_DE);
@@ -1293,6 +1417,9 @@ cpuid_pass1(cpu_t *cpu, uchar_t *featureset)
 	if (cp->cp_ecx & CPUID_INTC_ECX_VMX) {
 		add_x86_feature(featureset, X86FSET_VMX);
 	}
+
+	if (cp->cp_ecx & CPUID_INTC_ECX_RDRAND)
+		add_x86_feature(featureset, X86FSET_RDRAND);
 
 	/*
 	 * Only need it first time, rest of the cpus would follow suit.
@@ -1889,15 +2016,46 @@ cpuid_pass2(cpu_t *cpu)
 				    "continue.", cpu->cpu_id);
 			} else {
 				/*
-				 * Must be from boot CPU, OK to disable XSAVE.
+				 * If we reached here on the boot CPU, it's also
+				 * almost certain that we'll reach here on the
+				 * non-boot CPUs. When we're here on a boot CPU
+				 * we should disable the feature, on a non-boot
+				 * CPU we need to confirm that we have.
 				 */
-				ASSERT(cpu->cpu_id == 0);
-				remove_x86_feature(x86_featureset,
-				    X86FSET_XSAVE);
-				remove_x86_feature(x86_featureset, X86FSET_AVX);
-				CPI_FEATURES_ECX(cpi) &= ~CPUID_INTC_ECX_XSAVE;
-				CPI_FEATURES_ECX(cpi) &= ~CPUID_INTC_ECX_AVX;
-				xsave_force_disable = B_TRUE;
+				if (cpu->cpu_id == 0) {
+					remove_x86_feature(x86_featureset,
+					    X86FSET_XSAVE);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_AVX);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_F16C);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_BMI1);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_BMI2);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_FMA);
+					remove_x86_feature(x86_featureset,
+					    X86FSET_AVX2);
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_XSAVE;
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_AVX;
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_F16C;
+					CPI_FEATURES_ECX(cpi) &=
+					    ~CPUID_INTC_ECX_FMA;
+					CPI_FEATURES_7_0_EBX(cpi) &=
+					    ~CPUID_INTC_EBX_7_0_BMI1;
+					CPI_FEATURES_7_0_EBX(cpi) &=
+					    ~CPUID_INTC_EBX_7_0_BMI2;
+					CPI_FEATURES_7_0_EBX(cpi) &=
+					    ~CPUID_INTC_EBX_7_0_AVX2;
+					xsave_force_disable = B_TRUE;
+				} else {
+					VERIFY(is_x86_feature(x86_featureset,
+					    X86FSET_XSAVE) == B_FALSE);
+				}
 			}
 		}
 	}
@@ -2354,7 +2512,7 @@ fabricate_brandstr(struct cpuid_info *cpi)
  * the other cpus.
  *
  * Fixup the brand string, and collect any information from cpuid
- * that requires dynamicically allocated storage to represent.
+ * that requires dynamically allocated storage to represent.
  */
 /*ARGSUSED*/
 void
@@ -2518,11 +2676,11 @@ cpuid_pass3(cpu_t *cpu)
  * the hardware feature support and kernel support for those features into
  * what we're actually going to tell applications via the aux vector.
  */
-uint_t
-cpuid_pass4(cpu_t *cpu)
+void
+cpuid_pass4(cpu_t *cpu, uint_t *hwcap_out)
 {
 	struct cpuid_info *cpi;
-	uint_t hwcap_flags = 0;
+	uint_t hwcap_flags = 0, hwcap_flags_2 = 0;
 
 	if (cpu == NULL)
 		cpu = CPU;
@@ -2533,9 +2691,11 @@ cpuid_pass4(cpu_t *cpu)
 	if (cpi->cpi_maxeax >= 1) {
 		uint32_t *edx = &cpi->cpi_support[STD_EDX_FEATURES];
 		uint32_t *ecx = &cpi->cpi_support[STD_ECX_FEATURES];
+		uint32_t *ebx = &cpi->cpi_support[STD_EBX_FEATURES];
 
 		*edx = CPI_FEATURES_EDX(cpi);
 		*ecx = CPI_FEATURES_ECX(cpi);
+		*ebx = CPI_FEATURES_7_0_EBX(cpi);
 
 		/*
 		 * [these require explicit kernel support]
@@ -2569,6 +2729,16 @@ cpuid_pass4(cpu_t *cpu)
 			    CPUID_INTC_ECX_OSXSAVE);
 		if (!is_x86_feature(x86_featureset, X86FSET_AVX))
 			*ecx &= ~CPUID_INTC_ECX_AVX;
+		if (!is_x86_feature(x86_featureset, X86FSET_F16C))
+			*ecx &= ~CPUID_INTC_ECX_F16C;
+		if (!is_x86_feature(x86_featureset, X86FSET_FMA))
+			*ecx &= ~CPUID_INTC_ECX_FMA;
+		if (!is_x86_feature(x86_featureset, X86FSET_BMI1))
+			*ebx &= ~CPUID_INTC_EBX_7_0_BMI1;
+		if (!is_x86_feature(x86_featureset, X86FSET_BMI2))
+			*ebx &= ~CPUID_INTC_EBX_7_0_BMI2;
+		if (!is_x86_feature(x86_featureset, X86FSET_AVX2))
+			*ebx &= ~CPUID_INTC_EBX_7_0_AVX2;
 
 		/*
 		 * [no explicit support required beyond x87 fp context]
@@ -2604,8 +2774,19 @@ cpuid_pass4(cpu_t *cpu)
 		    (*ecx & CPUID_INTC_ECX_OSXSAVE)) {
 			hwcap_flags |= AV_386_XSAVE;
 
-			if (*ecx & CPUID_INTC_ECX_AVX)
+			if (*ecx & CPUID_INTC_ECX_AVX) {
 				hwcap_flags |= AV_386_AVX;
+				if (*ecx & CPUID_INTC_ECX_F16C)
+					hwcap_flags_2 |= AV_386_2_F16C;
+				if (*ecx & CPUID_INTC_ECX_FMA)
+					hwcap_flags_2 |= AV_386_2_FMA;
+				if (*ebx & CPUID_INTC_EBX_7_0_BMI1)
+					hwcap_flags_2 |= AV_386_2_BMI1;
+				if (*ebx & CPUID_INTC_EBX_7_0_BMI2)
+					hwcap_flags_2 |= AV_386_2_BMI2;
+				if (*ebx & CPUID_INTC_EBX_7_0_AVX2)
+					hwcap_flags_2 |= AV_386_2_AVX2;
+			}
 		}
 		if (*ecx & CPUID_INTC_ECX_VMX)
 			hwcap_flags |= AV_386_VMX;
@@ -2624,6 +2805,9 @@ cpuid_pass4(cpu_t *cpu)
 			hwcap_flags |= AV_386_CMOV;
 		if (*ecx & CPUID_INTC_ECX_CX16)
 			hwcap_flags |= AV_386_CX16;
+
+		if (*ecx & CPUID_INTC_ECX_RDRAND)
+			hwcap_flags_2 |= AV_386_2_RDRAND;
 	}
 
 	if (cpi->cpi_xmaxeax < 0x80000001)
@@ -2739,7 +2923,10 @@ cpuid_pass4(cpu_t *cpu)
 
 pass4_done:
 	cpi->cpi_pass = 4;
-	return (hwcap_flags);
+	if (hwcap_out != NULL) {
+		hwcap_out[0] = hwcap_flags;
+		hwcap_out[1] = hwcap_flags_2;
+	}
 }
 
 

@@ -19,6 +19,7 @@
 # CDDL HEADER END
 #
 # Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
 # Common definitions for open and closed headers.
@@ -103,9 +104,6 @@ iscsit/%.check:		iscsit/%.h
 lvm/%.check:	lvm/%.h
 	$(DOT_H_CHECK)
 
-pcmcia/%.check:	pcmcia/%.h
-	$(DOT_H_CHECK)
-
 scsi/%.check:		scsi/%.h
 	$(DOT_H_CHECK)
 
@@ -143,9 +141,6 @@ usb/hubd/%.check:	usb/hubd/%.h
 	$(DOT_H_CHECK)
 
 usb/clients/hid/%.check:	usb/clients/hid/%.h
-	$(DOT_H_CHECK)
-
-usb/clients/hwarc/%.check:	usb/clients/hwarc/%.h
 	$(DOT_H_CHECK)
 
 usb/clients/mass_storage/%.check:	usb/clients/mass_storage/%.h
@@ -219,7 +214,6 @@ ROOTDIRS=			\
 	$(ROOTDIR)/idm		\
 	$(ROOTDIR)/iscsit	\
 	$(ROOTDIR)/lvm		\
-	$(ROOTDIR)/pcmcia	\
 	$(ROOTDIR)/scsi		\
 	$(ROOTDIR)/scsi/conf	\
 	$(ROOTDIR)/scsi/generic	\
@@ -232,15 +226,12 @@ ROOTDIRS=			\
 	$(ROOTDIR)/usb/clients	\
 	$(ROOTDIR)/usb/clients/audio  \
 	$(ROOTDIR)/usb/clients/hid \
-	$(ROOTDIR)/usb/clients/hwarc \
 	$(ROOTDIR)/usb/clients/mass_storage	\
 	$(ROOTDIR)/usb/clients/printer  \
 	$(ROOTDIR)/usb/clients/usbcdc  \
 	$(ROOTDIR)/usb/clients/video/usbvc  \
 	$(ROOTDIR)/usb/clients/usbinput/usbwcm \
 	$(ROOTDIR)/usb/clients/ugen  \
-	$(ROOTDIR)/uwb \
-	$(ROOTDIR)/uwb/uwba \
 	$(ROOTDIR)/1394         \
 	$(ROOTDIR)/rsm		\
 	$(ROOTDIR)/tsol		\
@@ -290,8 +281,6 @@ ROOTFSHDRS= $(FSHDRS:%=$(ROOTDIR)/fs/%)
 
 ROOTLVMHDRS= $(ALL_LVMHDRS:%=$(ROOTDIR)/lvm/%)
 
-ROOTPCMCIAHDRS= $(PCMCIAHDRS:%=$(ROOTDIR)/pcmcia/%)
-
 ROOTSCSIHDRS= $(SCSIHDRS:%=$(ROOTDIR)/scsi/%)
 ROOTSATAGENHDRS= $(SATAGENHDRS:%=$(ROOTDIR)/sata/%)
 ROOTSCSICONFHDRS= $(SCSICONFHDRS:%=$(ROOTDIR)/scsi/conf/%)
@@ -316,12 +305,9 @@ ROOTCONTRACTHDRS= $(CONTRACTHDRS:%=$(ROOTDIR)/contract/%)
 ROOTXHDRS= $(XHDRS:%=$(ROOTDIR)/%)
 
 ROOTUSBHDRS= $(USBHDRS:%=$(ROOTDIR)/usb/%)
-ROOTUWBHDRS= $(UWBHDRS:%=$(ROOTDIR)/uwb/%)
-ROOTUWBAHDRS= $(UWBAHDRS:%=$(ROOTDIR)/uwb/uwba/%)
 ROOTUSBAUDHDRS= $(USBAUDHDRS:%=$(ROOTDIR)/usb/clients/audio/%)
 ROOTUSBHUBDHDRS= $(USBHUBDHDRS:%=$(ROOTDIR)/usb/hubd/%)
 ROOTUSBHIDHDRS = $(USBHIDHDRS:%=$(ROOTDIR)/usb/clients/hid/%)
-ROOTUSBHWARCHDRS = $(USBHWARCHDRS:%=$(ROOTDIR)/usb/clients/hwarc/%)
 ROOTUSBMSHDRS= $(USBMSHDRS:%=$(ROOTDIR)/usb/clients/mass_storage/%)
 ROOTUSBPRNHDRS= $(USBPRNHDRS:%=$(ROOTDIR)/usb/clients/printer/%)
 ROOTUSBCDCHDRS= $(USBCDCHDRS:%=$(ROOTDIR)/usb/clients/usbcdc/%)
@@ -342,15 +328,13 @@ ROOTHOTPLUGPCIHDRS= $(HOTPLUGPCIHDRS:%=$(ROOTDIR)/hotplug/pci/%)
 ROOTTSOLHDRS= $(TSOLHDRS:%=$(ROOTDIR)/tsol/%)
 
 sparc_ROOTHDRS=	$(ROOTSDKTPHDRS) $(ROOTSCSICADHDRS) $(ROOTSCSITARGETSHDRS) \
-		$(ROOTUSBHDRS) $(ROOTUSBHUBDHDRS) $(ROOTPCMCIAHDRS) \
+		$(ROOTUSBHDRS) $(ROOTUSBHUBDHDRS) \
 		$(ROOTUSBAUDHDRS) $(ROOTUSBHIDHDRS) $(ROOTUSBMSHDRS) \
-		$(ROOTUSBPRNHDRS) $(ROOTUGENHDRS) $(ROOTUSBVIDHDRS) \
-		$(ROOTUWBHDRS) $(ROOTUWBAHDRS) $(ROOTUSBHWARCHDRS)
+		$(ROOTUSBPRNHDRS) $(ROOTUGENHDRS) $(ROOTUSBVIDHDRS)
 
 i386_ROOTHDRS=	$(ROOTDKTPHDRS) $(ROOTPCHDRS) $(ROOTSCSITARGETSHDRS)	\
-		$(ROOTSCSIVHCIHDRS) $(ROOTPCMCIAHDRS) $(ROOTHOTPLUGHDRS) \
-		$(ROOTHOTPLUGPCIHDRS) $(ROOTSATAGENHDRS) \
-		$(ROOTUWBHDRS) $(ROOTUWBAHDRS) $(ROOTUSBHWARCHDRS)
+		$(ROOTSCSIVHCIHDRS) $(ROOTHOTPLUGHDRS) \
+		$(ROOTHOTPLUGPCIHDRS) $(ROOTSATAGENHDRS)
 
 # install rules
 $(ROOTDIR)/%: %
@@ -432,9 +416,6 @@ $(ROOTDIR)/ib/adapters/%:	ib/adapters/%
 	$(INS.file)
 
 $(ROOTDIR)/lvm/%: lvm/%
-	$(INS.file)
-
-$(ROOTDIR)/pcmcia/%:		pcmcia/%
 	$(INS.file)
 
 $(ROOTDIR)/scsi/%:		scsi/%

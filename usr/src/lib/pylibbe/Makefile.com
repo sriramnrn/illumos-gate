@@ -21,6 +21,7 @@
 
 #
 # Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
 #
 
 LIBRARY =	libbe_py.a
@@ -33,6 +34,7 @@ PYTHON = 	$(PYTHON_26)
 LIBLINKS = 
 SRCDIR =	../common
 ROOTLIBDIR=	$(ROOT)/usr/lib/python2.6/vendor-packages
+ROOTLIBDIR64=	$(ROOT)/usr/lib/python2.6/vendor-packages/64
 PYOBJS=		$(PYSRCS:%.py=$(SRCDIR)/%.pyc)
 PYFILES=	$(PYSRCS) $(PYSRCS:%.py=%.pyc)
 ROOTPYBEFILES=  $(PYFILES:%=$(ROOTLIBDIR)/%)
@@ -42,7 +44,8 @@ C99MODE=        $(C99_ENABLE)
 LIBS =		$(DYNLIB)
 LDLIBS +=	-lbe -lnvpair -lc
 CFLAGS +=	$(CCVERBOSE)
-CPPFLAGS +=	-I/usr/include/python2.6 -D_FILE_OFFSET_BITS=64 -I../../libbe/common
+CPPFLAGS +=	-I$(ADJUNCT_PROTO)/usr/include/python2.6 \
+		-D_FILE_OFFSET_BITS=64 -I../../libbe/common
 
 .KEEP_STATE:
 

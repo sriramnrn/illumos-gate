@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2014 Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -309,9 +310,9 @@ lib_va_free(struct lib_va *lvp)
 		vmem_xfree(is_64bit ? lib_va_64_arena : lib_va_32_arena,
 		    lvp->lv_base_va, lvp->lv_len);
 		if (is_64bit) {
-			atomic_add_32(&libs_mapped_64, -1);
+			atomic_dec_32(&libs_mapped_64);
 		} else {
-			atomic_add_32(&libs_mapped_32, -1);
+			atomic_dec_32(&libs_mapped_32);
 		}
 	}
 	kmem_free(lvp, sizeof (struct lib_va));
@@ -472,10 +473,10 @@ lib_va_add_hash(caddr_t base_va, ssize_t len, size_t align, vattr_t *vap)
 
 	if (base_va != NULL) {
 		if (model == DATAMODEL_LP64) {
-			atomic_add_32(&libs_mapped_64, 1);
+			atomic_inc_32(&libs_mapped_64);
 		} else {
 			ASSERT(model == DATAMODEL_ILP32);
-			atomic_add_32(&libs_mapped_32, 1);
+			atomic_inc_32(&libs_mapped_32);
 		}
 	}
 	ASSERT(*tmp == NULL);
@@ -1126,10 +1127,23 @@ mmapobj_map_ptload(struct vnode *vp, caddr_t addr, size_t len, size_t zfodlen,
 		zfodbase = (caddr_t)P2ROUNDUP(end, PAGESIZE);
 		zfoddiff = (uintptr_t)zfodbase - end;
 		if (zfoddiff) {
+			/*
+			 * Before we go to zero the remaining space on the last
+			 * page, make sure we have write permission.
+			 *
+			 * We need to be careful how we zero-fill the last page
+			 * if the protection does not include PROT_WRITE. Using
+			 * as_setprot() can cause the VM segment code to call
+			 * segvn_vpage(), which must allocate a page struct for
+			 * each page in the segment. If we have a very large
+			 * segment, this may fail, so we check for that, even
+			 * though we ignore other return values from as_setprot.
+			 */
 			MOBJ_STAT_ADD(zfoddiff);
 			if ((prot & PROT_WRITE) == 0) {
-				(void) as_setprot(as, (caddr_t)end,
-				    zfoddiff, prot | PROT_WRITE);
+				if (as_setprot(as, (caddr_t)end, zfoddiff,
+				    prot | PROT_WRITE) == ENOMEM)
+					return (ENOMEM);
 				MOBJ_STAT_ADD(zfoddiff_nowrite);
 			}
 			if (on_fault(&ljb)) {
@@ -1470,7 +1484,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 			 * segdev and the type is neither MAP_SHARED
 			 * nor MAP_PRIVATE.
 			 */
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			seg = as_findseg(as, myaddr, 0);
 			MOBJ_STAT_ADD(exec_addr_mapped);
 			if (seg && seg->s_ops == &segdev_ops &&
@@ -1480,7 +1494,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 			    myaddr + mylen <=
 			    seg->s_base + seg->s_size) {
 				MOBJ_STAT_ADD(exec_addr_devnull);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				(void) as_unmap(as, myaddr, mylen);
 				ret = as_map(as, myaddr, mylen, segvn_create,
 				    &crargs);
@@ -1493,7 +1507,7 @@ check_exec_addrs(int loadable, mmapobj_result_t *mrp, caddr_t start_addr)
 					return (ret);
 				}
 			} else {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				as_rangeunlock(as);
 				mmapobj_unmap_exec(mrp, i, start_addr);
 				MOBJ_STAT_ADD(exec_addr_in_use);

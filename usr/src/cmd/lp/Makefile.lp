@@ -84,15 +84,25 @@ LINTREQ	=	$(LPLIB)/requests/llib-llpreq.ln
 LINTSEC	=	$(LPLIB)/secure/llib-llpsec.ln
 LINTUSR	=	$(LPLIB)/users/llib-llpusr.ln
 
-CFLAGS += -_gcc=-fwritable-strings -_gcc=-Wno-sequence-points
-CFLAGS64 += -_gcc=-fwritable-strings -_gcc=-Wno-sequence-points
+CERRWARN +=	-_gcc=-Wno-sequence-point
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-unused-value
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-unused-function
+CERRWARN +=	-_gcc=-Wno-clobbered
+CERRWARN +=	-_gcc=-Wno-empty-body
+CERRWARN +=	-_gcc=-Wno-extra
+CERRWARN +=	-_gcc=-Wno-address
 
-all:=           TARGET= all
-install:=       TARGET= install
-clean:=         TARGET= clean
-clobber:=       TARGET= clobber
-lint:=          TARGET= lint
-strip:=          TARGET= strip
+all:=		TARGET= all
+install:=	TARGET= install
+clean:=		TARGET= clean
+clobber:=	TARGET= clobber
+lint:=		TARGET= lint
+strip:=		TARGET= strip
 catalog:=	TARGET= catalog
 _msg:=		TARGET= catalog
 

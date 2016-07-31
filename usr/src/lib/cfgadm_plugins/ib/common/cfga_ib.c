@@ -1557,7 +1557,7 @@ ib_fill_static_apids(char *ap_id, cfga_list_data_t *clp)
 
 	/* Get /dev/cfg path to corresponding to the physical ap_id */
 	/* Remember ap_id_log must be freed */
-	if ((cfga_ib_ret_t)ib_physpath_to_devlink(ap_id, &ap_id_log,
+	if (ib_physpath_to_devlink(ap_id, &ap_id_log,
 	    &l_err) != ICFGA_OK) {
 		DPRINTF("ib_fill_static_apids: "
 		    "ib_physpath_to_devlink failed\n");
@@ -1970,8 +1970,7 @@ cfga_list_ext(const char *ap_id, cfga_list_data_t **ap_id_list, int *nlistp,
 	}
 
 	S_FREE(snap_data);
-	if (nvl)
-		nvlist_free(nvl);
+	nvlist_free(nvl);
 
 	/*
 	 * if a cmdline specified ap_id doesn't match the known list of ap_ids

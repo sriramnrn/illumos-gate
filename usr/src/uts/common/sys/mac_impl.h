@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
  */
 
 #ifndef	_SYS_MAC_IMPL_H
@@ -66,6 +67,13 @@ struct mac_margin_req_s {
 	mac_margin_req_t	*mmr_nextp;
 	uint_t			mmr_ref;
 	uint32_t		mmr_margin;
+};
+
+typedef struct mac_mtu_req_s mac_mtu_req_t;
+struct mac_mtu_req_s {
+	mac_mtu_req_t		*mtr_nextp;
+	uint_t			mtr_ref;
+	uint32_t		mtr_mtu;
 };
 
 /* Generic linked chain type */
@@ -533,6 +541,7 @@ struct mac_impl_s {
 	 * sorted: the first one has the greatest value.
 	 */
 	mac_margin_req_t	*mi_mmrp;
+	mac_mtu_req_t		*mi_mtrp;
 	char			**mi_priv_prop;
 	uint_t			mi_priv_prop_count;
 
@@ -875,9 +884,9 @@ extern int mac_protect_set(mac_client_handle_t, mac_resource_props_t *);
 extern boolean_t mac_protect_enabled(mac_client_handle_t, uint32_t);
 extern int mac_protect_validate(mac_resource_props_t *);
 extern void mac_protect_update(mac_resource_props_t *, mac_resource_props_t *);
-extern void mac_protect_update_v6_local_addr(mac_client_impl_t *);
-extern void mac_protect_intercept_dhcp(mac_client_impl_t *, mblk_t *);
-extern void mac_protect_flush_dhcp(mac_client_impl_t *);
+extern void mac_protect_update_mac_token(mac_client_impl_t *);
+extern void mac_protect_intercept_dynamic(mac_client_impl_t *, mblk_t *);
+extern void mac_protect_flush_dynamic(mac_client_impl_t *);
 extern void mac_protect_cancel_timer(mac_client_impl_t *);
 extern void mac_protect_init(mac_client_impl_t *);
 extern void mac_protect_fini(mac_client_impl_t *);

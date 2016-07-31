@@ -23,7 +23,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ */
 
 /*
  * Process switching routines.
@@ -43,6 +45,7 @@
 #include <sys/privregs.h>
 #include <sys/stack.h>
 #include <sys/segments.h>
+#include <sys/psw.h>
 
 /*
  * resume(thread_id_t t);
@@ -237,12 +240,36 @@ resume(kthread_t *t)
 	leaq	resume_return(%rip), %r11
 
 	/*
+	 * Deal with SMAP here. A thread may be switched out at any point while
+	 * it is executing. The thread could be under on_fault() or it could be
+	 * pre-empted while performing a copy interruption. If this happens and
+	 * we're not in the context of an interrupt which happens to handle
+	 * saving and restoring rflags correctly, we may lose our SMAP related
+	 * state.
+	 *
+	 * To handle this, as part of being switched out, we first save whether
+	 * or not userland access is allowed ($PS_ACHK in rflags) and store that
+	 * in t_useracc on the kthread_t and unconditionally enable SMAP to
+	 * protect the system.
+	 *
+	 * Later, when the thread finishes resuming, we potentially disable smap
+	 * if PS_ACHK was present in rflags. See uts/intel/ia32/ml/copy.s for
+	 * more information on rflags and SMAP.
+	 */
+	pushfq
+	popq	%rsi
+	andq	$PS_ACHK, %rsi
+	movq	%rsi, T_USERACC(%rax)
+	call	smap_enable
+
+	/*
 	 * Save non-volatile registers, and set return address for current
 	 * thread to resume_return.
 	 *
 	 * %r12 = t (new thread) when done
 	 */
 	SAVE_REGS(%rax, %r11)
+
 
 	LOADCPU(%r15)				/* %r15 = CPU */
 	movq	CPU_THREAD(%r15), %r13		/* %r13 = curthread */
@@ -355,6 +382,7 @@ resume(kthread_t *t)
 #endif	/* __xpv */
 
 	movq	%r12, CPU_THREAD(%r13)	/* set CPU's thread pointer */
+	mfence				/* synchronize with mutex_exit() */
 	xorl	%ebp, %ebp		/* make $<threadlist behave better */
 	movq	T_LWP(%r12), %rax 	/* set associated lwp to  */
 	movq	%rax, CPU_LWP(%r13) 	/* CPU's lwp ptr */
@@ -382,6 +410,19 @@ resume(kthread_t *t)
 .norestorepctx:
 	
 	STORE_INTR_START(%r12)
+
+	/*
+	 * If we came into swtch with the ability to access userland pages, go
+	 * ahead and restore that fact by disabling SMAP.  Clear the indicator
+	 * flag out of paranoia.
+	 */
+	movq	T_USERACC(%r12), %rax	/* should we disable smap? */
+	cmpq	$0, %rax		/* skip call when zero */
+	jz	.nosmap
+	xorq	%rax, %rax
+	movq	%rax, T_USERACC(%r12)
+	call	smap_disable
+.nosmap:
 
 	/*
 	 * Restore non-volatile registers, then have spl0 return to the
@@ -519,6 +560,7 @@ resume_return:
 #endif	/* __xpv */
 
 	movl	%edi, CPU_THREAD(%esi)	/* set CPU's thread pointer */
+	mfence				/* synchronize with mutex_exit() */
 	xorl	%ebp, %ebp		/* make $<threadlist behave better */
 	movl	T_LWP(%edi), %eax 	/* set associated lwp to  */
 	movl	%eax, CPU_LWP(%esi) 	/* CPU's lwp ptr */
@@ -768,6 +810,7 @@ resume_from_intr(kthread_t *t)
 
 	movq	%gs:CPU_THREAD, %r13	/* %r13 = curthread */
 	movq	%r12, %gs:CPU_THREAD	/* set CPU's thread pointer */
+	mfence				/* synchronize with mutex_exit() */
 	movq	T_SP(%r12), %rsp	/* restore resuming thread's sp */
 	xorl	%ebp, %ebp		/* make $<threadlist behave better */
 
@@ -817,6 +860,7 @@ resume_from_intr_return:
 #endif
 	movl	%gs:CPU_THREAD, %esi	/* %esi = curthread */
 	movl	%edi, %gs:CPU_THREAD	/* set CPU's thread pointer */
+	mfence				/* synchronize with mutex_exit() */
 	movl	T_SP(%edi), %esp	/* restore resuming thread's sp */
 	xorl	%ebp, %ebp		/* make $<threadlist behave better */
 

@@ -21,6 +21,8 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 
 include $(SRC)/Makefile.master
@@ -152,10 +154,6 @@ sparc_ARCH32= sparcv7
 i386_ARCH64= amd64
 sparc_ARCH64= sparcv9
 
-OPENSSL	=	/usr/bin/openssl
-OPENSSL10.cmd = $(OPENSSL) version | $(NAWK) '{if($$2<1){print "\043";}}'
-OPENSSL10_ONLY	=	$(OPENSSL10.cmd:sh)
-
 #
 # macros and transforms needed by pkgmogrify
 #
@@ -172,7 +170,6 @@ PM_INC= transforms manifests
 PKGMOG_DEFINES= \
 	i386_ONLY=$(POUND_SIGN) \
 	sparc_ONLY=$(POUND_SIGN) \
-	OPENSSL10_ONLY=$(OPENSSL10_ONLY) \
 	$(PKGMACH)_ONLY= \
 	ARCH=$(PKGMACH) \
 	ARCH32=$($(PKGMACH)_ARCH32) \
@@ -180,7 +177,10 @@ PKGMOG_DEFINES= \
 	PKGVERS_COMPONENT=$(PKGVERS_COMPONENT) \
 	PKGVERS_BUILTON=$(PKGVERS_BUILTON) \
 	PKGVERS_BRANCH=$(PKGVERS_BRANCH) \
-	PKGVERS=$(PKGVERS)
+	PKGVERS=$(PKGVERS) \
+	PERL_ARCH=$(PERL_ARCH) \
+	PERL_VERSION=$(PERL_VERSION) \
+	PERL_PKGVERS=$(PERL_PKGVERS)
 
 PKGDEP_TOKENS_i386= \
 	'PLATFORM=i86hvm' \
@@ -210,15 +210,32 @@ PKGDEP_INCORP= \
 # All packaging build products should go into $(PDIR), so they don't
 # need to be included separately in CLOBBERFILES.
 #
-CLOBBERFILES= $(PDIR) proto_list_$(PKGMACH)
+CLOBBERFILES= $(PDIR) proto_list_$(PKGMACH) install-$(PKGMACH).out \
+	license-list
 
 #
 # By default, PKGS will list all manifests.  To build and/or publish a
 # subset of packages, override this on the command line or in the
 # build environment and then reference (implicitly or explicitly) the all
-# or install targets.
+# or install targets.  Using ls -1 (that's a one) or print or echo to
+# get the list of manifests is a little hackish, but avoids having a
+# 900+ line file to explicitly list them all.
 #
-MANIFESTS :sh= (cd manifests; print *.mf)
+# We want some manifests to optionally built based on environment
+# options, so those are excluded and optionally added back in.
+# We also want a relatively easy way to add files to the list of
+# manifests given special treatment.  Add any other special ones
+# to the SPECIAL_MANIFESTS vaiable.  It can contain wildcards in
+# regexp form, i.e. SUNW.* as one useful example.
+#
+SPECIAL_MANIFESTS = print-lp-ipp-ipp-listener.mf
+LIST_MANIFESTS_CMD = (cd manifests ; /usr/bin/ls -1 *.mf |\
+	$(SED) $(SPECIAL_MANIFESTS:%=-e '/^%$$/d') )
+MANIFESTS = $(LIST_MANIFESTS_CMD:sh)
+
+# Conditionally add back lp-ipp
+$(ENABLE_IPP_PRINTING) MANIFESTS += print-lp-ipp-ipp-listener.mf
+
 PKGS= $(MANIFESTS:%.mf=%)
 DEP_PKGS= $(PKGS:%=$(PDIR)/%.dep)
 PROC_PKGS= $(PKGS:%=$(PDIR)/%.mog)
@@ -332,7 +349,7 @@ PKGLISTS= \
 #
 #		repository metadata (catalogs and search indices)
 #			|
-#			| pkg.depotd
+#			| pkgrepo refresh
 #			|
 #		published packages
 #		 |		|
@@ -397,10 +414,8 @@ $(PDIR)/gendeps: $(DEP_SYNTH_PKGS) $(DEP_PKGS)
 install: $(ALL_TARGETS) repository-metadata
 
 repository-metadata: publish_pkgs
-	@print "Creating repository metadata"
 	$(PKGDEBUG)for r in $(REPOS); do \
-		/usr/lib/pkg.depotd -d $(PKGDEST)/repo.$$r \
-			--add-content --exit-ready; \
+		pkgrepo refresh -s $(PKGDEST)/repo.$$r; \
 	done
 
 #
@@ -610,7 +625,7 @@ $(PKGLISTS): $(PROC_PKGS)
 	r=$${sdotr%.+(?)}; s=$${sdotr#+(?).}; \
 	print "Generating $$r $$s package list"; \
 	$(RM) $(@); $(TOUCH) $(@); \
-	$(NAWK) 'BEGIN { \
+	$(AWK) 'BEGIN { \
 		if (ARGC < 2) { \
 			exit; \
 		} \
@@ -663,7 +678,7 @@ license-list: makesilent
 stage-licenses: license-list FRC
 	$(PKGDEBUG)$(MAKE) -e -f Makefile.lic \
 		PKGDEBUG=$(PKGDEBUG) LICROOT=$(PKGROOT)/licenses \
-		`$(NAWK) '{ \
+		`$(AWK) '{ \
 			print "$(PKGROOT)/licenses/" $$0; \
 			print "$(PKGROOT)/licenses/" $$0 ".descrip"; \
 		}' license-list` > /dev/null;
@@ -723,23 +738,3 @@ i386/% sparc/%:
 i386 sparc: $$(@)/install
 
 FRC:
-
-# EXPORT DELETE START
-XMOD_PKGS= \
-	BRCMbnx \
-	BRCMbnxe \
-	SUNWadpu320 \
-	SUNWibsdpib \
-	SUNWkdc \
-	SUNWlsimega \
-	SUNWwbint \
-	SUNWwbsup
-
-EXPORT_SRC: CRYPT_SRC
-	$(RM) $(XMOD_PKGS:%=manifests/%.mf)
-	$(RM) Makefile+
-	$(SED) -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-		< Makefile > Makefile+
-	$(MV) -f Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-# EXPORT DELETE END

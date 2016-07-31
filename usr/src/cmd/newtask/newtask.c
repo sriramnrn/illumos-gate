@@ -20,11 +20,12 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright (c) 2013 Gary Mills
+ * Copyright 2015, Joyent, Inc.
+ *
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 #include <sys/task.h>
@@ -535,7 +536,7 @@ set_ids(struct ps_prochandle *p, struct project *project,
 	new_prpriv = malloc(prsz);
 	if (new_prpriv == NULL) {
 		preserve_error(gettext("can't allocate memory"));
-		free(old_prpriv);
+		proc_free_priv(old_prpriv);
 		return (1);
 	}
 
@@ -564,7 +565,7 @@ set_ids(struct ps_prochandle *p, struct project *project,
 			    "privileges"));
 			(void) Punsetflags(p, PR_KLC);
 			free(new_prpriv);
-			free(old_prpriv);
+			proc_free_priv(old_prpriv);
 			return (1);
 		}
 		(void) __priv_bracket(PRIV_ON);
@@ -574,7 +575,7 @@ set_ids(struct ps_prochandle *p, struct project *project,
 			    "privileges"));
 			(void) Punsetflags(p, PR_KLC);
 			free(new_prpriv);
-			free(old_prpriv);
+			proc_free_priv(old_prpriv);
 			return (1);
 		}
 		(void) __priv_bracket(PRIV_OFF);
@@ -614,7 +615,7 @@ set_ids(struct ps_prochandle *p, struct project *project,
 			    Pstatus(p)->pr_pid);
 	}
 	free(new_prpriv);
-	free(old_prpriv);
+	proc_free_priv(old_prpriv);
 
 	return (error);
 }
@@ -696,7 +697,7 @@ match_user(uid_t uid, char *projname, int is_my_uid)
 	if (projname == NULL || getuid() == (uid_t)0)
 		return (pw);
 
-	(void) strcpy(username, pw->pw_name);
+	(void) strlcpy(username, pw->pw_name, sizeof (username));
 
 	if (inproj(username, projname, prbuf, PROJECT_BUFSZ) == 0) {
 		char **u;

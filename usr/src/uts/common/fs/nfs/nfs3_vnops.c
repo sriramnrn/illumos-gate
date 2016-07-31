@@ -28,6 +28,11 @@
  *	All rights reserved.
  */
 
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -1327,7 +1332,12 @@ nfs3_setattr(vnode_t *vp, struct vattr *vap, int flags, cred_t *cr,
 	if (error)
 		return (error);
 
-	return (nfs3setattr(vp, vap, flags, cr));
+	error = nfs3setattr(vp, vap, flags, cr);
+
+	if (error == 0 && (vap->va_mask & AT_SIZE) && vap->va_size == 0)
+		vnevent_truncate(vp, ct);
+
+	return (error);
 }
 
 static int
@@ -2298,6 +2308,12 @@ top:
 						vattr.va_mask = AT_SIZE;
 						error = nfs3setattr(vp,
 						    &vattr, 0, cr);
+
+						/*
+						 * Existing file was truncated;
+						 * emit a create event.
+						 */
+						vnevent_create(vp, ct);
 					}
 				}
 			}
@@ -2306,12 +2322,9 @@ top:
 		if (error) {
 			VN_RELE(vp);
 		} else {
-			/*
-			 * existing file got truncated, notify.
-			 */
-			vnevent_create(vp, ct);
 			*vpp = vp;
 		}
+
 		return (error);
 	}
 
@@ -4573,13 +4586,8 @@ retry:
 
 	mutex_exit(&rp->r_statelock);
 
-	if (len <= PAGESIZE) {
-		error = nfs3_getapage(vp, off, len, protp, pl, plsz,
-		    seg, addr, rw, cr);
-	} else {
-		error = pvn_getpages(nfs3_getapage, vp, off, len, protp,
-		    pl, plsz, seg, addr, rw, cr);
-	}
+	error = pvn_getpages(nfs3_getapage, vp, off, len, protp,
+	    pl, plsz, seg, addr, rw, cr);
 
 	switch (error) {
 	case NFS_EOF:
@@ -4593,7 +4601,7 @@ retry:
 }
 
 /*
- * Called from pvn_getpages or nfs3_getpage to get a particular page.
+ * Called from pvn_getpages to get a particular page.
  */
 /* ARGSUSED */
 static int
@@ -5264,11 +5272,11 @@ nfs3_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 	if (nfs_rw_enter_sig(&rp->r_rwlock, RW_WRITER, INTR(vp)))
 		return (EINTR);
-	atomic_add_int(&rp->r_inmap, 1);
+	atomic_inc_uint(&rp->r_inmap);
 	nfs_rw_exit(&rp->r_rwlock);
 
 	if (nfs_rw_enter_sig(&rp->r_lkserlock, RW_READER, INTR(vp))) {
-		atomic_add_int(&rp->r_inmap, -1);
+		atomic_dec_uint(&rp->r_inmap);
 		return (EINTR);
 	}
 
@@ -5310,7 +5318,7 @@ nfs3_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 done:
 	nfs_rw_exit(&rp->r_lkserlock);
-	atomic_add_int(&rp->r_inmap, -1);
+	atomic_dec_uint(&rp->r_inmap);
 	return (error);
 }
 
@@ -5514,6 +5522,9 @@ nfs3_space(vnode_t *vp, int cmd, struct flock64 *bfp, int flag,
 			va.va_mask = AT_SIZE;
 			va.va_size = bfp->l_start;
 			error = nfs3setattr(vp, &va, 0, cr);
+
+			if (error == 0 && bfp->l_start == 0)
+				vnevent_truncate(vp, ct);
 		} else
 			error = EINVAL;
 	}

@@ -719,7 +719,10 @@ struct rt_map {
 	Capchain	*rt_capchain;	/* capabilities chain data */
 	uint_t		rt_cntl;	/* link-map control list we belong to */
 	uint_t		rt_aflags;	/* auditor flags, see LML_TFLG_AUD_ */
+	Rt_cond		rt_cv;		/* for waiting on flags changes */
+	Rt_lock		rt_lock;	/* for coordinating flags changes */
 					/* address of _init */
+	thread_t	rt_init_thread;	/* thread id in this lm's _init */
 	void		(*rt_init)(void);
 					/* address of _fini */
 	void		(*rt_fini)(void);
@@ -871,6 +874,7 @@ typedef struct rt_map32 {
 #define	FL1_RT_TLSSTAT	0x00020000	/* object requires static TLS */
 #define	FL1_RT_DIRECT	0x00040000	/* object has DIRECT bindings enabled */
 #define	FL1_RT_GLOBAUD	0x00080000	/* establish global auditing */
+#define	FL1_RT_DEPAUD	0x00100000	/* audit library from DT_DEPAUDIT */
 
 /*
  * Flags for the tls_modactivity() routine

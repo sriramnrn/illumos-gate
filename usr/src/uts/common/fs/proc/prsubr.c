@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1375,7 +1376,7 @@ prnsegs(struct as *as, int reserved)
 	int n = 0;
 	struct seg *seg;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, reserved);
@@ -1618,7 +1619,7 @@ prgetmap(proc_t *p, int reserved, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -1729,7 +1730,7 @@ prgetmap32(proc_t *p, int reserved, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -1839,7 +1840,7 @@ prpdsize(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -1869,7 +1870,7 @@ prpdsize32(struct as *as)
 	struct seg *seg;
 	size_t size;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	if ((seg = AS_SEGFIRST(as)) == NULL)
 		return (0);
@@ -1908,15 +1909,15 @@ prpdread(proc_t *p, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = prpdsize(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -1964,7 +1965,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -2033,7 +2034,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp <= (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);
@@ -2055,15 +2056,15 @@ prpdread32(proc_t *p, uint_t hatid, struct uio *uiop)
 	int error;
 
 again:
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if ((seg = AS_SEGFIRST(as)) == NULL) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (0);
 	}
 	size = prpdsize32(as);
 	if (uiop->uio_resid < size) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		return (E2BIG);
 	}
 
@@ -2111,7 +2112,7 @@ again:
 			 */
 			if (next > (uintptr_t)buf + size) {
 				pr_getprot_done(&tmp);
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 
 				kmem_free(buf, size);
 
@@ -2180,7 +2181,7 @@ again:
 		ASSERT(tmp == NULL);
 	} while ((seg = AS_SEGNEXT(as, seg)) != NULL);
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT((uintptr_t)pmp <= (uintptr_t)buf + size);
 	error = uiomove(buf, (caddr_t)pmp - buf, UIO_READ, uiop);
@@ -2335,12 +2336,12 @@ prgetpsinfo(proc_t *p, psinfo_t *psp)
 			psp->pr_rssize = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = btopr(as->a_resvsize) *
 			    (PAGESIZE / 1024);
 			psp->pr_rssize = rm_asrss(as) * (PAGESIZE / 1024);
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -2468,13 +2469,13 @@ prgetpsinfo32(proc_t *p, psinfo32_t *psp)
 			psp->pr_rssize = 0;
 		} else {
 			mutex_exit(&p->p_lock);
-			AS_LOCK_ENTER(as, &as->a_lock, RW_READER);
+			AS_LOCK_ENTER(as, RW_READER);
 			psp->pr_size = (size32_t)
 			    (btopr(as->a_resvsize) * (PAGESIZE / 1024));
 			psp->pr_rssize = (size32_t)
 			    (rm_asrss(as) * (PAGESIZE / 1024));
 			psp->pr_pctmem = rm_pctmemory(as);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			mutex_enter(&p->p_lock);
 		}
 	}
@@ -2490,6 +2491,7 @@ prgetpsinfo32(proc_t *p, psinfo32_t *psp)
 		psp->pr_envp = 0;
 	}
 }
+
 #endif	/* _SYSCALL32_IMPL */
 
 void
@@ -2626,6 +2628,100 @@ prgetlwpsinfo32(kthread_t *t, lwpsinfo32_t *psp)
 	psp->pr_bindpset = t->t_bind_pset;
 	psp->pr_lgrp = t->t_lpl->lpl_lgrpid;
 }
+#endif	/* _SYSCALL32_IMPL */
+
+#ifdef _SYSCALL32_IMPL
+
+#define	PR_COPY_FIELD(s, d, field)	 d->field = s->field
+
+#define	PR_COPY_FIELD_ILP32(s, d, field)				\
+	if (s->pr_dmodel == PR_MODEL_ILP32) {			\
+		d->field = s->field;				\
+	}
+
+#define	PR_COPY_TIMESPEC(s, d, field)				\
+	TIMESPEC_TO_TIMESPEC32(&d->field, &s->field);
+
+#define	PR_COPY_BUF(s, d, field)	 			\
+	bcopy(s->field, d->field, sizeof (d->field));
+
+#define	PR_IGNORE_FIELD(s, d, field)
+
+void
+lwpsinfo_kto32(const struct lwpsinfo *src, struct lwpsinfo32 *dest)
+{
+	bzero(dest, sizeof (*dest));
+
+	PR_COPY_FIELD(src, dest, pr_flag);
+	PR_COPY_FIELD(src, dest, pr_lwpid);
+	PR_IGNORE_FIELD(src, dest, pr_addr);
+	PR_IGNORE_FIELD(src, dest, pr_wchan);
+	PR_COPY_FIELD(src, dest, pr_stype);
+	PR_COPY_FIELD(src, dest, pr_state);
+	PR_COPY_FIELD(src, dest, pr_sname);
+	PR_COPY_FIELD(src, dest, pr_nice);
+	PR_COPY_FIELD(src, dest, pr_syscall);
+	PR_COPY_FIELD(src, dest, pr_oldpri);
+	PR_COPY_FIELD(src, dest, pr_cpu);
+	PR_COPY_FIELD(src, dest, pr_pri);
+	PR_COPY_FIELD(src, dest, pr_pctcpu);
+	PR_COPY_TIMESPEC(src, dest, pr_start);
+	PR_COPY_BUF(src, dest, pr_clname);
+	PR_COPY_BUF(src, dest, pr_name);
+	PR_COPY_FIELD(src, dest, pr_onpro);
+	PR_COPY_FIELD(src, dest, pr_bindpro);
+	PR_COPY_FIELD(src, dest, pr_bindpset);
+	PR_COPY_FIELD(src, dest, pr_lgrp);
+}
+
+void
+psinfo_kto32(const struct psinfo *src, struct psinfo32 *dest)
+{
+	bzero(dest, sizeof (*dest));
+
+	PR_COPY_FIELD(src, dest, pr_flag);
+	PR_COPY_FIELD(src, dest, pr_nlwp);
+	PR_COPY_FIELD(src, dest, pr_pid);
+	PR_COPY_FIELD(src, dest, pr_ppid);
+	PR_COPY_FIELD(src, dest, pr_pgid);
+	PR_COPY_FIELD(src, dest, pr_sid);
+	PR_COPY_FIELD(src, dest, pr_uid);
+	PR_COPY_FIELD(src, dest, pr_euid);
+	PR_COPY_FIELD(src, dest, pr_gid);
+	PR_COPY_FIELD(src, dest, pr_egid);
+	PR_IGNORE_FIELD(src, dest, pr_addr);
+	PR_COPY_FIELD_ILP32(src, dest, pr_size);
+	PR_COPY_FIELD_ILP32(src, dest, pr_rssize);
+	PR_COPY_FIELD(src, dest, pr_ttydev);
+	PR_COPY_FIELD(src, dest, pr_pctcpu);
+	PR_COPY_FIELD(src, dest, pr_pctmem);
+	PR_COPY_TIMESPEC(src, dest, pr_start);
+	PR_COPY_TIMESPEC(src, dest, pr_time);
+	PR_COPY_TIMESPEC(src, dest, pr_ctime);
+	PR_COPY_BUF(src, dest, pr_fname);
+	PR_COPY_BUF(src, dest, pr_psargs);
+	PR_COPY_FIELD(src, dest, pr_wstat);
+	PR_COPY_FIELD(src, dest, pr_argc);
+	PR_COPY_FIELD_ILP32(src, dest, pr_argv);
+	PR_COPY_FIELD_ILP32(src, dest, pr_envp);
+	PR_COPY_FIELD(src, dest, pr_dmodel);
+	PR_COPY_FIELD(src, dest, pr_taskid);
+	PR_COPY_FIELD(src, dest, pr_projid);
+	PR_COPY_FIELD(src, dest, pr_nzomb);
+	PR_COPY_FIELD(src, dest, pr_poolid);
+	PR_COPY_FIELD(src, dest, pr_contract);
+	PR_COPY_FIELD(src, dest, pr_poolid);
+	PR_COPY_FIELD(src, dest, pr_poolid);
+
+	lwpsinfo_kto32(&src->pr_lwp, &dest->pr_lwp);
+}
+
+#undef	PR_COPY_FIELD
+#undef	PR_COPY_FIELD_ILP32
+#undef	PR_COPY_TIMESPEC
+#undef	PR_COPY_BUF
+#undef	PR_IGNORE_FIELD
+
 #endif	/* _SYSCALL32_IMPL */
 
 /*
@@ -3217,7 +3313,7 @@ pr_free_watched_pages(proc_t *p)
 		return;
 
 	ASSERT(MUTEX_NOT_HELD(&curproc->p_lock));
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	pwp = avl_first(&as->a_wpage);
 
@@ -3246,7 +3342,7 @@ pr_free_watched_pages(proc_t *p)
 	avl_destroy(&as->a_wpage);
 	p->p_wprot = NULL;
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 }
 
 /*
@@ -3280,7 +3376,7 @@ set_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr,
 		newpwp = pwp;
 	}
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	/*
 	 * Search for an existing watched page to contain the watched area.
@@ -3295,7 +3391,7 @@ set_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr,
 
 again:
 	if (avl_numnodes(pwp_tree) > prnwatch) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		while (newpwp != NULL) {
 			pwp = newpwp->wp_list;
 			kmem_free(newpwp, sizeof (struct watched_page));
@@ -3368,7 +3464,7 @@ again:
 	if ((vaddr = pwp->wp_vaddr + PAGESIZE) < eaddr)
 		goto again;
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	/*
 	 * Free any pages we may have over-allocated
@@ -3395,7 +3491,7 @@ clear_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr, ulong_t flags)
 	avl_tree_t *tree;
 	avl_index_t where;
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 
 	if (p->p_flag & SVFWAIT)
 		tree = &p->p_wpage;
@@ -3460,7 +3556,7 @@ clear_watched_page(proc_t *p, caddr_t vaddr, caddr_t eaddr, ulong_t flags)
 		pwp = AVL_NEXT(tree, pwp);
 	}
 
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 }
 
 /*
@@ -3472,7 +3568,7 @@ getwatchprot(struct as *as, caddr_t addr, uint_t *prot)
 	struct watched_page *pwp;
 	struct watched_page tpw;
 
-	ASSERT(AS_LOCK_HELD(as, &as->a_lock));
+	ASSERT(AS_LOCK_HELD(as));
 
 	tpw.wp_vaddr = (caddr_t)((uintptr_t)addr & (uintptr_t)PAGEMASK);
 	if ((pwp = avl_find(&as->a_wpage, &tpw, NULL)) != NULL)
@@ -3759,7 +3855,7 @@ pr_getprot(struct seg *seg, int reserved, void **tmp,
 
 	s.data = seg->s_data;
 
-	ASSERT(AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(AS_WRITE_HELD(as));
 	ASSERT(saddr >= seg->s_base && saddr < eaddr);
 	ASSERT(eaddr <= seg->s_base + seg->s_size);
 
@@ -3873,7 +3969,7 @@ pr_getpagesize(struct seg *seg, caddr_t saddr, caddr_t *naddrp, caddr_t eaddr)
 {
 	ssize_t pagesize, hatsize;
 
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(AS_WRITE_HELD(seg->s_as));
 	ASSERT(IS_P2ALIGNED(saddr, PAGESIZE));
 	ASSERT(IS_P2ALIGNED(eaddr, PAGESIZE));
 	ASSERT(saddr < eaddr);
@@ -3913,7 +4009,7 @@ prgetxmap(proc_t *p, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory
@@ -4097,7 +4193,7 @@ prgetxmap32(proc_t *p, list_t *iolhead)
 	struct vattr vattr;
 	uint_t prot;
 
-	ASSERT(as != &kas && AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(as != &kas && AS_WRITE_HELD(as));
 
 	/*
 	 * Request an initial buffer size that doesn't waste memory

@@ -18,6 +18,11 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -36,7 +41,9 @@
  * contributors.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ */
 
 /*
  * sm_statd.c consists of routines used for the intermediate
@@ -84,8 +91,8 @@ static void delete_name(name_entry **namepp, char *name);
 static void remove_name(char *name, int op, int startup);
 static int statd_call_statd(char *name);
 static void pr_name(char *name, int flag);
-static void *thr_statd_init();
-static void *sm_try();
+static void *thr_statd_init(void);
+static void *sm_try(void);
 static void *thr_call_statd(void *);
 static void remove_single_name(char *name, char *dir1, char *dir2);
 static int move_file(char *fromdir, char *file, char *todir);
@@ -97,10 +104,10 @@ static char *family2string(sa_family_t family);
  * all entries to notify its own failure
  */
 void
-statd_init()
+statd_init(void)
 {
 	struct dirent *dirp;
-	DIR 	*dp;
+	DIR *dp;
 	FILE *fp, *fp_tmp;
 	int i, tmp_state;
 	char state_file[MAXPATHLEN+SM_MAXPATHLEN];
@@ -112,12 +119,13 @@ statd_init()
 	 * First try to open the file.  If that fails, try to create it.
 	 * If that fails, give up.
 	 */
-	if ((fp = fopen(STATE, "r+")) == (FILE *)NULL)
-		if ((fp = fopen(STATE, "w+")) == (FILE *)NULL) {
+	if ((fp = fopen(STATE, "r+")) == NULL) {
+		if ((fp = fopen(STATE, "w+")) == NULL) {
 			syslog(LOG_ERR, "can't open %s: %m", STATE);
 			exit(1);
 		} else
 			(void) chmod(STATE, 0644);
+	}
 	if ((fscanf(fp, "%d", &LOCAL_STATE)) == EOF) {
 		if (debug >= 2)
 			(void) printf("empty file\n");
@@ -129,21 +137,20 @@ statd_init()
 	 */
 	for (i = 0; i < pathix; i++) {
 		(void) sprintf(state_file, "%s/statmon/state", path_name[i]);
-		if ((fp_tmp = fopen(state_file, "r+")) == (FILE *)NULL) {
-			if ((fp_tmp = fopen(state_file, "w+"))
-				== (FILE *)NULL) {
+		if ((fp_tmp = fopen(state_file, "r+")) == NULL) {
+			if ((fp_tmp = fopen(state_file, "w+")) == NULL) {
 				if (debug)
-				    syslog(LOG_ERR,
-					"can't open %s: %m",
-					state_file);
+					syslog(LOG_ERR,
+					    "can't open %s: %m",
+					    state_file);
 				continue;
 			} else
 				(void) chmod(state_file, 0644);
 		}
 		if ((fscanf(fp_tmp, "%d", &tmp_state)) == EOF) {
 			if (debug)
-			    syslog(LOG_ERR,
-				"statd: %s: file empty\n", state_file);
+				syslog(LOG_ERR,
+				    "statd: %s: file empty\n", state_file);
 			(void) fclose(fp_tmp);
 			continue;
 		}
@@ -151,7 +158,7 @@ statd_init()
 			LOCAL_STATE = tmp_state;
 			if (debug)
 				(void) printf("Update LOCAL STATE: %d\n",
-						tmp_state);
+				    tmp_state);
 		}
 		(void) fclose(fp_tmp);
 	}
@@ -179,9 +186,8 @@ statd_init()
 
 	for (i = 0; i < pathix; i++) {
 		(void) sprintf(state_file, "%s/statmon/state", path_name[i]);
-		if ((fp_tmp = fopen(state_file, "r+")) == (FILE *)NULL) {
-			if ((fp_tmp = fopen(state_file, "w+"))
-				== (FILE *)NULL) {
+		if ((fp_tmp = fopen(state_file, "r+")) == NULL) {
+			if ((fp_tmp = fopen(state_file, "w+")) == NULL) {
 				syslog(LOG_ERR,
 				    "can't open %s: %m", state_file);
 				continue;
@@ -216,15 +222,15 @@ statd_init()
 	}
 
 	/* get all entries in CURRENT into BACKUP */
-	if ((dp = opendir(CURRENT)) == (DIR *)NULL) {
+	if ((dp = opendir(CURRENT)) == NULL) {
 		syslog(LOG_ERR, "statd: open current directory, error %m\n");
 		exit(1);
 	}
 
 	while ((dirp = readdir(dp)) != NULL) {
 		if (strcmp(dirp->d_name, ".") != 0 &&
-			strcmp(dirp->d_name, "..") != 0) {
-		/* rename all entries from CURRENT to BACKUP */
+		    strcmp(dirp->d_name, "..") != 0) {
+			/* rename all entries from CURRENT to BACKUP */
 			(void) move_file(CURRENT, dirp->d_name, BACKUP);
 		}
 	}
@@ -232,9 +238,10 @@ statd_init()
 	(void) closedir(dp);
 
 	/* Contact hosts' statd */
-	if (thr_create(NULL, NULL, thr_statd_init, NULL, THR_DETACHED, 0)) {
+	if (thr_create(NULL, 0, (void *(*)(void *))thr_statd_init, NULL,
+	    THR_DETACHED, NULL)) {
 		syslog(LOG_ERR,
-		"statd: unable to create thread for thr_statd_init\n");
+		    "statd: unable to create thread for thr_statd_init\n");
 		exit(1);
 	}
 }
@@ -242,8 +249,8 @@ statd_init()
 /*
  * Work thread which contacts hosts' statd.
  */
-void *
-thr_statd_init()
+static void *
+thr_statd_init(void)
 {
 	struct dirent *dirp;
 	DIR 	*dp;
@@ -254,7 +261,7 @@ thr_statd_init()
 	char buf[MAXPATHLEN+SM_MAXPATHLEN];
 
 	/* Go thru backup directory and contact hosts */
-	if ((dp = opendir(BACKUP)) == (DIR *)NULL) {
+	if ((dp = opendir(BACKUP)) == NULL) {
 		syslog(LOG_ERR, "statd: open backup directory, error %m\n");
 		exit(1);
 	}
@@ -295,19 +302,18 @@ thr_statd_init()
 		 * continue to next item on list.
 		 */
 		name = strdup(dirp->d_name);
-		if (name == (char *)NULL) {
+		if (name == NULL) {
 			syslog(LOG_ERR,
-				"statd: unable to allocate space for name %s\n",
-				dirp->d_name);
+			    "statd: unable to allocate space for name %s\n",
+			    dirp->d_name);
 			continue;
 		}
 
 		/* Create a thread to do a statd_call_statd for name */
-		if (thr_create(NULL, NULL, thr_call_statd,
-					(void *) name, 0, 0)) {
+		if (thr_create(NULL, 0, thr_call_statd, name, 0, NULL)) {
 			syslog(LOG_ERR,
-		"statd: unable to create thr_call_statd() for name %s.\n",
-				dirp->d_name);
+			    "statd: unable to create thr_call_statd() "
+			    "for name %s.\n", dirp->d_name);
 			free(name);
 			continue;
 		}
@@ -334,7 +340,7 @@ thr_statd_init()
 	num_threads = 0;
 	while ((dirp = readdir(dp)) != NULL) {
 		if (strcmp(dirp->d_name, ".") == 0 ||
-			strcmp(dirp->d_name, "..") == 0) {
+		    strcmp(dirp->d_name, "..") == 0) {
 			continue;
 		}
 
@@ -350,7 +356,7 @@ thr_statd_init()
 
 		if (debug) {
 			(void) printf("thr_statd_init: legacy %s\n",
-					dirp->d_name);
+			    dirp->d_name);
 		}
 
 		/*
@@ -370,19 +376,18 @@ thr_statd_init()
 		 * continue to next item on list.
 		 */
 		name = strdup(dirp->d_name);
-		if (name == (char *)NULL) {
+		if (name == NULL) {
 			syslog(LOG_ERR,
-			"statd: unable to allocate space for name %s\n",
-				dirp->d_name);
+			    "statd: unable to allocate space for name %s\n",
+			    dirp->d_name);
 			continue;
 		}
 
 		/* Create a thread to do a statd_call_statd for name */
-		if (thr_create(NULL, NULL, thr_call_statd,
-					(void *) name, 0, 0)) {
+		if (thr_create(NULL, 0, thr_call_statd, name, 0, NULL)) {
 			syslog(LOG_ERR,
-		"statd: unable to create thr_call_statd() for name %s.\n",
-				dirp->d_name);
+			    "statd: unable to create thr_call_statd() "
+			    "for name %s.\n", dirp->d_name);
 			free(name);
 			continue;
 		}
@@ -410,7 +415,7 @@ thr_statd_init()
 		if ((mkdir(buf, SM_DIRECTORY_MODE)) == -1) {
 			if (errno != EEXIST)
 				syslog(LOG_ERR, "statd: mkdir %s error %m\n",
-					buf);
+				    buf);
 			else
 				copydir_from_to(BACKUP, buf);
 		} else
@@ -419,22 +424,21 @@ thr_statd_init()
 
 
 	/*
-	 * Reset the die and in_crash variable and signal other threads
-	 * that have issued an sm_crash and are waiting.
+	 * Reset the die and in_crash variables.
 	 */
 	mutex_lock(&crash_lock);
 	die = 0;
 	in_crash = 0;
 	mutex_unlock(&crash_lock);
-	cond_broadcast(&crash_finish);
 
 	if (debug)
 		(void) printf("Creating thread for sm_try\n");
 
 	/* Continue to notify statd on hosts that were unreachable. */
-	if (thr_create(NULL, NULL, sm_try, NULL, THR_DETACHED, 0))
+	if (thr_create(NULL, 0, (void *(*)(void *))sm_try, NULL, THR_DETACHED,
+	    NULL))
 		syslog(LOG_ERR,
-			"statd: unable to create thread for sm_try().\n");
+		    "statd: unable to create thread for sm_try().\n");
 	thr_exit((void *) 0);
 #ifdef lint
 	return (0);
@@ -489,8 +493,8 @@ thr_call_statd(void *namep)
 			if (n <= 0) {
 				if (debug >= 2) {
 					(void) printf(
-					"thr_call_statd: can't read link %s\n",
-							path);
+					    "thr_call_statd: can't read "
+					    "link %s\n", path);
 				}
 			} else {
 				rname[n] = '\0';
@@ -534,8 +538,7 @@ thr_call_statd(void *namep)
  * state has changed for this server.
  */
 static int
-statd_call_statd(name)
-	char *name;
+statd_call_statd(char *name)
 {
 	enum clnt_stat clnt_stat;
 	struct timeval tottimeout;
@@ -562,7 +565,7 @@ statd_call_statd(name)
 	unq_len = strcspn(name, ".");
 
 	if ((strncmp(name, SM_ADDR_IPV4, unq_len) == 0) ||
-		(strncmp(name, SM_ADDR_IPV6, unq_len) == 0)) {
+	    (strncmp(name, SM_ADDR_IPV6, unq_len) == 0)) {
 		name_or_addr = strchr(name, '.') + 1;
 	} else {
 		name_or_addr = name;
@@ -575,14 +578,14 @@ statd_call_statd(name)
 	 */
 	if (debug) {
 		(void) printf("statd_call_statd: calling create_client(%s)\n",
-				name_or_addr);
+		    name_or_addr);
 	}
 
 	tottimeout.tv_sec = SM_RPC_TIMEOUT;
 	tottimeout.tv_usec = 0;
 
-	if ((clnt = create_client(name_or_addr, SM_PROG, SM_VERS,
-	    &tottimeout)) == (CLIENT *) NULL) {
+	if ((clnt = create_client(name_or_addr, SM_PROG, SM_VERS, NULL,
+	    &tottimeout)) == NULL) {
 		return (-1);
 	}
 
@@ -592,14 +595,22 @@ statd_call_statd(name)
 	    xdr_void, NULL, tottimeout);
 	if (debug) {
 		(void) printf("clnt_stat=%s(%d)\n",
-			clnt_sperrno(clnt_stat), clnt_stat);
+		    clnt_sperrno(clnt_stat), clnt_stat);
 	}
 	if (clnt_stat != (int)RPC_SUCCESS) {
 		syslog(LOG_WARNING,
-			"statd: cannot talk to statd at %s, %s(%d)\n",
-			name_or_addr, clnt_sperrno(clnt_stat), clnt_stat);
+		    "statd: cannot talk to statd at %s, %s(%d)\n",
+		    name_or_addr, clnt_sperrno(clnt_stat), clnt_stat);
 		rc = -1;
 	}
+
+	/*
+	 * Wait until the host_name is populated.
+	 */
+	(void) mutex_lock(&merges_lock);
+	while (in_merges)
+		(void) cond_wait(&merges_cond, &merges_lock);
+	(void) mutex_unlock(&merges_lock);
 
 	/* For HA systems and multi-homed hosts */
 	ntf.state = LOCAL_STATE;
@@ -608,8 +619,7 @@ statd_call_statd(name)
 		if (debug)
 			(void) printf("statd_call_statd at %s\n", name_or_addr);
 		clnt_stat = clnt_call(clnt, SM_NOTIFY, xdr_stat_chge,
-					(char *)&ntf, xdr_void, NULL,
-					tottimeout);
+		    (char *)&ntf, xdr_void, NULL, tottimeout);
 		if (clnt_stat != (int)RPC_SUCCESS) {
 			syslog(LOG_WARNING,
 			    "statd: cannot talk to statd at %s, %s(%d)\n",
@@ -630,7 +640,7 @@ statd_call_statd(name)
  * variable will signal it.
  */
 void *
-sm_try()
+sm_try(void)
 {
 	name_entry *nl, *next;
 	timestruc_t	wtime;
@@ -659,7 +669,7 @@ sm_try()
 
 		mutex_unlock(&crash_lock);
 
-		while (((nl = next) != (name_entry *)NULL) && (!die)) {
+		while (((nl = next) != NULL) && (!die)) {
 			next = next->nxt;
 			if (statd_call_statd(nl->name) == 0) {
 				/* remove name from BACKUP */
@@ -675,8 +685,8 @@ sm_try()
 				 */
 				if (delay == 0)
 					syslog(LOG_WARNING,
-					"statd: host %s is not responding\n",
-						nl->name);
+					    "statd: host %s is not "
+					    "responding\n", nl->name);
 			}
 		}
 		/*
@@ -704,14 +714,13 @@ out:
  * Malloc's space and returns the ptr to malloc'ed space. NULL if unsuccessful.
  */
 char *
-xmalloc(len)
-	unsigned len;
+xmalloc(unsigned len)
 {
 	char *new;
 
 	if ((new = malloc(len)) == 0) {
 		syslog(LOG_ERR, "statd: malloc, error %m\n");
-		return ((char *)NULL);
+		return (NULL);
 	} else {
 		(void) memset(new, 0, len);
 		return (new);
@@ -724,10 +733,7 @@ xmalloc(len)
  * is different
  */
 static name_entry *
-insert_name(namepp, name, need_alloc)
-	name_entry **namepp;
-	char *name;
-	int need_alloc;
+insert_name(name_entry **namepp, char *name, int need_alloc)
 {
 	name_entry *new;
 
@@ -737,7 +743,7 @@ insert_name(namepp, name, need_alloc)
 
 	/* Allocate name when needed which is only when adding to record_t */
 	if (need_alloc) {
-		if ((new->name = strdup(name)) == (char *)NULL) {
+		if ((new->name = strdup(name)) == NULL) {
 			syslog(LOG_ERR, "statd: strdup, error %m\n");
 			free(new);
 			return (NULL);
@@ -746,7 +752,7 @@ insert_name(namepp, name, need_alloc)
 		new->name = name;
 
 	new->nxt = *namepp;
-	if (new->nxt != (name_entry *)NULL)
+	if (new->nxt != NULL)
 		new->nxt->prev = new;
 
 	new->prev = (name_entry *) NULL;
@@ -754,7 +760,7 @@ insert_name(namepp, name, need_alloc)
 	*namepp = new;
 	if (debug) {
 		(void) printf("insert_name: inserted %s at %p\n",
-				name, (void *)namepp);
+		    name, (void *)namepp);
 	}
 
 	return (new);
@@ -764,21 +770,19 @@ insert_name(namepp, name, need_alloc)
  * Deletes name from specified list (namepp).
  */
 static void
-delete_name(namepp, name)
-	name_entry **namepp;
-	char *name;
+delete_name(name_entry **namepp, char *name)
 {
 	name_entry *nl;
 
 	nl = *namepp;
-	while (nl != (name_entry *)NULL) {
+	while (nl != NULL) {
 		if (str_cmp_address_specifier(nl->name, name) == 0 ||
 		    str_cmp_unqual_hostname(nl->name, name) == 0) {
-			if (nl->prev != (name_entry *)NULL)
+			if (nl->prev != NULL)
 				nl->prev->nxt = nl->nxt;
 			else
 				*namepp = nl->nxt;
-			if (nl->nxt != (name_entry *)NULL)
+			if (nl->nxt != NULL)
 				nl->nxt->prev = nl->prev;
 			free(nl->name);
 			free(nl);
@@ -792,21 +796,19 @@ delete_name(namepp, name)
  * Finds name from specified list (namep).
  */
 static name_entry *
-find_name(namep, name)
-	name_entry **namep;
-	char *name;
+find_name(name_entry **namep, char *name)
 {
 	name_entry *nl;
 
 	nl = *namep;
 
-	while (nl != (name_entry *)NULL) {
+	while (nl != NULL) {
 		if (str_cmp_unqual_hostname(nl->name, name) == 0) {
 			return (nl);
 		}
 		nl = nl->nxt;
 	}
-	return ((name_entry *)NULL);
+	return (NULL);
 }
 
 /*
@@ -814,8 +816,7 @@ find_name(namep, name)
  */
 
 int
-create_file(name)
-	char *name;
+create_file(char *name)
 {
 	int fd;
 
@@ -844,8 +845,7 @@ create_file(name)
  * Deletes the file specified by name.
  */
 void
-delete_file(name)
-	char *name;
+delete_file(char *name)
 {
 	if (debug >= 2)
 		(void) printf("Remove monitor entry %s\n", name);
@@ -859,8 +859,7 @@ delete_file(name)
  * Return 1 if file is a symlink, else 0.
  */
 int
-is_symlink(file)
-	char *file;
+is_symlink(char *file)
 {
 	int error;
 	struct stat lbuf;
@@ -887,10 +886,7 @@ is_symlink(file)
  * Returns 0 for success, 1 for failure.
  */
 static int
-move_file(fromdir, file, todir)
-	char *fromdir;
-	char *file;
-	char *todir;
+move_file(char *fromdir, char *file, char *todir)
 {
 	int n;
 	char rname[MAXNAMELEN + 1]; /* +1 for the terminating NULL */
@@ -908,7 +904,7 @@ move_file(fromdir, file, todir)
 		if (n <= 0) {
 			if (debug >= 2) {
 				(void) printf("move_file: can't read link %s\n",
-						from);
+				    from);
 			}
 			return (1);
 		}
@@ -948,10 +944,7 @@ move_file(fromdir, file, todir)
  * Both files should be in directory `todir'.
  */
 int
-create_symlink(todir, rname, lname)
-	char *todir;
-	char *rname;
-	char *lname;
+create_symlink(char *todir, char *rname, char *lname)
 {
 	int error;
 	char lpath[MAXPATHLEN];
@@ -970,9 +963,8 @@ create_symlink(todir, rname, lname)
 		error = errno;
 		if (error != 0 && error != EEXIST) {
 			if (debug >= 2) {
-				(void) printf(
-				"create_symlink: can't link %s/%s -> %s\n",
-					todir, lname, rname);
+				(void) printf("create_symlink: can't link "
+				    "%s/%s -> %s\n", todir, lname, rname);
 			}
 			return (1);
 		}
@@ -981,10 +973,10 @@ create_symlink(todir, rname, lname)
 	if (debug) {
 		if (error == EEXIST) {
 			(void) printf("link %s/%s -> %s already exists\n",
-				todir, lname, rname);
+			    todir, lname, rname);
 		} else {
 			(void) printf("created link %s/%s -> %s\n",
-				todir, lname, rname);
+			    todir, lname, rname);
 		}
 	}
 
@@ -1035,16 +1027,16 @@ remove_single_name(char *name, char *dir1, char *dir2)
 	char dirpath[MAXPATHLEN];
 	char rname[MAXNAMELEN + 1]; /* +1 for NULL term */
 
-	if (strlen(name) + strlen(dir1) + (dir2 != NULL ? strlen(dir2) : 0)
-			+ 3 > MAXPATHLEN) {
+	if (strlen(name) + strlen(dir1) + (dir2 != NULL ? strlen(dir2) : 0) +
+	    3 > MAXPATHLEN) {
 		if (dir2 != NULL)
 			syslog(LOG_ERR,
-				"statd: pathname too long: %s/%s/%s\n",
-						dir1, dir2, name);
+			    "statd: pathname too long: %s/%s/%s\n",
+			    dir1, dir2, name);
 		else
 			syslog(LOG_ERR,
-				"statd: pathname too long: %s/%s\n",
-						dir1, name);
+			    "statd: pathname too long: %s/%s\n",
+			    dir1, name);
 
 		return;
 	}
@@ -1078,12 +1070,13 @@ remove_single_name(char *name, char *dir1, char *dir2)
 				if (debug >= 2) {
 					if (error < 0) {
 						(void) printf(
-					"remove_name: can't unlink %s\n",
-							dirpath);
+						    "remove_name: can't "
+						    "unlink %s\n",
+						    dirpath);
 					} else {
 						(void) printf(
-					"remove_name: unlinked %s\n",
-							dirpath);
+						    "remove_name: unlinked ",
+						    "%s\n", dirpath);
 					}
 				}
 			}
@@ -1093,7 +1086,7 @@ remove_single_name(char *name, char *dir1, char *dir2)
 			 * here for analysis by the system administrator.
 			 */
 			syslog(LOG_ERR,
-				"statd: can't read link %s: %m\n", path);
+			    "statd: can't read link %s: %m\n", path);
 		}
 	}
 
@@ -1120,15 +1113,15 @@ count_symlinks(char *dir, char *name, int *count)
 	char lpath[MAXPATHLEN];
 	char rname[MAXNAMELEN + 1]; /* +1 for term NULL */
 
-	if ((dp = opendir(dir)) == (DIR *)NULL) {
+	if ((dp = opendir(dir)) == NULL) {
 		syslog(LOG_ERR, "count_symlinks: open %s dir, error %m\n",
-			dir);
+		    dir);
 		return (-1);
 	}
 
 	while ((dirp = readdir(dp)) != NULL) {
 		if (strcmp(dirp->d_name, ".") == 0 ||
-			strcmp(dirp->d_name, "..") == 0) {
+		    strcmp(dirp->d_name, "..") == 0) {
 			continue;
 		}
 
@@ -1141,8 +1134,8 @@ count_symlinks(char *dir, char *name, int *count)
 			if (n <= 0) {
 				if (debug >= 2) {
 					(void) printf(
-					"count_symlinks: can't read link %s\n",
-						lpath);
+					    "count_symlinks: can't read link "
+					    "%s\n", lpath);
 				}
 				continue;
 			}
@@ -1170,7 +1163,7 @@ count_symlinks(char *dir, char *name, int *count)
 
 /*
  * Manage the cache of hostnames.  An entry for each host that has recently
- * locked a file is kept.  There is an in-ram table (rec_table) and an empty
+ * locked a file is kept.  There is an in-ram table (record_table) and an empty
  * file in the file system name space (/var/statmon/sm/<name>).  This
  * routine adds (deletes) the name to (from) the in-ram table and the entry
  * to (from) the file system name space.
@@ -1179,9 +1172,7 @@ count_symlinks(char *dir, char *name, int *count)
  * deleted.
  */
 void
-record_name(name, op)
-	char *name;
-	int op;
+record_name(char *name, int op)
 {
 	name_entry *nl;
 	int i;
@@ -1201,9 +1192,9 @@ record_name(name, op)
 		return;
 
 	if (name[0] == '\0' || strchr(name, '/') != NULL ||
-			strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
+	    strcmp(name, ".") == 0 || strcmp(name, "..") == 0) {
 		syslog(LOG_ERR|LOG_AUTH, "statd: attempt to %s \"%s/%s\"",
-			op == 1 ? "create" : "remove", CURRENT, name);
+		    op == 1 ? "create" : "remove", CURRENT, name);
 		return;
 	}
 
@@ -1211,7 +1202,7 @@ record_name(name, op)
 	if (debug) {
 		if (op == 1)
 			(void) printf("inserting %s at hash %d,\n",
-			name, hash);
+			    name, hash);
 		else
 			(void) printf("deleting %s at hash %d\n", name, hash);
 		pr_name(name, 1);
@@ -1221,7 +1212,7 @@ record_name(name, op)
 	if (op == 1) { /* insert */
 		mutex_lock(&record_table[hash].lock);
 		record_q = &record_table[hash].sm_rechdp;
-		if ((nl = find_name(record_q, name)) == (name_entry *)NULL) {
+		if ((nl = find_name(record_q, name)) == NULL) {
 
 			int	path_len;
 
@@ -1234,8 +1225,8 @@ record_name(name, op)
 			path_len = strlen(CURRENT) + strlen(name) + 2;
 			if (path_len > MAXPATHLEN) {
 				syslog(LOG_ERR,
-					"statd: pathname too long: %s/%s\n",
-						CURRENT, name);
+				    "statd: pathname too long: %s/%s\n",
+				    CURRENT, name);
 				return;
 			}
 			(void) strcpy(path, CURRENT);
@@ -1249,13 +1240,12 @@ record_name(name, op)
 			/* make an entry in alternate paths */
 			for (i = 0; i < pathix; i++) {
 				path_len = strlen(path_name[i]) +
-							strlen("/statmon/sm/") +
-							strlen(name) + 1;
+				    strlen("/statmon/sm/") + strlen(name) + 1;
 
 				if (path_len > MAXPATHLEN) {
-					syslog(LOG_ERR,
-				"statd: pathname too long: %s/statmon/sm/%s\n",
-							path_name[i], name);
+					syslog(LOG_ERR, "statd: pathname too "
+					    "long: %s/statmon/sm/%s\n",
+					    path_name[i], name);
 					continue;
 				}
 				(void) strcpy(path, path_name[i]);
@@ -1271,7 +1261,7 @@ record_name(name, op)
 	} else { /* delete */
 		mutex_lock(&record_table[hash].lock);
 		record_q = &record_table[hash].sm_rechdp;
-		if ((nl = find_name(record_q, name)) == (name_entry *)NULL) {
+		if ((nl = find_name(record_q, name)) == NULL) {
 			mutex_unlock(&record_table[hash].lock);
 			return;
 		}
@@ -1328,16 +1318,16 @@ record_addr(char *name, sa_family_t family, struct netobj *ah)
 		if (family == AF_INET)
 			(void) printf("record_addr: addr= %x\n", addr.s_addr);
 		else if (family == AF_INET6)
-			(void) printf("record_addr: addr= %x\n", \
-				((struct in6_addr *)addr6)->s6_addr);
+			(void) printf("record_addr: addr= %x\n",
+			    ((struct in6_addr *)addr6)->s6_addr);
 	}
 
 	if (family == AF_INET) {
 		if (addr.s_addr == INADDR_ANY ||
 		    ((addr.s_addr && 0xff000000) == 0)) {
 			syslog(LOG_DEBUG,
-				"record_addr: illegal IP address %x\n",
-				addr.s_addr);
+			    "record_addr: illegal IP address %x\n",
+			    addr.s_addr);
 			return;
 		}
 	}
@@ -1346,28 +1336,27 @@ record_addr(char *name, sa_family_t family, struct netobj *ah)
 	famstr = family2string(family);
 	if (famstr == NULL) {
 		syslog(LOG_DEBUG,
-			"record_addr: unsupported address family %d\n",
-			family);
+		    "record_addr: unsupported address family %d\n",
+		    family);
 		return;
 	}
 
 	switch (family) {
 		char abuf[INET6_ADDRSTRLEN];
-	    case AF_INET:
+	case AF_INET:
 		(void) sprintf(ascii_addr, "%s.%s", famstr, inet_ntoa(addr));
 		break;
 
-	    case AF_INET6:
-		(void) sprintf(ascii_addr, "%s.%s", famstr,\
+	case AF_INET6:
+		(void) sprintf(ascii_addr, "%s.%s", famstr,
 		    inet_ntop(family, addr6, abuf, sizeof (abuf)));
 		break;
 
-	    default:
+	default:
 		if (debug) {
 			(void) printf(
-		"record_addr: family2string supports unknown family %d (%s)\n",
-				family,
-				famstr);
+			    "record_addr: family2string supports unknown "
+			    "family %d (%s)\n", family, famstr);
 		}
 		free(famstr);
 		return;
@@ -1389,13 +1378,13 @@ record_addr(char *name, sa_family_t family, struct netobj *ah)
 	 */
 	for (i = 0; i < pathix; i++) {
 		path_len = strlen(path_name[i]) +
-					strlen("/statmon/sm/") +
-					strlen(name) + 1;
+		    strlen("/statmon/sm/") +
+		    strlen(name) + 1;
 
 		if (path_len > MAXPATHLEN) {
 			syslog(LOG_ERR,
-				"statd: pathname too long: %s/statmon/sm/%s\n",
-				path_name[i], name);
+			    "statd: pathname too long: %s/statmon/sm/%s\n",
+			    path_name[i], name);
 			continue;
 		}
 		(void) strcpy(path, path_name[i]);
@@ -1408,7 +1397,7 @@ record_addr(char *name, sa_family_t family, struct netobj *ah)
  * SM_CRASH - simulate a crash of statd.
  */
 void
-sm_crash()
+sm_crash(void)
 {
 	name_entry *nl, *next;
 	mon_entry *nl_monp, *mon_next;
@@ -1422,14 +1411,14 @@ sm_crash()
 			mutex_unlock(&mon_table[k].lock);
 			continue;
 		} else {
-			while ((nl_monp = mon_next) != (mon_entry *)NULL) {
+			while ((nl_monp = mon_next) != NULL) {
 				mon_next = mon_next->nxt;
 				nl_idp = &nl_monp->id.mon_id.my_id;
 				free(nl_monp->id.mon_id.mon_name);
 				free(nl_idp->my_name);
 				free(nl_monp);
 			}
-			mon_table[k].sm_monhdp = (mon_entry *)NULL;
+			mon_table[k].sm_monhdp = NULL;
 		}
 		mutex_unlock(&mon_table[k].lock);
 	}
@@ -1442,25 +1431,25 @@ sm_crash()
 			mutex_unlock(&record_table[k].lock);
 			continue;
 		} else {
-			while ((nl = next) != (name_entry *)NULL) {
+			while ((nl = next) != NULL) {
 				next = next->nxt;
 				free(nl->name);
 				free(nl);
 			}
-			record_table[k].sm_rechdp = (name_entry *)NULL;
+			record_table[k].sm_rechdp = NULL;
 		}
 		mutex_unlock(&record_table[k].lock);
 	}
 
 	/* Clean up entries in recovery table */
 	mutex_lock(&recov_q.lock);
-	if ((next = recov_q.sm_recovhdp) != (name_entry *)NULL) {
-		while ((nl = next) != (name_entry *)NULL) {
+	if ((next = recov_q.sm_recovhdp) != NULL) {
+		while ((nl = next) != NULL) {
 			next = next->nxt;
 			free(nl->name);
 			free(nl);
 		}
-		recov_q.sm_recovhdp = (name_entry *)NULL;
+		recov_q.sm_recovhdp = NULL;
 	}
 	mutex_unlock(&recov_q.lock);
 	statd_init();
@@ -1471,20 +1460,20 @@ sm_crash()
  * locks.
  */
 void
-sm_inithash()
+sm_inithash(void)
 {
 	int k;
 
 	if (debug)
 		(void) printf("Initializing hash tables\n");
 	for (k = 0; k < MAX_HASHSIZE; k++) {
-		mon_table[k].sm_monhdp = (mon_entry *)NULL;
-		record_table[k].sm_rechdp = (name_entry *)NULL;
+		mon_table[k].sm_monhdp = NULL;
+		record_table[k].sm_rechdp = NULL;
 		mutex_init(&mon_table[k].lock, USYNC_THREAD, NULL);
 		mutex_init(&record_table[k].lock, USYNC_THREAD, NULL);
 	}
 	mutex_init(&recov_q.lock, USYNC_THREAD, NULL);
-	recov_q.sm_recovhdp = (name_entry *)NULL;
+	recov_q.sm_recovhdp = NULL;
 
 }
 
@@ -1520,9 +1509,7 @@ family2string(sa_family_t family)
  * prints out each list in recov_q specified by name.
  */
 static void
-pr_name(name, flag)
-	char *name;
-	int flag;
+pr_name(char *name, int flag)
 {
 	name_entry *nl;
 	unsigned int hash;
@@ -1534,7 +1521,7 @@ pr_name(name, flag)
 		(void) printf("*****record_q: ");
 		mutex_lock(&record_table[hash].lock);
 		nl = record_table[hash].sm_rechdp;
-		while (nl != (name_entry *)NULL) {
+		while (nl != NULL) {
 			(void) printf("(%x), ", (int)nl);
 			nl = nl->nxt;
 		}
@@ -1543,7 +1530,7 @@ pr_name(name, flag)
 		(void) printf("*****recovery_q: ");
 		mutex_lock(&recov_q.lock);
 		nl = recov_q.sm_recovhdp;
-		while (nl != (name_entry *)NULL) {
+		while (nl != NULL) {
 			(void) printf("(%x), ", (int)nl);
 			nl = nl->nxt;
 		}

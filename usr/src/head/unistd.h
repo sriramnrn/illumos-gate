@@ -20,17 +20,24 @@
  */
 
 /*
+ * Copyright 2014 PALO, Richard.
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright (c) 2013 Gary Mills
+ *
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
+/* Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved. */
+
 #ifndef _UNISTD_H
 #define	_UNISTD_H
 
 #include <sys/feature_tests.h>
 
+#include <sys/null.h>
 #include <sys/types.h>
 #include <sys/unistd.h>
 
@@ -173,14 +180,6 @@ extern "C" {
 #define	_POSIX_VDISABLE		0
 #endif
 
-#ifndef NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
-
 #define	STDIN_FILENO	0
 #define	STDOUT_FILENO	1
 #define	STDERR_FILENO	2
@@ -237,8 +236,6 @@ extern "C" {
 #endif	/* __PRAGMA_REDEFINE_EXTNAME */
 #endif	/* _LP64 && _LARGEFILE64_SOURCE */
 
-#if defined(__STDC__)
-
 extern int access(const char *, int);
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern int acct(const char *);
@@ -274,6 +271,7 @@ extern char *cuserid(char *);
 #endif
 extern int dup(int);
 extern int dup2(int, int);
+extern int dup3(int, int, int);
 #if defined(_XPG4) || defined(__EXTENSIONS__)
 extern void encrypt(char *, int);
 #endif /* defined(XPG4) || defined(__EXTENSIONS__) */
@@ -347,7 +345,20 @@ extern int gethostname(char *, size_t);
 #elif  !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern int gethostname(char *, int);
 #endif
+
+#ifndef	__GETLOGIN_DEFINED	/* Avoid duplicate in stdlib.h */
+#define	__GETLOGIN_DEFINED
+#ifndef	__USE_LEGACY_LOGNAME__
+#ifdef	__PRAGMA_REDEFINE_EXTNAME
+#pragma	redefine_extname getlogin getloginx
+#else	/* __PRAGMA_REDEFINE_EXTNAME */
+extern char *getloginx(void);
+#define	getlogin	getloginx
+#endif	/* __PRAGMA_REDEFINE_EXTNAME */
+#endif	/* __USE_LEGACY_LOGNAME__ */
 extern char *getlogin(void);
+#endif	/* __GETLOGIN_DEFINED */
+
 #if defined(_XPG4) || defined(__EXTENSIONS__)
 extern int  getopt(int, char *const *, const char *);
 extern char *optarg;
@@ -378,9 +389,6 @@ extern uid_t getuid(void);
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern char *getusershell(void);
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern char *getwd(char *);
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
 /*
  * The following ioctl prototype is duplicated in <stropts.h>. The
  * duplication is necessitated by XPG4.2 which requires the prototype
@@ -415,6 +423,7 @@ extern int mincore(caddr_t, size_t, char *);
 extern long pathconf(const char *, int);
 extern int pause(void);
 extern int pipe(int *);
+extern int pipe2(int *, int);
 #if !defined(_POSIX_C_SOURCE) || defined(_XPG5) || \
 	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
 	defined(__EXTENSIONS__)
@@ -457,7 +466,15 @@ extern ssize_t readlink(const char *_RESTRICT_KYWD, char *_RESTRICT_KYWD,
 #endif
 #if (!defined(__XOPEN_OR_POSIX) || (defined(_XPG3) && !defined(_XPG4))) || \
 	defined(__EXTENSIONS__)
+#if __cplusplus >= 199711L
+namespace std {
+#endif
 extern int rename(const char *, const char *);
+#if __cplusplus >= 199711L
+} /* end of namespace std */
+
+using std::rename;
+#endif /* __cplusplus >= 199711L */
 #endif /* (!defined(__XOPEN_OR_POSIX) || (defined(_XPG3)... */
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern int resolvepath(const char *, char *, size_t);
@@ -528,16 +545,16 @@ extern off_t tell(int);
 extern int truncate(const char *, off_t);
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
 extern char *ttyname(int);
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
+#if (defined(_XPG4_2) && !defined(_XPG7)) || !defined(_STRICT_SYMBOLS)
 extern useconds_t ualarm(useconds_t, useconds_t);
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
+#endif
 extern int unlink(const char *);
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
+#if (defined(_XPG4_2) && !defined(_XPG7)) || !defined(_STRICT_SYMBOLS)
+extern char *getwd(char *);
 extern int usleep(useconds_t);
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern pid_t vfork(void);
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
+extern pid_t vfork(void) __RETURNS_TWICE;
+#pragma unknown_control_flow(vfork)
+#endif
 #if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
 extern void vhangup(void);
 #endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
@@ -574,313 +591,6 @@ extern off64_t	tell64(int);
 extern int	truncate64(const char *, off64_t);
 extern int	lockf64(int, int, off64_t);
 #endif	/* _LARGEFILE64_SOURCE */
-
-#else  /* __STDC__ */
-
-extern int access();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int acct();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern unsigned alarm();
-#if !defined(__XOPEN_OR_POSIX) || (defined(_XPG4_2) && !defined(_XPG6)) || \
-	defined(__EXTENSIONS__)
-extern int brk();
-#endif /* !defined(__XOPEN_OR_POSIX) || (defined(_XPG4_2)... */
-extern int chdir();
-extern int chown();
-#if !defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE) || \
-	defined(__EXTENSIONS__)
-extern int chroot();
-#endif /* (!defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE)... */
-extern int close();
-#if defined(_XPG4) || defined(__EXTENSIONS__)
-extern size_t confstr();
-extern char *crypt();
-#endif /* defined(XPG4) || defined(__EXTENSIONS__) */
-#if !defined(_POSIX_C_SOURCE) || defined(_XPG3) || defined(__EXTENSIONS__)
-extern char *ctermid();
-#endif /* (!defined(_POSIX_C_SOURCE) || defined(_XPG3)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(_REENTRANT) || defined(__EXTENSIONS__)
-extern char *ctermid_r();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_REENTRANT) ... */
-#if !defined(_XPG6) || defined(__EXTENSIONS__)
-extern char *cuserid();
-#endif
-extern int dup();
-extern int dup2();
-#if defined(_XPG4) || defined(__EXTENSIONS__)
-extern void encrypt();
-#endif /* defined(_XPG4) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern void endusershell();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern int execl();
-extern int execle();
-extern int execlp();
-extern int execv();
-extern int execve();
-extern int execvp();
-extern void _exit();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int fattach();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern int fchdir();
-extern int fchown();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int fchroot();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || (_POSIX_C_SOURCE > 2) || \
-	defined(__EXTENSIONS__)
-extern int fdatasync();
-#endif /* !defined(__XOPEN_OR_POSIX) || (_POSIX_C_SOURCE > 2)... */
-#if !defined(__XOPEN_OR_POSIX)
-extern int fdetach();
-#endif /* !defined(__XOPEN_OR_POSIX) */
-extern pid_t fork();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern pid_t fork1();
-extern pid_t forkall();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern long fpathconf();
-#if !defined(_POSIX_C_SOURCE) || (_POSIX_C_SOURCE > 2) || \
-	defined(__EXTENSIONS__)
-extern int fsync();
-#endif /* !defined(_POSIX_C_SOURCE) || (_POSIX_C_SOURCE > 2)... */
-#if !defined(__XOPEN_OR_POSIX) || (_POSIX_C_SOURCE > 2) || defined(_XPG4_2) || \
-	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
-	defined(__EXTENSIONS__)
-extern int ftruncate();
-#endif /* !defined(__XOPEN_OR_POSIX) (_POSIX_C_SOURCE > 2)... */
-extern char *getcwd();
-#if !defined(__XOPEN_OR_POSIX) || (defined(_XPG4_2) && !defined(_XPG6)) || \
-	defined(__EXTENSIONS__)
-extern int getdtablesize();
-#endif
-extern gid_t getegid();
-extern uid_t geteuid();
-extern gid_t getgid();
-extern int getgroups();
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern long gethostid();
-#endif
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern int gethostname();
-#endif
-extern char *getlogin();
-#if defined(_XPG4) || defined(__EXTENSIONS__)
-extern int  getopt();
-extern char *optarg;
-extern int  opterr, optind, optopt;
-#if !defined(_XPG6) || defined(__EXTENSIONS__)
-extern char *getpass();
-#endif
-#endif /* defined(_XPG4) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-#if !defined(_XPG6) || defined(__EXTENSIONS__)
-extern int getpagesize();
-#endif
-extern pid_t getpgid();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-extern pid_t getpid();
-extern pid_t getppid();
-extern pid_t getpgrp();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-char *gettxt();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern pid_t getsid();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) */
-extern uid_t getuid();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern char *getusershell();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern char *getwd();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int ioctl();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int isaexec();
-extern int issetugid();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern int isatty();
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern int lchown();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) */
-extern int link();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern offset_t llseek();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || \
-	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
-	defined(__EXTENSIONS__)
-extern int lockf();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-extern off_t lseek();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int mincore();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if !defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE) || \
-	defined(__EXTENSIONS__)
-extern int nice();
-#endif /* !defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE)... */
-extern long pathconf();
-extern int pause();
-extern int pipe();
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG5) || \
-	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
-	defined(__EXTENSIONS__)
-extern ssize_t pread();
-#endif
-#if !defined(_LP64) && \
-	(!defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__))
-extern void profil();
-extern int ptrace();
-#endif
-#if !defined(__XOPEN_OR_POSIX) || \
-	((_POSIX_C_SOURCE > 2) && !defined(_XPG6)) || \
-	defined(__EXTENSIONS__)
-extern int pthread_atfork();
-#endif /* !defined(__XOPEN_OR_POSIX) || ((_POSIX_C_SOURCE > 2) ...  */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG5) || \
-	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
-	defined(__EXTENSIONS__)
-extern ssize_t pwrite();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG5) */
-extern ssize_t read();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-/* per RFC 3542; This is also defined in netdb.h */
-extern int rcmd_af();
-#endif
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern ssize_t readlink();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if (!defined(__XOPEN_OR_POSIX) || (defined(_XPG3) && !defined(_XPG4))) || \
-	defined(__EXTENSIONS__)
-extern int rename();
-#endif /* (!defined(__XOPEN_OR_POSIX) || (defined(_XPG3)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int resolvepath();
-/* per RFC 3542; This is also defined in netdb.h */
-extern int rexec_af();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern int rmdir();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-/* per RFC 3542; This is also defined in netdb.h */
-extern int rresvport_af();
-#endif
-#if !defined(__XOPEN_OR_POSIX) || (defined(_XPG4_2) && !defined(_XPG6)) || \
-	defined(__EXTENSIONS__)
-extern void *sbrk();
-#endif /* !defined(__XOPEN_OR_POSIX)|| (defined(_XPG4_2)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG6) || defined(__EXTENSIONS__)
-extern int setegid();
-extern int seteuid();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG6) ... */
-extern int setgid();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int setgroups();
-extern int sethostname();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern int setpgid();
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern pid_t setpgrp();
-extern int setregid();
-extern int setreuid();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-extern pid_t setsid();
-extern int setuid();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern void setusershell();
-#endif /* !defined(__XOPEN_OR_POSIX)|| defined(__EXTENSIONS__) */
-extern unsigned sleep();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int stime();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-#if defined(_XPG4)
-/* __EXTENSIONS__ makes the SVID Third Edition prototype in stdlib.h visible */
-extern void swab();
-#endif /* defined(_XPG4) */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern int symlink();
-extern void sync();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if defined(_XPG5)
-#ifdef __PRAGMA_REDEFINE_EXTNAME
-#pragma redefine_extname sysconf __sysconf_xpg5
-extern long sysconf();
-#else /* __PRAGMA_REDEFINE_EXTNAME */
-extern long __sysconf_xpg5();
-#define	sysconf __sysconf_xpg5
-#endif  /* __PRAGMA_REDEFINE_EXTNAME */
-#endif	/* defined(_XPG5) */
-extern pid_t tcgetpgrp();
-extern int tcsetpgrp();
-#if !defined(__XOPEN_OR_POSIX) || \
-	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
-	defined(__EXTENSIONS__)
-extern off_t tell();
-#endif /* !defined(__XOPEN_OR_POSIX)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || \
-	(defined(_LARGEFILE_SOURCE) && _FILE_OFFSET_BITS == 64) || \
-	defined(__EXTENSIONS__)
-extern int truncate();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-extern char *ttyname();
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern useconds_t ualarm();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-extern int unlink();
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern int usleep();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern pid_t vfork();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern void vhangup();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-extern ssize_t write();
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern void yield();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-
-#if !defined(__XOPEN_OR_POSIX) || defined(_ATFILE_SOURCE) || \
-	defined(__EXTENSIONS__)
-	/* || defined(_XPG7) */
-extern int faccessat();
-extern int fchownat();
-extern int linkat();
-extern ssize_t readlinkat();
-extern int renameat();
-extern int symlinkat();
-extern int unlinkat();
-#endif	/* !defined(__XOPEN_OR_POSIX) || defined(_ATFILE_SOURCE)... */
-#if !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__)
-extern int get_nprocs();
-extern int get_nprocs_conf();
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(__EXTENSIONS__) */
-
-/* transitional large file interface versions */
-#if	defined(_LARGEFILE64_SOURCE) && !((_FILE_OFFSET_BITS == 64) && \
-	    !defined(__PRAGMA_REDEFINE_EXTNAME))
-extern int ftruncate64();
-extern off64_t lseek64();
-extern ssize_t pread64();
-extern ssize_t pwrite64();
-extern off64_t tell64();
-extern int truncate64();
-extern int lockf64();
-#endif	/* _LARGEFILE64_SOURCE */
-
-#endif /* __STDC__ */
-
-#if !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2) || defined(__EXTENSIONS__)
-#pragma unknown_control_flow(vfork)
-#endif /* !defined(__XOPEN_OR_POSIX) || defined(_XPG4_2)... */
 
 /*
  * getlogin_r() & ttyname_r() prototypes are defined here.
@@ -922,24 +632,26 @@ extern int lockf64();
 	!defined(__XOPEN_OR_POSIX) || (_POSIX_C_SOURCE - 0 >= 199506L) || \
 	defined(_POSIX_PTHREAD_SEMANTICS)
 
-#if	defined(__STDC__)
-
 #if	(_POSIX_C_SOURCE - 0 >= 199506L) || defined(_POSIX_PTHREAD_SEMANTICS)
 
+#ifndef	__USE_LEGACY_LOGNAME__
+#ifdef	__PRAGMA_REDEFINE_EXTNAME
+#pragma	redefine_extname getlogin_r __posix_getloginx_r
+extern int getlogin_r(char *, int);
+#else	/* __PRAGMA_REDEFINE_EXTNAME */
+extern int __posix_getloginx_r(char *, int);
+#define	getlogin_r	__posix_getloginx_r
+#endif	/* __PRAGMA_REDEFINE_EXTNAME */
+#else	/* __USE_LEGACY_LOGNAME__ */
 #ifdef __PRAGMA_REDEFINE_EXTNAME
 #pragma redefine_extname getlogin_r __posix_getlogin_r
-#pragma redefine_extname ttyname_r __posix_ttyname_r
 extern int getlogin_r(char *, int);
-extern int ttyname_r(int, char *, size_t);
 #else  /* __PRAGMA_REDEFINE_EXTNAME */
-
 extern int __posix_getlogin_r(char *, int);
-extern int __posix_ttyname_r(int, char *, size_t);
 
 #ifdef __lint
 
 #define	getlogin_r	__posix_getlogin_r
-#define	ttyname_r	__posix_ttyname_r
 
 #else /* !__lint */
 
@@ -948,6 +660,23 @@ getlogin_r(char *__name, int __len)
 {
 	return (__posix_getlogin_r(__name, __len));
 }
+
+#endif /* !__lint */
+#endif /* __PRAGMA_REDEFINE_EXTNAME */
+#endif	/* __USE_LEGACY_LOGNAME__ */
+
+#ifdef __PRAGMA_REDEFINE_EXTNAME
+#pragma redefine_extname ttyname_r __posix_ttyname_r
+extern int ttyname_r(int, char *, size_t);
+#else  /* __PRAGMA_REDEFINE_EXTNAME */
+extern int __posix_ttyname_r(int, char *, size_t);
+
+#ifdef __lint
+
+#define	ttyname_r	__posix_ttyname_r
+
+#else /* !__lint */
+
 static int
 ttyname_r(int __fildes, char *__buf, size_t __size)
 {
@@ -959,60 +688,25 @@ ttyname_r(int __fildes, char *__buf, size_t __size)
 
 #else  /* (_POSIX_C_SOURCE - 0 >= 199506L) || ... */
 
+#ifndef	__USE_LEGACY_LOGNAME__
+#ifdef	__PRAGMA_REDEFINE_EXTNAME
+#pragma	redefine_extname getlogin_r getloginx_r
+#else	/* __PRAGMA_REDEFINE_EXTNAME */
+extern char *getloginx_r(char *, int);
+#define	getlogin_r	getloginx_r
+#endif	/* __PRAGMA_REDEFINE_EXTNAME */
+#endif	/* __USE_LEGACY_LOGNAME__ */
 extern char *getlogin_r(char *, int);
+
 extern char *ttyname_r(int, char *, int);
 
 #endif /* (_POSIX_C_SOURCE - 0 >= 199506L) || ... */
 
-#else  /* __STDC__ */
-
-#if (_POSIX_C_SOURCE - 0 >= 199506L) || defined(_POSIX_PTHREAD_SEMANTICS)
-
-#ifdef __PRAGMA_REDEFINE_EXTNAME
-#pragma redefine_extname getlogin_r __posix_getlogin_r
-#pragma redefine_extname ttyname_r __posix_ttyname_r
-extern int getlogin_r();
-extern int ttyname_r();
-#else  /* __PRAGMA_REDEFINE_EXTNAME */
-
-extern int __posix_getlogin_r();
-extern int __posix_ttyname_r();
-
-#ifdef	__lint
-
-#define	getlogin_r	__posix_getlogin_r
-#define	ttyname_r	__posix_ttyname_r
-
-#else /* !__lint */
-
-static int
-getlogin_r(__name, __len)
-	char *__name;
-	int __len;
-{
-	return (__posix_getlogin_r(__name, __len));
-}
-static int
-ttyname_r(__fildes, __buf, __size)
-	int __fildes;
-	char *__buf;
-	size_t __size;
-{
-	return (__posix_ttyname_r(__fildes, __buf, __size));
-}
-#endif /* !__lint */
-#endif /* __PRAGMA_REDEFINE_EXTNAME */
-
-#else  /* (_POSIX_C_SOURCE - 0 >= 199506L) || ... */
-
-extern char *getlogin_r();
-extern char *ttyname_r();
-
-#endif /* (_POSIX_C_SOURCE - 0 >= 199506L) || ... */
-
-#endif /* __STDC__ */
-
 #endif /* defined(__EXTENSIONS__) || defined(_REENTRANT)... */
+
+#if !defined(_STRICT_SYMBOLS)
+extern int getentropy(void *, size_t);
+#endif	/* !_STRICT_SYMBOLS */
 
 #ifdef	__cplusplus
 }

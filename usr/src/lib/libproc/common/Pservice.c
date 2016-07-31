@@ -22,8 +22,9 @@
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ */
 
 #include <stdarg.h>
 #include <string.h>
@@ -56,7 +57,7 @@ ps_pdmodel(struct ps_prochandle *P, int *modelp)
 ps_err_e
 ps_pread(struct ps_prochandle *P, psaddr_t addr, void *buf, size_t size)
 {
-	if (P->ops->p_pread(P, buf, size, addr) != size)
+	if (P->ops.pop_pread(P, buf, size, addr, P->data) != size)
 		return (PS_BADADDR);
 	return (PS_OK);
 }
@@ -64,7 +65,7 @@ ps_pread(struct ps_prochandle *P, psaddr_t addr, void *buf, size_t size)
 ps_err_e
 ps_pwrite(struct ps_prochandle *P, psaddr_t addr, const void *buf, size_t size)
 {
-	if (P->ops->p_pwrite(P, buf, size, addr) != size)
+	if (P->ops.pop_pwrite(P, buf, size, addr, P->data) != size)
 		return (PS_BADADDR);
 	return (PS_OK);
 }
@@ -175,10 +176,11 @@ ps_lgetxregsize(struct ps_prochandle *P, lwpid_t lwpid, int *xrsize)
 	struct stat statb;
 
 	if (P->state == PS_DEAD) {
-		lwp_info_t *lwp = list_next(&P->core->core_lwp_head);
+		core_info_t *core = P->data;
+		lwp_info_t *lwp = list_next(&core->core_lwp_head);
 		uint_t i;
 
-		for (i = 0; i < P->core->core_nlwp; i++, lwp = list_next(lwp)) {
+		for (i = 0; i < core->core_nlwp; i++, lwp = list_next(lwp)) {
 			if (lwp->lwp_id == lwpid) {
 				if (lwp->lwp_xregs != NULL)
 					*xrsize = sizeof (prxregset_t);

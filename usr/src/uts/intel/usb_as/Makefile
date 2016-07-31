@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+#
 # uts/sparc/usb_as/Makefile
 #
 #	This makefile drives the production of the usb_as driver
@@ -72,6 +74,8 @@ LDFLAGS		+= -dy -Nmisc/usba -Ndrv/usb_ac
 #
 LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
+CERRWARN	+= -_gcc=-Wno-unused-label
+
 #
 #	Default build targets.
 #
@@ -112,7 +116,7 @@ TEST		= test
 #	lock_lint rules
 #
 USB_AS_FILES	= $(MODULE).ll
-USBA_FILES	= $(USBA_WITHOUT_WUSB_OBJS:%.o=../usba/%.ll)
+USBA_FILES	= $(USBA_OBJS:%.o=../usba/%.ll)
 UHCI_FILES	= $(UHCI_OBJS:%.o=../uhci/%.ll)
 OHCI_FILES	= $(OHCI_OBJS:%.o=../ohci/%.ll)
 EHCI_FILES	= $(EHCI_OBJS:%.o=../ehci/%.ll)

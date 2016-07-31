@@ -20,11 +20,12 @@
 # CDDL HEADER END
 #
 #
-# uts/common/sys/lvm/Makefile
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+#
+# uts/common/sys/lvm/Makefile
 #
 #       This makefile derive some .h files via rpcgen
 #
@@ -48,34 +49,37 @@ RPCGENFLAGS	+=	-C -M -D_KERNEL -DSYSV
 
 
 def all install lint modlintlib clean.lint:	$(DERIVED_FILES)
+all_h install_h: $(DERIVED_FILES)
 
-clean clobber:
+clean:
 	$(RM) $(DERIVED_FILES)
+
+clobber: clean
 
 md_basic.h:	meta_basic.x
 	$(RPCGEN) $(RPCGENFLAGS) -h meta_basic.x  | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
+	$(AWK) '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 		{ print $0 } \
 	' > $@
 
 md_mhdx.h:	mhdx.x
 	$(RPCGEN) $(RPCGENFLAGS) -h mhdx.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
+	$(AWK) '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 		{ print $0 } \
 	' > $@
 
 mdmed.h:	metamed.x
 	$(RPCGEN) $(RPCGENFLAGS) -h metamed.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
+	$(AWK) '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 		{ print $0 } \
 	' > $@
 
 md_mdiox.h:	mdiox.x
 	$(RPCGEN) $(RPCGENFLAGS) -h mdiox.x | \
-	awk '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
+	$(AWK) '/<synch.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 	/<thread.h>/ { print "#ifdef _REENTRANT"; print $$0; print "#endif\t/* _REENTRANT */"; next } \
 		{ print $0 } \
 	' > $@

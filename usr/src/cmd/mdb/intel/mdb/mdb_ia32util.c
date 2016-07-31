@@ -22,8 +22,10 @@
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 #include <sys/types.h>
 #include <sys/reg.h>
@@ -48,13 +50,29 @@ const mdb_tgt_regdesc_t mdb_ia32_kregs[] = {
 	{ "savfp", KREG_SAVFP, MDB_TGT_R_EXPORT },
 	{ "savpc", KREG_SAVPC, MDB_TGT_R_EXPORT },
 	{ "eax", KREG_EAX, MDB_TGT_R_EXPORT },
+	{ "ax", KREG_EAX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "ah", KREG_EAX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "al", KREG_EAX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "ebx", KREG_EBX, MDB_TGT_R_EXPORT },
+	{ "bx", KREG_EBX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "bh", KREG_EBX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "bl", KREG_EBX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "ecx", KREG_ECX, MDB_TGT_R_EXPORT },
+	{ "cx", KREG_ECX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "ch", KREG_ECX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "cl", KREG_ECX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "edx", KREG_EDX, MDB_TGT_R_EXPORT },
+	{ "dx", KREG_EDX, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
+	{ "dh", KREG_EDX, MDB_TGT_R_EXPORT | MDB_TGT_R_8H },
+	{ "dl", KREG_EDX, MDB_TGT_R_EXPORT | MDB_TGT_R_8L },
 	{ "esi", KREG_ESI, MDB_TGT_R_EXPORT },
+	{ "si", KREG_ESI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "edi", KREG_EDI, MDB_TGT_R_EXPORT },
+	{ "di",	EDI, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "ebp", KREG_EBP, MDB_TGT_R_EXPORT },
+	{ "bp", KREG_EBP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "esp", KREG_ESP, MDB_TGT_R_EXPORT },
+	{ "sp", KREG_ESP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "cs", KREG_CS, MDB_TGT_R_EXPORT },
 	{ "ds", KREG_DS, MDB_TGT_R_EXPORT },
 	{ "ss", KREG_SS, MDB_TGT_R_EXPORT },
@@ -64,6 +82,7 @@ const mdb_tgt_regdesc_t mdb_ia32_kregs[] = {
 	{ "eflags", KREG_EFLAGS, MDB_TGT_R_EXPORT },
 	{ "eip", KREG_EIP, MDB_TGT_R_EXPORT },
 	{ "uesp", KREG_UESP, MDB_TGT_R_EXPORT | MDB_TGT_R_PRIV },
+	{ "usp", KREG_UESP, MDB_TGT_R_EXPORT | MDB_TGT_R_16 },
 	{ "trapno", KREG_TRAPNO, MDB_TGT_R_EXPORT | MDB_TGT_R_PRIV },
 	{ "err", KREG_ERR, MDB_TGT_R_EXPORT | MDB_TGT_R_PRIV },
 	{ NULL, 0, 0 }
@@ -176,8 +195,9 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	mdb_tgt_gregset_t gregs;
 	kreg_t *kregs = &gregs.kregs[0];
 	int got_pc = (gsp->kregs[KREG_EIP] != 0);
+	int err;
 
-	struct {
+	struct fr {
 		uintptr_t fr_savfp;
 		uintptr_t fr_savpc;
 		long fr_argv[32];
@@ -185,11 +205,13 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 
 	uintptr_t fp = gsp->kregs[KREG_EBP];
 	uintptr_t pc = gsp->kregs[KREG_EIP];
-	uintptr_t lastfp;
+	uintptr_t lastfp = 0;
 
 	ssize_t size;
 	uint_t argc;
 	int detect_exception_frames = 0;
+	int advance_tortoise = 1;
+	uintptr_t tortoise_fp = 0;
 #ifndef	_KMDB
 	int xp;
 
@@ -200,18 +222,45 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	bcopy(gsp, &gregs, sizeof (gregs));
 
 	while (fp != 0) {
-
-		if (fp & (STACK_ALIGN - 1))
-			return (set_errno(EMDB_STKALIGN));
-
+		if (fp & (STACK_ALIGN - 1)) {
+			err = EMDB_STKALIGN;
+			goto badfp;
+		}
 		if ((size = mdb_tgt_vread(t, &fr, sizeof (fr), fp)) >=
 		    (ssize_t)(2 * sizeof (uintptr_t))) {
 			size -= (ssize_t)(2 * sizeof (uintptr_t));
 			argc = kvm_argcount(t, fr.fr_savpc, size);
 		} else {
-			bzero(&fr, sizeof (fr));
-			argc = 0;
+			err = EMDB_NOMAP;
+			goto badfp;
 		}
+
+		if (tortoise_fp == 0) {
+			tortoise_fp = fp;
+		} else {
+			/*
+			 * Advance tortoise_fp every other frame, so we detect
+			 * cycles with Floyd's tortoise/hare.
+			 */
+			if (advance_tortoise != 0) {
+				struct fr tfr;
+
+				if (mdb_tgt_vread(t, &tfr, sizeof (tfr),
+				    tortoise_fp) != sizeof (tfr)) {
+					err = EMDB_NOMAP;
+					goto badfp;
+				}
+
+				tortoise_fp = tfr.fr_savfp;
+			}
+
+			if (fp == tortoise_fp) {
+				err = EMDB_STKFRAME;
+				goto badfp;
+			}
+		}
+
+		advance_tortoise = !advance_tortoise;
 
 		if (got_pc && func(arg, pc, argc, fr.fr_argv, &gregs) != 0)
 			break;
@@ -239,6 +288,10 @@ mdb_ia32_kvm_stack_iter(mdb_tgt_t *t, const mdb_tgt_gregset_t *gsp,
 	}
 
 	return (0);
+
+badfp:
+	mdb_printf("%p [%s]", fp, mdb_strerror(err));
+	return (set_errno(err));
 }
 
 /*

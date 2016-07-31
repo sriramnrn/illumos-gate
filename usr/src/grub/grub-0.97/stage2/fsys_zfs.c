@@ -23,7 +23,9 @@
  */
 
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 /*
@@ -74,7 +76,18 @@ decomp_entry_t decomp_table[ZIO_COMPRESS_FUNCTIONS] =
 	{"on", lzjb_decompress}, 	/* ZIO_COMPRESS_ON */
 	{"off", 0},			/* ZIO_COMPRESS_OFF */
 	{"lzjb", lzjb_decompress},	/* ZIO_COMPRESS_LZJB */
-	{"empty", 0}			/* ZIO_COMPRESS_EMPTY */
+	{"empty", 0},			/* ZIO_COMPRESS_EMPTY */
+	{"gzip-1", 0},			/* ZIO_COMPRESS_GZIP_1 */
+	{"gzip-2", 0},			/* ZIO_COMPRESS_GZIP_2 */
+	{"gzip-3", 0},			/* ZIO_COMPRESS_GZIP_3 */
+	{"gzip-4", 0},			/* ZIO_COMPRESS_GZIP_4 */
+	{"gzip-5", 0},			/* ZIO_COMPRESS_GZIP_5 */
+	{"gzip-6", 0},			/* ZIO_COMPRESS_GZIP_6 */
+	{"gzip-7", 0},			/* ZIO_COMPRESS_GZIP_7 */
+	{"gzip-8", 0},			/* ZIO_COMPRESS_GZIP_8 */
+	{"gzip-9", 0},			/* ZIO_COMPRESS_GZIP_9 */
+	{"zle", 0},			/* ZIO_COMPRESS_ZLE */
+	{"lz4", lz4_decompress}		/* ZIO_COMPRESS_LZ4 */
 };
 
 static int zio_read_data(blkptr_t *bp, void *buf, char *stack);
@@ -133,12 +146,14 @@ zio_checksum_info_t zio_checksum_table[ZIO_CHECKSUM_FUNCTIONS] = {
 	{{fletcher_4_native,	fletcher_4_byteswap},	1, 0,	"fletcher4"},
 	{{zio_checksum_SHA256,	zio_checksum_SHA256},	1, 0,	"SHA256"},
 	{{NULL,			NULL},			0, 0,	"zilog2"},
+	{{zio_checksum_off,	zio_checksum_off},	0, 0,	"noparity"},
+	{{zio_checksum_SHA512,	NULL},			0, 0,	"SHA512"}
 };
 
 /*
  * zio_checksum_verify: Provides support for checksum verification.
  *
- * Fletcher2, Fletcher4, and SHA256 are supported.
+ * Fletcher2, Fletcher4, SHA-256 and SHA-512/256 are supported.
  *
  * Return:
  * 	-1 = Failure
@@ -154,12 +169,15 @@ zio_checksum_verify(blkptr_t *bp, char *data, int size)
 	zio_checksum_info_t *ci = &zio_checksum_table[checksum];
 	zio_cksum_t actual_cksum, expected_cksum;
 
-	/* byteswap is not supported */
-	if (byteswap)
+	if (byteswap) {
+		grub_printf("byteswap not supported\n");
 		return (-1);
+	}
 
-	if (checksum >= ZIO_CHECKSUM_FUNCTIONS || ci->ci_func[0] == NULL)
+	if (checksum >= ZIO_CHECKSUM_FUNCTIONS || ci->ci_func[0] == NULL) {
+		grub_printf("checksum algorithm %u not supported\n", checksum);
 		return (-1);
+	}
 
 	if (ci->ci_eck) {
 		expected_cksum = zec->zec_cksum;
@@ -167,7 +185,6 @@ zio_checksum_verify(blkptr_t *bp, char *data, int size)
 		ci->ci_func[0](data, size, &actual_cksum);
 		zec->zec_cksum = expected_cksum;
 		zc = expected_cksum;
-
 	} else {
 		ci->ci_func[byteswap](data, size, &actual_cksum);
 	}
@@ -318,7 +335,7 @@ zio_read_gang(blkptr_t *bp, dva_t *dva, void *buf, char *stack)
 	}
 
 	for (i = 0; i < SPA_GBH_NBLKPTRS; i++) {
-		if (zio_gb->zg_blkptr[i].blk_birth == 0)
+		if (BP_IS_HOLE(&zio_gb->zg_blkptr[i]))
 			continue;
 
 		if (zio_read_data(&zio_gb->zg_blkptr[i], buf, stack))
@@ -352,18 +369,90 @@ zio_read_data(blkptr_t *bp, void *buf, char *stack)
 			continue;
 
 		if (DVA_GET_GANG(&bp->blk_dva[i])) {
-			if (zio_read_gang(bp, &bp->blk_dva[i], buf, stack) == 0)
-				return (0);
+			if (zio_read_gang(bp, &bp->blk_dva[i], buf, stack) != 0)
+				continue;
 		} else {
 			/* read in a data block */
 			offset = DVA_GET_OFFSET(&bp->blk_dva[i]);
 			sector = DVA_OFFSET_TO_PHYS_SECTOR(offset);
-			if (devread(sector, 0, psize, buf) != 0)
-				return (0);
+			if (devread(sector, 0, psize, buf) == 0)
+				continue;
+		}
+
+		/* verify that the checksum matches */
+		if (zio_checksum_verify(bp, buf, psize) == 0) {
+			return (0);
 		}
 	}
 
+	grub_printf("could not read block due to EIO or ECKSUM\n");
 	return (1);
+}
+
+/*
+ * buf must be at least BPE_GET_PSIZE(bp) bytes long (which will never be
+ * more than BPE_PAYLOAD_SIZE bytes).
+ */
+static void
+decode_embedded_bp_compressed(const blkptr_t *bp, void *buf)
+{
+	int psize, i;
+	uint8_t *buf8 = buf;
+	uint64_t w = 0;
+	const uint64_t *bp64 = (const uint64_t *)bp;
+
+	psize = BPE_GET_PSIZE(bp);
+
+	/*
+	 * Decode the words of the block pointer into the byte array.
+	 * Low bits of first word are the first byte (little endian).
+	 */
+	for (i = 0; i < psize; i++) {
+		if (i % sizeof (w) == 0) {
+			/* beginning of a word */
+			w = *bp64;
+			bp64++;
+			if (!BPE_IS_PAYLOADWORD(bp, bp64))
+				bp64++;
+		}
+		buf8[i] = BF64_GET(w, (i % sizeof (w)) * NBBY, NBBY);
+	}
+}
+
+/*
+ * Fill in the buffer with the (decompressed) payload of the embedded
+ * blkptr_t.  Takes into account compression and byteorder (the payload is
+ * treated as a stream of bytes).
+ * Return 0 on success, or ENOSPC if it won't fit in the buffer.
+ */
+static int
+decode_embedded_bp(const blkptr_t *bp, void *buf)
+{
+	int comp;
+	int lsize, psize;
+	uint8_t *dst = buf;
+	uint64_t w = 0;
+
+	lsize = BPE_GET_LSIZE(bp);
+	psize = BPE_GET_PSIZE(bp);
+	comp = BP_GET_COMPRESS(bp);
+
+	if (comp != ZIO_COMPRESS_OFF) {
+		uint8_t dstbuf[BPE_PAYLOAD_SIZE];
+
+		if ((unsigned int)comp >= ZIO_COMPRESS_FUNCTIONS ||
+		    decomp_table[comp].decomp_func == NULL) {
+			grub_printf("compression algorithm not supported\n");
+			return (ERR_FSYS_CORRUPT);
+		}
+
+		decode_embedded_bp_compressed(bp, dstbuf);
+		decomp_table[comp].decomp_func(dstbuf, buf, psize, lsize);
+	} else {
+		decode_embedded_bp_compressed(bp, buf);
+	}
+
+	return (0);
 }
 
 /*
@@ -380,6 +469,15 @@ zio_read(blkptr_t *bp, void *buf, char *stack)
 	int lsize, psize, comp;
 	char *retbuf;
 
+	if (BP_IS_EMBEDDED(bp)) {
+		if (BPE_GET_ETYPE(bp) != BP_EMBEDDED_TYPE_DATA) {
+			grub_printf("unsupported embedded BP (type=%u)\n",
+			    (int)BPE_GET_ETYPE(bp));
+			return (ERR_FSYS_CORRUPT);
+		}
+		return (decode_embedded_bp(bp, buf));
+	}
+
 	comp = BP_GET_COMPRESS(bp);
 	lsize = BP_GET_LSIZE(bp);
 	psize = BP_GET_PSIZE(bp);
@@ -392,7 +490,8 @@ zio_read(blkptr_t *bp, void *buf, char *stack)
 	}
 
 	if ((char *)buf < stack && ((char *)buf) + lsize > stack) {
-		grub_printf("not enough memory allocated\n");
+		grub_printf("not enough memory to fit %u bytes on stack\n",
+		    lsize);
 		return (ERR_WONT_FIT);
 	}
 
@@ -407,13 +506,13 @@ zio_read(blkptr_t *bp, void *buf, char *stack)
 		return (ERR_FSYS_CORRUPT);
 	}
 
-	if (zio_checksum_verify(bp, buf, psize) != 0) {
-		grub_printf("checksum verification failed\n");
-		return (ERR_FSYS_CORRUPT);
+	if (comp != ZIO_COMPRESS_OFF) {
+		if (decomp_table[comp].decomp_func(buf, retbuf, psize,
+		    lsize) != 0) {
+			grub_printf("zio_read decompression failed\n");
+			return (ERR_FSYS_CORRUPT);
+		}
 	}
-
-	if (comp != ZIO_COMPRESS_OFF)
-		decomp_table[comp].decomp_func(buf, retbuf, psize, lsize);
 
 	return (0);
 }
@@ -469,7 +568,7 @@ dmu_read(dnode_phys_t *dn, uint64_t blkid, void *buf, char *stack)
  */
 static int
 mzap_lookup(mzap_phys_t *zapobj, int objsize, const char *name,
-	uint64_t *value)
+    uint64_t *value)
 {
 	int i, chunks;
 	mzap_ent_phys_t *mzap_ent = zapobj->mz_chunk;
@@ -747,6 +846,7 @@ zap_iterate(dnode_phys_t *zap_dnode, zap_cb_t *cb, void *arg, char *stack)
  * Input
  *	mdn - metadnode to get the object dnode
  *	objnum - object number for the object dnode
+ *	type - if nonzero, object must be of this type
  *	buf - data buffer that holds the returning dnode
  *	stack - scratch area
  *
@@ -756,7 +856,7 @@ zap_iterate(dnode_phys_t *zap_dnode, zap_cb_t *cb, void *arg, char *stack)
  */
 static int
 dnode_get(dnode_phys_t *mdn, uint64_t objnum, uint8_t type, dnode_phys_t *buf,
-	char *stack)
+    char *stack)
 {
 	uint64_t blkid, blksz; /* the block id this object dnode is in */
 	int epbs; /* shift of number of dnodes in a block */
@@ -943,8 +1043,17 @@ get_default_bootfsobj(dnode_phys_t *mosmdn, uint64_t *obj, char *stack)
  * List of pool features that the grub implementation of ZFS supports for
  * read. Note that features that are only required for write do not need
  * to be listed here since grub opens pools in read-only mode.
+ *
+ * When this list is updated the version number in usr/src/grub/capability
+ * must be incremented to ensure the new grub gets installed.
  */
 static const char *spa_feature_names[] = {
+	"org.illumos:lz4_compress",
+	"com.delphix:hole_birth",
+	"com.delphix:extensible_dataset",
+	"com.delphix:embedded_data",
+	"org.open-zfs:large_blocks",
+	"org.illumos:sha512",
 	NULL
 };
 
@@ -1023,7 +1132,7 @@ get_objset_mdn(dnode_phys_t *mosmdn, char *fsname, uint64_t *obj,
 	    stack))
 		return (errnum);
 
-	if (errnum = dnode_get(mosmdn, objnum, DMU_OT_DSL_DIR, mdn, stack))
+	if (errnum = dnode_get(mosmdn, objnum, 0, mdn, stack))
 		return (errnum);
 
 	if (fsname == NULL) {
@@ -1065,7 +1174,7 @@ get_objset_mdn(dnode_phys_t *mosmdn, char *fsname, uint64_t *obj,
 		if (zap_lookup(mdn, cname, &objnum, stack))
 			return (ERR_FILESYSTEM_NOT_FOUND);
 
-		if (errnum = dnode_get(mosmdn, objnum, DMU_OT_DSL_DIR,
+		if (errnum = dnode_get(mosmdn, objnum, 0,
 		    mdn, stack))
 			return (errnum);
 
@@ -1078,7 +1187,7 @@ get_objset_mdn(dnode_phys_t *mosmdn, char *fsname, uint64_t *obj,
 		*obj = headobj;
 
 skip:
-	if (errnum = dnode_get(mosmdn, headobj, DMU_OT_DSL_DATASET, mdn, stack))
+	if (errnum = dnode_get(mosmdn, headobj, 0, mdn, stack))
 		return (errnum);
 	if (issnapshot) {
 		uint64_t snapobj;
@@ -1091,8 +1200,7 @@ skip:
 			return (errnum);
 		if (zap_lookup(mdn, snapname + 1, &headobj, stack))
 			return (ERR_FILESYSTEM_NOT_FOUND);
-		if (errnum = dnode_get(mosmdn, headobj,
-		    DMU_OT_DSL_DATASET, mdn, stack))
+		if (errnum = dnode_get(mosmdn, headobj, 0, mdn, stack))
 			return (errnum);
 		if (obj)
 			*obj = headobj;
@@ -1735,6 +1843,17 @@ zfs_read(char *buf, int len)
 	blksz = DNODE->dn_datablkszsec << SPA_MINBLOCKSHIFT;
 
 	/*
+	 * Note: for GRUB, SPA_MAXBLOCKSIZE is 128KB.  There is not enough
+	 * memory to allocate the new max blocksize (16MB), so while
+	 * GRUB understands the large_blocks on-disk feature, it can't
+	 * actually read large blocks.
+	 */
+	if (blksz > SPA_MAXBLOCKSIZE) {
+		grub_printf("blocks larger than 128K are not supported\n");
+		return (0);
+	}
+
+	/*
 	 * Entire Dnode is too big to fit into the space available.  We
 	 * will need to read it in chunks.  This could be optimized to
 	 * read in as large a chunk as there is space available, but for
@@ -1769,7 +1888,7 @@ zfs_read(char *buf, int len)
  * No-Op
  */
 int
-zfs_embed(int *start_sector, int needed_sectors)
+zfs_embed(unsigned long long *start_sector, int needed_sectors)
 {
 	return (1);
 }

@@ -527,7 +527,7 @@ fmd_xprt_send_case(fmd_case_t *cp, void *arg)
 	nvlist_t *nvl;
 	char *class;
 
-	if (cip->ci_state == FMD_CASE_UNSOLVED)
+	if (cip->ci_state != FMD_CASE_SOLVED)
 		return;
 
 	nvl = fmd_case_mkevent(cp, FM_LIST_SUSPECT_CLASS);
@@ -555,7 +555,7 @@ fmd_xprt_send_case_ro(fmd_case_t *cp, void *arg)
 	nvlist_t *nvl;
 	char *class;
 
-	if (cip->ci_state == FMD_CASE_UNSOLVED)
+	if (cip->ci_state != FMD_CASE_SOLVED)
 		return;
 
 	nvl = fmd_case_mkevent(cp, FM_LIST_SUSPECT_CLASS);
@@ -1158,12 +1158,9 @@ fmd_xprt_list_suspect_local(fmd_xprt_t *xp, nvlist_t *nvl)
 			if (loc)
 				topo_hdl_strfree(thp, loc);
 		}
-		if (fru)
-			nvlist_free(fru);
-		if (asru)
-			nvlist_free(asru);
-		if (rsrc)
-			nvlist_free(rsrc);
+		nvlist_free(fru);
+		nvlist_free(asru);
+		nvlist_free(rsrc);
 		fmd_fmri_topo_rele(thp);
 		fmd_case_insert_suspect(cp, flt_copy);
 	}
@@ -1327,8 +1324,7 @@ fmd_xprt_list_suspect(fmd_xprt_t *xp, nvlist_t *nvl)
 	    (xip->xi_flags & FMD_XPRT_HC_PRESENT_ONLY)) {
 		if (nelem > 0) {
 			for (i = 0; i < nelem; i++)
-				if (asrua[i])
-					nvlist_free(asrua[i]);
+				nvlist_free(asrua[i]);
 			fmd_free(proxy_asru, sizeof (uint8_t) * nelem);
 			fmd_free(diag_asru, sizeof (uint8_t) * nelem);
 			fmd_free(asrua, sizeof (nvlist_t *) * nelem);
@@ -1344,8 +1340,7 @@ fmd_xprt_list_suspect(fmd_xprt_t *xp, nvlist_t *nvl)
 	    FMD_CASE_UNSOLVED, uuid, code)) == NULL) {
 		if (nelem > 0) {
 			for (i = 0; i < nelem; i++)
-				if (asrua[i])
-					nvlist_free(asrua[i]);
+				nvlist_free(asrua[i]);
 			fmd_free(proxy_asru, sizeof (uint8_t) * nelem);
 			fmd_free(diag_asru, sizeof (uint8_t) * nelem);
 			fmd_free(asrua, sizeof (nvlist_t *) * nelem);

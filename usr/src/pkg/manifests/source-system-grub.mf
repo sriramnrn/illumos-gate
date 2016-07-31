@@ -21,6 +21,8 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
+# Copyright 2016 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
 #
 
 set name=pkg.fmri \
@@ -207,6 +209,8 @@ file path=usr/share/src/grub/stage2/dir.h
 file path=usr/share/src/grub/stage2/disk_inode.h
 file path=usr/share/src/grub/stage2/disk_inode_ffs.h
 file path=usr/share/src/grub/stage2/disk_io.c
+file path=usr/share/src/grub/stage2/expand.c
+file path=usr/share/src/grub/stage2/expand.h
 file path=usr/share/src/grub/stage2/fat.h
 file path=usr/share/src/grub/stage2/filesys.h
 file path=usr/share/src/grub/stage2/freebsd.h
@@ -236,6 +240,7 @@ file path=usr/share/src/grub/stage2/mb_header.h
 file path=usr/share/src/grub/stage2/mb_info.h
 file path=usr/share/src/grub/stage2/md5.c
 file path=usr/share/src/grub/stage2/md5.h
+file path=usr/share/src/grub/stage2/moddiv.c
 file path=usr/share/src/grub/stage2/nbi.h
 file path=usr/share/src/grub/stage2/nbloader.S
 file path=usr/share/src/grub/stage2/pc_slice.h
@@ -277,6 +282,7 @@ file path=usr/share/src/grub/stage2/zfs-include/zil.h
 file path=usr/share/src/grub/stage2/zfs-include/zio.h
 file path=usr/share/src/grub/stage2/zfs-include/zio_checksum.h
 file path=usr/share/src/grub/stage2/zfs_fletcher.c
+file path=usr/share/src/grub/stage2/zfs_lz4.c
 file path=usr/share/src/grub/stage2/zfs_lzjb.c
 file path=usr/share/src/grub/stage2/zfs_sha256.c
 file path=usr/share/src/grub/stamp-h.in

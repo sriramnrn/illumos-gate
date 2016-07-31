@@ -232,6 +232,8 @@ extern "C" {
 #define	DW_EH_PE_datarel	0x30	/* Value is reletive to the beginning */
 					/*  of the eh_frame_hdr segment */
 					/*  ( segment type PT_AMD64_UNWIND ) */
+					/*  when within that segment, or to */
+					/*  the GOT when without. */
 #define	DW_EH_PE_funcrel	0x40
 #define	DW_EH_PE_aligned	0x50	/* value is an aligned void* */
 #define	DW_EH_PE_indirect	0x80	/* bit to signal indirection after */
@@ -245,13 +247,22 @@ typedef enum _LANG {
 	LANG_ANSI_C_V1 = 1
 } LANG;
 
+typedef enum {
+	DW_SUCCESS = 0,
+	DW_BAD_ENCODING,
+	DW_OVERFLOW,
+} dwarf_error_t;
+
 /*
  * Little Endian Base 128 (leb128) encoding/decoding routines
  */
-extern	uint64_t	uleb_extract(unsigned char *, uint64_t *);
-extern	int64_t		sleb_extract(unsigned char *, uint64_t *);
-extern	uint64_t	dwarf_ehe_extract(unsigned char *, uint64_t *,
-			    uint_t, unsigned char *, uint64_t, uint64_t);
+extern	dwarf_error_t	uleb_extract(unsigned char *, uint64_t *, size_t,
+			    uint64_t *);
+extern	dwarf_error_t	sleb_extract(unsigned char *, uint64_t *, size_t,
+			    int64_t *);
+extern	dwarf_error_t	dwarf_ehe_extract(unsigned char *, size_t, uint64_t *,
+			    uint64_t *, uint_t, unsigned char *, boolean_t,
+			    uint64_t, uint64_t, uint64_t);
 
 #ifdef	__cplusplus
 }

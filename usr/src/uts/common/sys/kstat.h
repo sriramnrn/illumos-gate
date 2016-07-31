@@ -21,12 +21,12 @@
 /*
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_SYS_KSTAT_H
 #define	_SYS_KSTAT_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 /*
  * Definition of general kernel statistics structures and /dev/kstat ioctls
@@ -296,6 +296,13 @@ typedef struct kstat32 {
  *		e.g. between kstat_create() and kstat_install().
  *		kstat clients must not attempt to access the kstat's data
  *		if this flag is set.
+ *
+ *	KSTAT_FLAG_LONGSTRINGS:
+ *
+ *		Indicates that this kstat contains long strings (which
+ *		are stored outside of the kstat data section). When copied
+ *		out to user space the string data will be held in the data
+ *		section provided by the user.
  */
 
 #define	KSTAT_FLAG_VIRTUAL		0x01
@@ -304,6 +311,7 @@ typedef struct kstat32 {
 #define	KSTAT_FLAG_PERSISTENT		0x08
 #define	KSTAT_FLAG_DORMANT		0x10
 #define	KSTAT_FLAG_INVALID		0x20
+#define	KSTAT_FLAG_LONGSTRINGS		0x40
 
 /*
  * Dynamic update support
@@ -698,7 +706,7 @@ typedef struct kstat_timer {
 
 #define	KSTAT_TIMER_PTR(kptr)	((kstat_timer_t *)(kptr)->ks_data)
 
-#if	defined(_KERNEL)
+#if	defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 #include <sys/t_lock.h>
 

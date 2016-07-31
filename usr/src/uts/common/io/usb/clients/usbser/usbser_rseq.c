@@ -122,7 +122,7 @@ rseq_debug(rseq_t *rseq, int num, uintptr_t arg, int flags, int scenario,
 		uintptr_t sarg1, uintptr_t sarg2,
 		int (*func)(rseq_t *, int, uintptr_t, int, int, uintptr_t))
 {
-	int	rnd, rval, i;
+	int	rnd, rval = RSEQ_OK, i;
 
 	switch (scenario) {
 	case RSEQ_DBG_FAIL_ONE:
@@ -146,6 +146,7 @@ rseq_debug(rseq_t *rseq, int num, uintptr_t arg, int flags, int scenario,
 		break;
 	default:
 		ASSERT(!"rseq_debug: incorrect debug scenario");
+		rval = RSEQ_ABORT;
 	}
 	return (rval);
 }

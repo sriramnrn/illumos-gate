@@ -19,14 +19,14 @@
  *
  * CDDL HEADER END
  */
+/*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ */
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
 #ifndef _MALLOC_H
 #define	_MALLOC_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.7	*/
 
 #include <sys/types.h>
 
@@ -59,25 +59,29 @@ struct mallinfo  {
 	unsigned long keepcost;	/* cost of enabling keep option */
 };
 
-#if defined(__STDC__)
+#if (!defined(_STRICT_STDC) && !defined(__XOPEN_OR_POSIX)) || \
+	defined(_XPG3)
+#if __cplusplus >= 199711L
+namespace std {
+#endif
 
 void *malloc(size_t);
 void free(void *);
 void *realloc(void *, size_t);
-int mallopt(int, int);
-struct mallinfo mallinfo(void);
 void *calloc(size_t, size_t);
 
-#else
+#if __cplusplus >= 199711L
+} /* end of namespace std */
 
-void *malloc();
-void free();
-void *realloc();
-int mallopt();
-struct mallinfo mallinfo();
-void *calloc();
+using std::malloc;
+using std::free;
+using std::realloc;
+using std::calloc;
+#endif /* __cplusplus >= 199711L */
+#endif /* (!defined(_STRICT_STDC) && !defined(__XOPEN_OR_POSIX)) || ... */
 
-#endif	/* __STDC__ */
+int mallopt(int, int);
+struct mallinfo mallinfo(void);
 
 #ifdef	__cplusplus
 }

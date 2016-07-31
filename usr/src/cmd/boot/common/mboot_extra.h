@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  */
 
 #ifndef	_MBOOT_EXTRA_H
@@ -34,7 +35,7 @@ extern "C" {
 #include "bblk_einfo.h"
 
 /* multiboot header needs to be located in the first 32KB. */
-#define	MBOOT_SCAN_SIZE		(32 * 1024 * 1024)
+#define	MBOOT_SCAN_SIZE		(32 * 1024)
 
 /* multiboot header AOUT_KLUDGE flag. */
 #define	BB_MBOOT_AOUT_FLAG	(0x00010000)
@@ -46,7 +47,7 @@ typedef struct _bb_extra_header {
 } bb_header_ext_t;
 
 uint32_t compute_checksum(char *, uint32_t);
-bblk_einfo_t *find_einfo(char *);
+bblk_einfo_t *find_einfo(char *, uint32_t);
 int find_multiboot(char *, uint32_t, uint32_t *);
 void add_einfo(char *, char *, bblk_hs_t *, uint32_t);
 int compare_bootblocks(char *, char *, char **);

@@ -49,6 +49,7 @@
 #endif
 
 #include <cpu.h>
+#include <expand.h>
 
 /* The type of kernel loaded.  */
 kernel_t kernel_type;
@@ -86,7 +87,7 @@ static int configfile_func (char *arg, int flags);
 static void solaris_config_file (void);
 #endif
 
-static unsigned int min_mem64 = 0;
+unsigned int min_mem64 = 0;
 
 #if defined(__sun) && !defined(GRUB_UTIL)
 extern void __enable_execute_stack (void *);
@@ -145,9 +146,9 @@ check_password (char *entered, char* expected, password_t type)
 
 /* Print which sector is read when loading a file.  */
 static void
-disk_read_print_func(unsigned int sector, int offset, int length)
+disk_read_print_func(unsigned long long sector, int offset, int length)
 {
-  grub_printf ("[%u,%d,%d]", sector, offset, length);
+  grub_printf ("[%llu,%d,%d]", sector, offset, length);
 }
 
 
@@ -156,17 +157,17 @@ static int
 blocklist_func (char *arg, int flags)
 {
   char *dummy = (char *) RAW_ADDR (0x100000);
-  unsigned int start_sector = 0;
+  unsigned long long start_sector = 0;
   int num_sectors = 0;
   int num_entries = 0;
   int last_length = 0;
 
-  auto void disk_read_blocklist_func (unsigned int sector, int offset,
+  auto void disk_read_blocklist_func (unsigned long long sector, int offset,
       int length);
 
   /* Collect contiguous blocks into one entry as many as possible,
      and print the blocklist notation on the screen.  */
-  auto void disk_read_blocklist_func (unsigned int sector, int offset,
+  auto void disk_read_blocklist_func (unsigned long long sector, int offset,
       int length)
     {
       if (num_sectors > 0)
@@ -181,15 +182,15 @@ blocklist_func (char *arg, int flags)
 	  else
 	    {
 	      if (last_length == SECTOR_SIZE)
-		grub_printf ("%s%d+%d", num_entries ? "," : "",
+		grub_printf ("%s%llu+%d", num_entries ? "," : "",
 			     start_sector - part_start, num_sectors);
 	      else if (num_sectors > 1)
-		grub_printf ("%s%d+%d,%d[0-%d]", num_entries ? "," : "",
+		grub_printf ("%s%llu+%d,%lld[0-%d]", num_entries ? "," : "",
 			     start_sector - part_start, num_sectors-1,
 			     start_sector + num_sectors-1 - part_start, 
 			     last_length);
 	      else
-		grub_printf ("%s%d[0-%d]", num_entries ? "," : "",
+		grub_printf ("%s%llu[0-%d]", num_entries ? "," : "",
 			     start_sector - part_start, last_length);
 	      num_entries++;
 	      num_sectors = 0;
@@ -198,7 +199,7 @@ blocklist_func (char *arg, int flags)
 
       if (offset > 0)
 	{
-	  grub_printf("%s%u[%d-%d]", num_entries ? "," : "",
+	  grub_printf("%s%llu[%d-%d]", num_entries ? "," : "",
 		      sector-part_start, offset, offset+length);
 	  num_entries++;
 	}
@@ -235,7 +236,7 @@ blocklist_func (char *arg, int flags)
   /* The last entry may not be printed yet.  Don't check if it is a
    * full sector, since it doesn't matter if we read too much. */
   if (num_sectors > 0)
-    grub_printf ("%s%d+%d", num_entries ? "," : "",
+    grub_printf ("%s%llu+%d", num_entries ? "," : "",
 		 start_sector - part_start, num_sectors);
 
   grub_printf ("\n");
@@ -1396,7 +1397,7 @@ embed_func (char *arg, int flags)
   char *device;
   char *stage1_5_buffer = (char *) RAW_ADDR (0x100000);
   int len, size;
-  int sector;
+  unsigned long long sector;
   
   stage1_5 = arg;
   device = skip_to (0, stage1_5);
@@ -1479,7 +1480,7 @@ embed_func (char *arg, int flags)
   else
     {
       /* Embed it in the bootloader block in the filesystem.  */
-      int start_sector;
+      unsigned long long start_sector;
       
       /* Open the partition.  */
       if (! open_device ())
@@ -1504,7 +1505,7 @@ embed_func (char *arg, int flags)
     return 1;
   
   grub_printf (" %d sectors are embedded.\n", size);
-  grub_sprintf (embed_info, "%d+%d", sector - part_start, size);
+  grub_sprintf (embed_info, "%llu+%d", sector - part_start, size);
   return 0;
 }
 
@@ -1653,8 +1654,8 @@ harddisk:
   for (drive = 0x80; drive < 0x88; drive++)
     {
       unsigned long part = 0xFFFFFF;
-      unsigned long start, len, offset, ext_offset;
-      int type, entry;
+      unsigned long long start, len, offset, ext_offset, gpt_offset;
+      int type, entry, gpt_count, gpt_size;
       char buf[SECTOR_SIZE];
 
       if (for_root && tmp_argpart) {
@@ -1684,7 +1685,8 @@ harddisk:
       current_drive = drive;
       while (next_partition (drive, 0xFFFFFF, &part, &type,
 			     &start, &len, &offset, &entry,
-			     &ext_offset, buf))
+			     &ext_offset, &gpt_offset,
+			     &gpt_count, &gpt_size, buf))
 	{
 	  if (type != PC_SLICE_TYPE_NONE
 	      && ! IS_PC_SLICE_TYPE_BSD (type)
@@ -1868,7 +1870,7 @@ geometry_func (char *arg, int flags)
 #endif
 
   grub_printf ("drive 0x%x: C/H/S = %d/%d/%d, "
-	       "The number of sectors = %u, %s\n",
+	       "The number of sectors = %llu, %s\n",
 	       current_drive,
 	       geom.cylinders, geom.heads, geom.sectors,
 	       geom.total_sectors, msg);
@@ -2220,8 +2222,8 @@ install_func (char *arg, int flags)
   int src_drive, src_partition, src_part_start;
   int i;
   struct geometry dest_geom, src_geom;
-  unsigned int saved_sector;
-  unsigned int stage2_first_sector, stage2_second_sector;
+  unsigned long long saved_sector;
+  unsigned long long stage2_first_sector, stage2_second_sector;
   char *ptr;
   int installaddr, installlist;
   /* Point to the location of the name of a configuration file in Stage 2.  */
@@ -2241,17 +2243,17 @@ install_func (char *arg, int flags)
   char *stage2_os_file = 0;
 #endif /* GRUB_UTIL */
   
-  auto void disk_read_savesect_func (unsigned int sector, int offset,
+  auto void disk_read_savesect_func (unsigned long long sector, int offset,
       int length);
-  auto void disk_read_blocklist_func (unsigned int sector, int offset,
+  auto void disk_read_blocklist_func (unsigned long long sector, int offset,
       int length);
 
   /* Save the first sector of Stage2 in STAGE2_SECT.  */
-  auto void disk_read_savesect_func (unsigned int sector, int offset,
+  auto void disk_read_savesect_func (unsigned long long sector, int offset,
       int length)
     {
       if (debug)
-	printf ("[%u]", sector);
+	printf ("[%llu]", sector);
 
       /* ReiserFS has files which sometimes contain data not aligned
          on sector boundaries.  Returning an error is better than
@@ -2264,11 +2266,11 @@ install_func (char *arg, int flags)
 
   /* Write SECTOR to INSTALLLIST, and update INSTALLADDR and
      INSTALLSECT.  */
-  auto void disk_read_blocklist_func (unsigned int sector, int offset,
+  auto void disk_read_blocklist_func (unsigned long long sector, int offset,
       int length)
     {
       if (debug)
-	printf("[%u]", sector);
+	printf("[%llu]", sector);
 
       if (offset != 0 || last_length != SECTOR_SIZE)
 	{
@@ -2433,6 +2435,10 @@ install_func (char *arg, int flags)
     goto fail;
 
   stage2_first_sector = saved_sector;
+  if (stage2_first_sector >= 0xffffffffUL) {
+    grub_printf ("Error: stage2 first sector must be below 2TB\n");
+    goto fail;
+  }
   
   /* Read the second sector of Stage 2.  */
   if (grub_read (stage2_second_buffer, SECTOR_SIZE) != SECTOR_SIZE)
@@ -2791,117 +2797,6 @@ static struct builtin builtin_ioprobe =
 };
 
 
-/*
- * To boot from a ZFS root filesystem, the kernel$ or module$ commands
- * must include "-B $ZFS-BOOTFS" to expand to the zfs-bootfs, bootpath,
- * and diskdevid boot property values for passing to the kernel:
- *
- * e.g.
- * kernel$ /platform/i86pc/kernel/$ISADIR/unix -B $ZFS-BOOTFS,console=ttya
- *
- * $ZFS-BOOTFS is expanded to
- *
- *    zfs-bootfs=<rootpool-name/zfs-rootfilesystem-object-num>,
- *    bootpath=<device phys path>,
- *    diskdevid=<device id>
- *
- * if both bootpath and diskdevid can be found.
- * e.g
- *    zfs-bootfs=rpool/85,
- *    bootpath="/pci@0,0/pci1022,7450@a/pci17c2,10@4/sd@0,0:a",
- *    diskdevid="id1,sd@SSEAGATE_ST336607LC______3JA0LNHE0000741326W6/a"
- */
-static int
-expand_dollar_bootfs(char *in, char *out)
-{
-	char *token, *tmpout = out;
-	int outlen, blen;
-	int postcomma = 0;
-
-	/* no op if this is not zfs */
-	if (is_zfs_mount == 0)
-		return (0);
-
-	if (current_bootpath[0] == '\0' && current_devid[0] == '\0') {
-		errnum = ERR_NO_BOOTPATH;
-		return (1);
-	}
-
-	outlen = strlen(in);
-	blen = current_bootfs_obj == 0 ? strlen(current_rootpool) :
-	    strlen(current_rootpool) + 11;
-
-	out[0] = '\0';
-	while (token = strstr(in, "$ZFS-BOOTFS")) {
-
-		if ((outlen += blen) >= MAX_CMDLINE) {
-			errnum = ERR_WONT_FIT;
-			return (1);
-		}
-
-		token[0] = '\0';	
-		grub_sprintf(tmpout, "%s", in);
-		token[0] = '$';
-		in = token + 11; /* skip over $ZFS-BOOTFS */
-		tmpout = out + strlen(out);
-
-		/* Note: %u only fits 32 bit integer; */ 
-		if (current_bootfs_obj > 0)
-			grub_sprintf(tmpout, "zfs-bootfs=%s/%u",
-			    current_rootpool, current_bootfs_obj);
-		else
-			grub_sprintf(tmpout, "zfs-bootfs=%s",
-			    current_rootpool);
-		tmpout = out + strlen(out); 
-	}
-
-	/*
-	 * Check to see if 'zfs-bootfs' was explicitly specified on the command
-	 * line so that we can insert the 'bootpath' property.
-	 */
-	if ((tmpout == out) && (token = strstr(in, "zfs-bootfs")) != NULL) {
-		token[0] = '\0';
-		grub_strcpy(tmpout, in);
-		token[0] = 'z';
-		in = token;
-
-		tmpout = out + strlen(out);
-		postcomma = 1;
-	}
-
-	/*
-	 * Set the 'bootpath' property if a ZFS dataset was specified, either
-	 * through '$ZFS-BOOTFS' or an explicit 'zfs-bootfs' setting.
-	 */
-	if (tmpout != out) {
-		if (current_bootpath[0] != '\0') {
-			if ((outlen += 12 + strlen(current_bootpath))
-			    >= MAX_CMDLINE) {
-				errnum = ERR_WONT_FIT;
-				return (1);
-			}
-			grub_sprintf(tmpout,
-			    postcomma ? "bootpath=\"%s\"," : ",bootpath=\"%s\"",
-			    current_bootpath);
-			tmpout = out + strlen(out);
-		}
-
-		if (current_devid[0] != '\0') {
-			if ((outlen += 13 + strlen(current_devid))
-			    >= MAX_CMDLINE) {
-				errnum = ERR_WONT_FIT;
-				return (1);
-			}
-			grub_sprintf(tmpout,
-			    postcomma ? "diskdevid=\"%s\"," : ",diskdevid=\"%s\"",
-			    current_devid);
-		}
-	}
-
-	strncat(out, in, MAX_CMDLINE);
-	return (0);
-}
-
 /* kernel */
 static int
 kernel_func (char *arg, int flags)
@@ -3007,288 +2902,41 @@ static struct builtin builtin_min_mem64 =
 	"even on 64-bit capable hardware."
 };
 
-int
-check_min_mem64()
-{
-	if (min_mem64 == 0)
-		return (1);
-
-	if ((mbi.mem_upper / 10240) * 11 >= min_mem64)
-		return (1);
-
-	return (0);
-}
-
-static int detect_target_operating_mode();
-
-int
-amd64_config_cpu(void)
-{
-        struct amd64_cpuid_regs __vcr, *vcr = &__vcr;
-        uint32_t maxeax;
-        uint32_t max_maxeax = 0x100;
-        char vendor[13];
-        int isamd64 = 0;
-        uint32_t stdfeatures = 0, xtdfeatures = 0;
-        uint64_t efer;
-
-        /*
-         * This check may seem silly, but if the C preprocesor symbol __amd64
-         * is #defined during compilation, something that may outwardly seem
-         * like a good idea, uts/common/sys/isa_defs.h will #define _LP64,
-         * which will cause uts/common/sys/int_types.h to typedef uint64_t as
-         * an unsigned long - which is only 4 bytes in size when using a 32-bit
-         * compiler.
-         *
-         * If that happens, all the page table translation routines will fail
-         * horribly, so check the size of uint64_t just to insure some degree
-         * of sanity in future operations.
-         */
-        /*LINTED [sizeof result is invarient]*/
-        if (sizeof (uint64_t) != 8)
-                prom_panic("grub compiled improperly, unable to boot "
-                    "64-bit AMD64 executables");
-
-        /*
-         * If the CPU doesn't support the CPUID instruction, it's definitely
-         * not an AMD64.
-         */
-        if (amd64_cpuid_supported() == 0)
-                return (0);
-
-        amd64_cpuid_insn(0, vcr);
-
-        maxeax = vcr->r_eax;
-        {
-                /*LINTED [vendor string from cpuid data]*/
-                uint32_t *iptr = (uint32_t *)vendor;
-
-                *iptr++ = vcr->r_ebx;
-                *iptr++ = vcr->r_edx;
-                *iptr++ = vcr->r_ecx;
-
-                vendor[12] = '\0';
-        }
-
-        if (maxeax > max_maxeax) {
-                grub_printf("cpu: warning, maxeax was 0x%x -> 0x%x\n",
-                    maxeax, max_maxeax);
-                maxeax = max_maxeax;
-        }
-
-        if (maxeax < 1)
-                return (0);     /* no additional functions, not an AMD64 */
-        else {
-                uint_t family, model, step;
-
-                amd64_cpuid_insn(1, vcr);
-
-                /*
-                 * All AMD64/IA32e processors technically SHOULD report
-                 * themselves as being in family 0xf, but for some reason
-                 * Simics doesn't, and this may change in the future, so
-                 * don't error out if it's not true.
-                 */
-                if ((family = BITX(vcr->r_eax, 11, 8)) == 0xf)
-                        family += BITX(vcr->r_eax, 27, 20);
-
-                if ((model = BITX(vcr->r_eax, 7, 4)) == 0xf)
-                        model += BITX(vcr->r_eax, 19, 16) << 4;
-                step = BITX(vcr->r_eax, 3, 0);
-
-                grub_printf("cpu: '%s' family %d model %d step %d\n",
-                    vendor, family, model, step);
-                stdfeatures = vcr->r_edx;
-        }
-
-        amd64_cpuid_insn(0x80000000, vcr);
-
-        if (vcr->r_eax & 0x80000000) {
-                uint32_t xmaxeax = vcr->r_eax;
-                const uint32_t max_xmaxeax = 0x80000100;
-
-                if (xmaxeax > max_xmaxeax) {
-                        grub_printf("amd64: warning, xmaxeax was "
-			    "0x%x -> 0x%x\n", xmaxeax, max_xmaxeax);
-                        xmaxeax = max_xmaxeax;
-                }
-
-                if (xmaxeax >= 0x80000001) {
-                        amd64_cpuid_insn(0x80000001, vcr);
-                        xtdfeatures = vcr->r_edx;
-                }
-        }
-
-        if (BITX(xtdfeatures, 29, 29))          /* long mode */
-                isamd64++;
-        else
-                grub_printf("amd64: CPU does NOT support long mode\n");
-
-        if (!BITX(stdfeatures, 0, 0)) {
-                grub_printf("amd64: CPU does NOT support FPU\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 4, 4)) {
-                grub_printf("amd64: CPU does NOT support TSC\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 5, 5)) {
-                grub_printf("amd64: CPU does NOT support MSRs\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 6, 6)) {
-                grub_printf("amd64: CPU does NOT support PAE\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 8, 8)) {
-                grub_printf("amd64: CPU does NOT support CX8\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 13, 13)) {
-                grub_printf("amd64: CPU does NOT support PGE\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 19, 19)) {
-                grub_printf("amd64: CPU does NOT support CLFSH\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 23, 23)) {
-                grub_printf("amd64: CPU does NOT support MMX\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 24, 24)) {
-                grub_printf("amd64: CPU does NOT support FXSR\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 25, 25)) {
-                grub_printf("amd64: CPU does NOT support SSE\n");
-                isamd64--;
-        }
-
-        if (!BITX(stdfeatures, 26, 26)) {
-                grub_printf("amd64: CPU does NOT support SSE2\n");
-                isamd64--;
-        }
-
-        if (isamd64 < 1) {
-                grub_printf("amd64: CPU does not support amd64 executables.\n");
-                return (0);
-        }
-
-        amd64_rdmsr(MSR_AMD_EFER, &efer);
-        if (efer & AMD_EFER_SCE)
-                grub_printf("amd64: EFER_SCE (syscall/sysret) already "
-		    "enabled\n");
-        if (efer & AMD_EFER_NXE)
-                grub_printf("amd64: EFER_NXE (no-exec prot) already enabled\n");
-        if (efer & AMD_EFER_LME)
-                grub_printf("amd64: EFER_LME (long mode) already enabled\n");
-
-        return (detect_target_operating_mode());
-}
-
-static int
-detect_target_operating_mode()
-{
-        int ret, ah;
-
-	ah = get_target_operating_mode();
-
-        ah = ah >> 8;
-
-	/* XXX still need to pass back the return from the call  */
-	ret = 0;
-
-        if (ah == 0x86 && (ret & CB) != 0) {
-                grub_printf("[BIOS 'Detect Target Operating Mode' "
-                    "callback unsupported on this platform]\n");
-                return (1);     /* unsupported, ignore */
-        }
-
-        if (ah == 0x0 && (ret & CB) == 0) {
-                grub_printf("[BIOS accepted mixed-mode target setting!]\n");
-                return (1);     /* told the bios what we're up to */
-        }
-
-        if (ah == 0 && ret & CB) {
-                grub_printf("fatal: BIOS reports this machine CANNOT run in "
-		    "mixed 32/64-bit mode!\n");
-                return (0);
-        }
-
-        grub_printf("warning: BIOS Detect Target Operating Mode callback "
-            "confused.\n         %%ax >> 8 = 0x%x, carry = %d\n", ah,
-            ret & CB ? 1 : 0);
-
-        return (1);
-}
-
-
-int
-isamd64()
-{
-	static int ret = -1;
-
-	if (ret == -1)
-		ret = amd64_config_cpu();
-
-	return (ret);
-}
-
-static void
-expand_arch (char *arg, char *newarg)
-{
-  char *index;
-
-  newarg[0] = '\0';
-
-  while ((index = strstr(arg, "$ISADIR")) != NULL) {
-
-    index[0] = '\0';
-    strncat(newarg, arg, MAX_CMDLINE);
-    index[0] = '$';
-
-    if (isamd64() && check_min_mem64())
-      strncat(newarg, "amd64", MAX_CMDLINE);
-
-    arg = index + 7;
-  }
-
-  strncat(newarg, arg, MAX_CMDLINE);
-  return;
-}
-
-/* kernel$ */
 static int
 kernel_dollar_func (char *arg, int flags)
 {
-  char newarg[MAX_CMDLINE];	/* everything boils down to MAX_CMDLINE */
+  int err;
+  char newarg[MAX_CMDLINE];
 
+  /*
+   * We're going to expand the arguments twice.  The first expansion, which
+   * occurs without the benefit of knowing the ZFS object ID of the filesystem
+   * we're booting from (if we're booting from ZFS, of course), must be
+   * sufficient to find and read the kernel.  The second expansion will
+   * then overwrite the command line actually set in the multiboot header with
+   * the newly-expanded one.  Since $ZFS-BOOTFS expands differently after
+   * zfs_open() has been called (kernel_func() -> load_image() -> grub_open() ->
+   * zfs_open()), we need to do the second expansion so that the kernel is
+   * given the right object ID argument.  Note that the pointer to the
+   * command line set in the multiboot header is always MB_CMDLINE_BUF.
+   */
   grub_printf("loading '%s' ...\n", arg);
-  expand_arch(arg, newarg);
-
-  if (kernel_func(newarg, flags))
-	return (1);
-
-  mb_cmdline = (char *)MB_CMDLINE_BUF;
-  if (expand_dollar_bootfs(newarg, mb_cmdline)) {
-	grub_printf("cannot expand $ZFS-BOOTFS for dataset %s\n",
-	    current_bootfs);
-	return (1);
+  if ((err = expand_string(arg, newarg, MAX_CMDLINE)) != 0) {
+    errnum = err;
+    return (1);
   }
 
-  grub_printf("'%s' is loaded\n", mb_cmdline);
-  mb_cmdline += grub_strlen(mb_cmdline) + 1;
+  if ((err = kernel_func(newarg, flags)) != 0)
+    return (err);
 
+  mb_cmdline = (char *)MB_CMDLINE_BUF;
+  if ((err = expand_string(arg, mb_cmdline, MAX_CMDLINE)) != 0) {
+    errnum = err;
+    return (1);
+  }
+
+  grub_printf("loading '%s' ...\n", mb_cmdline);
+  mb_cmdline += grub_strlen(mb_cmdline) + 1;
   return (0);
 }
 
@@ -3298,7 +2946,8 @@ static struct builtin builtin_kernel_dollar =
   kernel_dollar_func,
   BUILTIN_CMDLINE | BUILTIN_HELP_LIST,
   "kernel$ [--no-mem-option] [--type=TYPE] FILE [ARG ...]",
-  " Just like kernel, but with $ISADIR expansion."
+  " Just like kernel, but with variable expansion, including the legacy"
+  " (and nonconforming) variables $ISADIR and $ZFS-BOOTFS."
 };
 
 
@@ -3521,25 +3170,26 @@ static struct builtin builtin_module =
 static int
 module_dollar_func (char *arg, int flags)
 {
-  char newarg[MAX_CMDLINE];	/* everything boils down to MAX_CMDLINE */
-  char *cmdline_sav;
+  char newarg[MAX_CMDLINE];
+  char *cmdline_sav = mb_cmdline;
+  int err;
 
   grub_printf("loading '%s' ...\n", arg);
-  expand_arch(arg, newarg);
-
-  cmdline_sav = (char *)mb_cmdline;
-  if (module_func(newarg, flags))
-	return (1);
-
-  if (expand_dollar_bootfs(newarg, cmdline_sav)) {
-	grub_printf("cannot expand $ZFS-BOOTFS for dataset %s\n",
-	    current_bootfs);
-	return (1);
+  if ((err = expand_string(arg, newarg, MAX_CMDLINE)) != 0) {
+    errnum = err;
+    return (1);
   }
 
-  grub_printf("'%s' is loaded\n", (char *)cmdline_sav);
-  mb_cmdline += grub_strlen(cmdline_sav) + 1;
+  if ((err = module_func(newarg, flags)) != 0)
+    return (err);
 
+  if ((err = expand_string(arg, cmdline_sav, MAX_CMDLINE)) != 0) {
+    errnum = err;
+    return (1);
+  }
+
+  grub_printf("loading '%s' ...\n", cmdline_sav);
+  mb_cmdline += grub_strlen(cmdline_sav) + 1;
   return (0);
 }
 
@@ -3733,8 +3383,8 @@ parttype_func (char *arg, int flags)
 {
   int new_type;
   unsigned long part = 0xFFFFFF;
-  unsigned long start, len, offset, ext_offset;
-  int entry, type;
+  unsigned long long start, len, offset, ext_offset, gpt_offset;
+  int entry, type, gpt_count, gpt_size;
   char mbr[512];
 
   /* Get the drive and the partition.  */
@@ -3771,8 +3421,15 @@ parttype_func (char *arg, int flags)
   /* Look for the partition.  */
   while (next_partition (current_drive, 0xFFFFFF, &part, &type,
 			 &start, &len, &offset, &entry,
-			 &ext_offset, mbr))
+			 &ext_offset, &gpt_offset, &gpt_count, &gpt_size, mbr))
     {
+	  /* The partition may not be a GPT partition.  */
+	  if (gpt_offset != 0)
+	    {
+		errnum = ERR_BAD_ARGUMENT;
+		return 1;
+	    }
+
       if (part == current_partition)
 	{
 	  /* Found.  */
@@ -4243,7 +3900,7 @@ savedefault_func (char *arg, int flags)
   char sect[SECTOR_SIZE];
   int entryno;
   int sector_count = 0;
-  unsigned int saved_sectors[2];
+  unsigned long long saved_sectors[2];
   int saved_offsets[2];
   int saved_lengths[2];
 
@@ -4253,9 +3910,9 @@ savedefault_func (char *arg, int flags)
   }
 
   /* Save sector information about at most two sectors.  */
-  auto void disk_read_savesect_func (unsigned int sector, int offset,
+  auto void disk_read_savesect_func (unsigned long long sector, int offset,
       int length);
-  void disk_read_savesect_func (unsigned int sector, int offset, int length)
+  void disk_read_savesect_func (unsigned long long sector, int offset, int length)
     {
       if (sector_count < 2)
 	{
@@ -4400,11 +4057,19 @@ static struct builtin builtin_savedefault =
 static int
 serial_func (char *arg, int flags)
 {
-  unsigned short port = serial_hw_get_port (0);
+  int i;
+  int units[SERIAL_MAX_PORTS];
+  unsigned short ports[SERIAL_MAX_PORTS];
   unsigned int speed = 9600;
   int word_len = UART_8BITS_WORD;
   int parity = UART_NO_PARITY;
   int stop_bit_len = UART_1_STOP_BIT;
+
+  for (i = 0; i < SERIAL_MAX_PORTS; ++i)
+    {
+      units[i] = -1;
+      ports[i] = 0;
+    }
 
   /* Process GNU-style long options.
      FIXME: We should implement a getopt-like function, to avoid
@@ -4415,17 +4080,28 @@ serial_func (char *arg, int flags)
 	{
 	  char *p = arg + sizeof ("--unit=") - 1;
 	  int unit;
-	  
-	  if (! safe_parse_maxint (&p, &unit))
-	    return 1;
-	  
-	  if (unit < 0 || unit > 3)
-	    {
-	      errnum = ERR_DEV_VALUES;
-	      return 1;
-	    }
 
-	  port = serial_hw_get_port (unit);
+	  i = 0;
+	  do
+	    {
+	      if (i >= SERIAL_MAX_PORTS)
+		{
+		  errnum = ERR_DEV_FORMAT;
+		  return 1;
+		}
+
+	      if (! safe_parse_maxint (&p, &unit))
+	        return 1;
+	  
+	      if (unit < 0 || unit > 3)
+	        {
+	          errnum = ERR_DEV_VALUES;
+	          return 1;
+	        }
+
+	      units[i++] = unit;
+	    }
+	  while (*p++ == ',');
 	}
       else if (grub_memcmp (arg, "--speed=", sizeof ("--speed=") - 1) == 0)
 	{
@@ -4441,11 +4117,28 @@ serial_func (char *arg, int flags)
 	{
 	  char *p = arg + sizeof ("--port=") - 1;
 	  int num;
-	  
-	  if (! safe_parse_maxint (&p, &num))
-	    return 1;
 
-	  port = (unsigned short) num;
+	  i = 0;
+	  do
+	    {
+	      if (i >= SERIAL_MAX_PORTS)
+		{
+		  errnum = ERR_DEV_FORMAT;
+		  return 1;
+		}
+
+	      if (! safe_parse_maxint (&p, &num))
+	        return 1;
+
+	      if (num > 0xffff || num <= 0)
+		{
+		  errnum = ERR_DEV_VALUES;
+		  return 1;
+		}
+
+	      ports[i++] = (unsigned short) num;
+	    }
+	  while (*p++ == ',');
 	}
       else if (grub_memcmp (arg, "--word=", sizeof ("--word=") - 1) == 0)
 	{
@@ -4521,8 +4214,21 @@ serial_func (char *arg, int flags)
       arg = skip_to (0, arg);
     }
 
-  /* Initialize the serial unit.  */
-  if (! serial_hw_init (port, speed, word_len, parity, stop_bit_len))
+  if (units[0] == -1 && ports[0] == 0)
+    units[0] = 0;
+
+  for (i = 0; i < SERIAL_MAX_PORTS; ++i)
+    {
+      if (units[i] != -1)
+	ports[i] = serial_hw_get_port (units[i]);
+      if (ports[i] == 0)
+	continue;
+
+      if (serial_hw_init (ports[i], speed, word_len, parity, stop_bit_len))
+	break;
+    }
+
+  if (i >= SERIAL_MAX_PORTS)
     {
       errnum = ERR_BAD_ARGUMENT;
       return 1;
@@ -4536,14 +4242,17 @@ static struct builtin builtin_serial =
   "serial",
   serial_func,
   BUILTIN_MENU | BUILTIN_CMDLINE | BUILTIN_HELP_LIST,
-  "serial [--unit=UNIT] [--port=PORT] [--speed=SPEED] [--word=WORD] [--parity=PARITY] [--stop=STOP] [--device=DEV]",
+  "serial [[--unit=UNIT[,UNIT...]] | [--port=PORT[,PORT...]]] [--speed=SPEED] [--word=WORD] [--parity=PARITY] [--stop=STOP] [--device=DEV]",
   "Initialize a serial device. UNIT is a digit that specifies which serial"
-  " device is used (e.g. 0 == COM1). If you need to specify the port number,"
-  " set it by --port. SPEED is the DTE-DTE speed. WORD is the word length,"
+  " device is used (e.g. 0 == ttya (aka COM1)). If you need to specify the port"
+  " number, set it by --port. Either but not both of --unit and --port is"
+  " permitted; --unit takes precedence. Multiple devices may be specified,"
+  " separated by commas; the first working device in the list will be used"
+  " and the rest ignored. SPEED is the DTE-DTE speed. WORD is the word length,"
   " PARITY is the type of parity, which is one of `no', `odd' and `even'."
   " STOP is the length of stop bit(s). The option --device can be used only"
   " in the grub shell, which specifies the file name of a tty device. The"
-  " default values are COM1, 9600, 8N1."
+  " default values are ttya, 9600, 8N1."
 };
 #endif /* SUPPORT_SERIAL */
 
@@ -4850,15 +4559,15 @@ setup_func (char *arg, int flags)
 	{
 	  char tmp[16];
 	  grub_sprintf (tmp, ",%d", (partition >> 16) & 0xFF);
-	  grub_strncat (device, tmp, 256);
+	  grub_strncat (device, tmp, sizeof (device));
 	}
       if ((partition & 0x00FF00) != 0x00FF00)
 	{
 	  char tmp[16];
 	  grub_sprintf (tmp, ",%c", 'a' + ((partition >> 8) & 0xFF));
-	  grub_strncat (device, tmp, 256);
+	  grub_strncat (device, tmp, sizeof (device));
 	}
-      grub_strncat (device, ")", 256);
+      grub_strncat (device, ")", sizeof (device));
     }
   
   int embed_stage1_5 (char *stage1_5, int drive, int partition)
@@ -5289,11 +4998,14 @@ static struct builtin builtin_terminal =
   "terminal",
   terminal_func,
   BUILTIN_MENU | BUILTIN_CMDLINE | BUILTIN_HELP_LIST,
-  "terminal [--dumb] [--no-echo] [--no-edit] [--timeout=SECS] [--lines=LINES] [--silent] [console] [serial] [hercules] [graphics]",
+  "terminal [--dumb] [--no-echo] [--no-edit] [--timeout=SECS] [--lines=LINES] [--silent] [console] [serial] [hercules] [graphics] [composite]",
   "Select a terminal. When multiple terminals are specified, wait until"
   " you push any key to continue. If both console and serial are specified,"
   " the terminal to which you input a key first will be selected. If no"
-  " argument is specified, print current setting. The option --dumb"
+  " argument is specified, print current setting. To accomodate systems"
+  " where console redirection may or may not be present, the composite"
+  " console will direct output to the serial and BIOS consoles, and accept"
+  " input from either one, without requiring selection. The option --dumb"
   " specifies that your terminal is dumb, otherwise, vt100-compatibility"
   " is assumed. If you specify --no-echo, input characters won't be echoed."
   " If you specify --no-edit, the BASH-like editing feature will be disabled."
@@ -5815,6 +5527,54 @@ static struct builtin builtin_vbeprobe =
   "Probe VBE information. If the mode number MODE is specified, show only"
   " the information about only the mode."
 };
+
+static int
+variable_func(char *arg, int flags)
+{
+	char name[EV_NAMELEN];
+	char *val;
+	int err;
+
+	if (*arg == '\0') {
+		dump_variables();
+		return (0);
+	}
+
+	if ((val = grub_strchr(arg, ' ')) != NULL) {
+		if (val - arg >= sizeof (name)) {
+			errnum = ERR_WONT_FIT;
+			return (1);
+		}
+		(void) grub_memcpy(name, arg, (val - arg));
+		name[val - arg] = '\0';
+		val = skip_to(0, arg);
+	} else {
+		if (grub_strlen(arg) >= sizeof (name)) {
+			errnum = ERR_WONT_FIT;
+			return (1);
+		}
+		(void) grub_strcpy(name, arg);
+	}
+
+	if ((err = set_variable(name, val)) != 0) {
+		errnum = err;
+		return (1);
+	}
+
+	return (0);
+}
+
+static struct builtin builtin_variable =
+{
+  "variable",
+  variable_func,
+  BUILTIN_CMDLINE | BUILTIN_MENU | BUILTIN_SCRIPT | BUILTIN_HELP_LIST,
+  "variable NAME [VALUE]",
+  "Set the variable NAME to VALUE, or to the empty string if no value is"
+  " given. NAME must contain no spaces. There is no quoting mechanism"
+  " and nested variable references are not allowed. Variable values may"
+  " be substituted into the kernel$ and module$ commands using ${NAME}."
+};
   
 
 /* The table of builtin commands. Sorted in dictionary order.  */
@@ -5922,6 +5682,7 @@ struct builtin *builtin_table[] =
   &builtin_title,
   &builtin_unhide,
   &builtin_uppermem,
+  &builtin_variable,
   &builtin_vbeprobe,
   &builtin_verbose,
   0

@@ -21,7 +21,7 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_VDEV_H
@@ -60,6 +60,7 @@ extern zio_t *vdev_probe(vdev_t *vd, zio_t *pio);
 extern boolean_t vdev_is_bootable(vdev_t *vd);
 extern vdev_t *vdev_lookup_top(spa_t *spa, uint64_t vdev);
 extern vdev_t *vdev_lookup_by_guid(vdev_t *vd, uint64_t guid);
+extern int vdev_count_leaves(spa_t *spa);
 extern void vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t d,
     uint64_t txg, uint64_t size);
 extern boolean_t vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t d,
@@ -70,6 +71,10 @@ extern void vdev_dtl_reassess(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
 extern boolean_t vdev_dtl_required(vdev_t *vd);
 extern boolean_t vdev_resilver_needed(vdev_t *vd,
     uint64_t *minp, uint64_t *maxp);
+extern void vdev_destroy_unlink_zap(vdev_t *vd, uint64_t zapobj,
+    dmu_tx_t *tx);
+extern uint64_t vdev_create_link_zap(vdev_t *vd, dmu_tx_t *tx);
+extern void vdev_construct_zaps(vdev_t *vd, dmu_tx_t *tx);
 
 extern void vdev_hold(vdev_t *);
 extern void vdev_rele(vdev_t *);
@@ -79,6 +84,7 @@ extern void vdev_metaslab_fini(vdev_t *vd);
 extern void vdev_metaslab_set_size(vdev_t *);
 extern void vdev_expand(vdev_t *vd, uint64_t txg);
 extern void vdev_split(vdev_t *vd);
+extern void vdev_deadman(vdev_t *vd);
 
 
 extern void vdev_get_stats(vdev_t *vd, vdev_stat_t *vs);
@@ -109,7 +115,7 @@ extern boolean_t vdev_accessible(vdev_t *vd, zio_t *zio);
 
 extern void vdev_cache_init(vdev_t *vd);
 extern void vdev_cache_fini(vdev_t *vd);
-extern int vdev_cache_read(zio_t *zio);
+extern boolean_t vdev_cache_read(zio_t *zio);
 extern void vdev_cache_write(zio_t *zio);
 extern void vdev_cache_purge(vdev_t *vd);
 
@@ -120,8 +126,7 @@ extern void vdev_queue_io_done(zio_t *zio);
 
 extern void vdev_config_dirty(vdev_t *vd);
 extern void vdev_config_clean(vdev_t *vd);
-extern int vdev_config_sync(vdev_t **svd, int svdcount, uint64_t txg,
-    boolean_t);
+extern int vdev_config_sync(vdev_t **svd, int svdcount, uint64_t txg);
 
 extern void vdev_state_dirty(vdev_t *vd);
 extern void vdev_state_clean(vdev_t *vd);
@@ -129,7 +134,8 @@ extern void vdev_state_clean(vdev_t *vd);
 typedef enum vdev_config_flag {
 	VDEV_CONFIG_SPARE = 1 << 0,
 	VDEV_CONFIG_L2CACHE = 1 << 1,
-	VDEV_CONFIG_REMOVING = 1 << 2
+	VDEV_CONFIG_REMOVING = 1 << 2,
+	VDEV_CONFIG_MOS = 1 << 3
 } vdev_config_flag_t;
 
 extern void vdev_top_config_generate(spa_t *spa, nvlist_t *config);
@@ -142,7 +148,7 @@ extern nvlist_t *vdev_config_generate(spa_t *spa, vdev_t *vd,
 struct uberblock;
 extern uint64_t vdev_label_offset(uint64_t psize, int l, uint64_t offset);
 extern int vdev_label_number(uint64_t psise, uint64_t offset);
-extern nvlist_t *vdev_label_read_config(vdev_t *vd, int label);
+extern nvlist_t *vdev_label_read_config(vdev_t *vd, uint64_t txg);
 extern void vdev_uberblock_load(vdev_t *, struct uberblock *, nvlist_t **);
 
 typedef enum {

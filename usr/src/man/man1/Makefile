@@ -9,11 +9,15 @@
 # at http://www.illumos.org/license/CDDL.
 #
 
+#
 # Copyright 2011, Richard Lowe
+# Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+#
 
-include ../../Makefile.master
+include		$(SRC)/Makefile.master
 
-MANSECT = 	1
+MANSECT= 	1
 
 MANFILES=	acctcom.1			\
 	 	adb.1				\
@@ -41,7 +45,6 @@ MANFILES=	acctcom.1			\
 	 	basename.1			\
 	 	bc.1				\
 	 	bdiff.1				\
-	 	bfs.1				\
 	 	break.1				\
 	 	builtin.1			\
 	 	cal.1				\
@@ -108,7 +111,6 @@ MANFILES=	acctcom.1			\
 	 	dumpcs.1			\
 	 	echo.1				\
 	 	ed.1				\
-		edit.1				\
 	 	egrep.1				\
 	 	eject.1				\
 	 	elfdump.1			\
@@ -129,7 +131,6 @@ MANFILES=	acctcom.1			\
 	 	fdformat.1			\
 	 	fgrep.1				\
 	 	file.1				\
-	 	filebench.1			\
 	 	filesync.1			\
 	 	find.1				\
 	 	finger.1			\
@@ -137,8 +138,6 @@ MANFILES=	acctcom.1			\
 	 	fmtmsg.1			\
 	 	fold.1				\
 	 	ftp.1				\
-	 	ftpcount.1			\
-	 	ftpwho.1			\
 	 	gcore.1				\
 	 	gencat.1			\
 	 	genmsg.1			\
@@ -182,6 +181,7 @@ MANFILES=	acctcom.1			\
 	 	krb5-config.1			\
 	 	ksh93.1				\
 	 	ktutil.1			\
+		kvmstat.1			\
 	 	lari.1				\
 	 	last.1				\
 	 	lastcomm.1			\
@@ -218,15 +218,15 @@ MANFILES=	acctcom.1			\
 	 	m4.1				\
 	 	mac.1				\
 	 	mach.1				\
-	 	machid.1			\
 	 	madv.so.1.1			\
 	 	mail.1				\
 	 	mailcompat.1			\
-	 	mailq.1				\
 	 	mailstats.1			\
 	 	mailx.1				\
+		make.1				\
 	 	makekey.1			\
 	 	man.1				\
+	 	mandoc.1			\
 	 	mconnect.1			\
 	 	mcs.1				\
 	 	mdb.1				\
@@ -328,15 +328,16 @@ MANFILES=	acctcom.1			\
 	 	rusers.1			\
 	 	rwho.1				\
 	 	sar.1				\
-	 	scp.1				\
+		scp.sunssh.1		\
 	 	script.1			\
 	 	sdiff.1				\
 	 	sed.1				\
+		sendmail-mailq.1		\
 	 	set.1				\
 	 	setfacl.1			\
 	 	setlabel.1			\
 	 	setpgrp.1			\
-	 	sftp.1				\
+		sftp.sunssh.1		\
 	 	shcomp.1			\
 	 	shell_builtins.1		\
 	 	shift.1				\
@@ -350,13 +351,13 @@ MANFILES=	acctcom.1			\
 	 	spell.1				\
 	 	split.1				\
 	 	srchtxt.1			\
-	 	ssh.1				\
-	 	ssh-add.1			\
-	 	ssh-agent.1			\
-	 	ssh-http-proxy-connect.1	\
-	 	ssh-keygen.1			\
-	 	ssh-keyscan.1			\
-	 	ssh-socks5-proxy-connect.1	\
+		ssh.sunssh.1			\
+		ssh-add.sunssh.1			\
+		ssh-agent.sunssh.1			\
+		ssh-http-proxy-connect.sunssh.1	\
+		ssh-keygen.sunssh.1		\
+		ssh-keyscan.sunssh.1		\
+		ssh-socks5-proxy-connect.sunssh.1	\
 	 	strchg.1			\
 	 	strings.1			\
 	 	strip.1				\
@@ -366,6 +367,7 @@ MANFILES=	acctcom.1			\
 	 	svcprop.1			\
 	 	svcs.1				\
 	 	symorder.1			\
+		sysV-make.1			\
 	 	sys-suspend.1			\
 	 	tabs.1				\
 	 	tail.1				\
@@ -402,14 +404,14 @@ MANFILES=	acctcom.1			\
 	 	units.1				\
 	 	unix2dos.1			\
 	 	uptime.1			\
-	 	vacation.1			\
+		uuidgen.1			\
+		vacation.1			\
 	 	vgrind.1			\
 	 	volcheck.1			\
 	 	volrmmount.1			\
 	 	w.1				\
 	 	wait.1				\
 	 	wc.1				\
-	 	whatis.1			\
 	 	which.1				\
 	 	who.1				\
 	 	whocalls.1			\
@@ -427,7 +429,7 @@ MANFILES=	acctcom.1			\
 	 	zlogin.1			\
 	 	zonename.1
 
-MANSOFILES =	batch.1		\
+MANLINKS=	batch.1		\
 	 	bg.1		\
 	 	case.1		\
 	 	chdir.1		\
@@ -437,6 +439,7 @@ MANSOFILES =	batch.1		\
 	 	dirname.1	\
 	 	dirs.1		\
 	 	disable.1	\
+		dmake.1		\
 	 	dumpkeys.1	\
 		edit.1		\
 	 	errange.1	\
@@ -472,23 +475,18 @@ MANSOFILES =	batch.1		\
 		helpuid.1	\
 		helpyorn.1	\
 		hist.1		\
-		i286.1		\
-		i386.1		\
-		i486.1		\
-		i860.1		\
-		iAPX286.1	\
 		if.1		\
 		intro.1		\
 		jsh.1		\
 		ksh.1		\
 		ldapadd.1	\
+		mailq.1		\
 		neqn.1		\
 		notify.1	\
 		onintr.1	\
 		page.1		\
 		pcat.1		\
 		pcred.1		\
-		pdp11.1		\
 		pfcsh.1		\
 		pfiles.1	\
 		pfksh.1		\
@@ -516,23 +514,25 @@ MANSOFILES =	batch.1		\
 		rmail.1		\
 		rmdir.1		\
 		rmumount.1	\
+		scp.1		\
 		select.1	\
 		setenv.1	\
 		settime.1	\
+		sftp.1		\
 		sh.1		\
 		snca.1		\
 		source.1	\
-		sparc.1		\
 		spellin.1	\
+		ssh.1		\
+		ssh-add.1	\
+		ssh-agent.1	\
+		ssh-http-proxy-connect.1	\
+		ssh-keygen.1	\
+		ssh-keyscan.1	\
+		ssh-socks5-proxy-connect.1	\
 		stop.1		\
 		strconf.1	\
-		sun.1		\
 		switch.1	\
-		u370.1		\
-		u3b.1		\
-		u3b15.1		\
-		u3b2.1		\
-		u3b5.1		\
 		ulimit.1	\
 		unalias.1	\
 		uncompress.1	\
@@ -552,198 +552,199 @@ MANSOFILES =	batch.1		\
 		valtime.1	\
 		valuid.1	\
 		valyorn.1	\
-		vax.1		\
 		vedit.1		\
+		whatis.1	\
 		whence.1	\
 		while.1		\
 		zcat.1
 
-MANFILES +=	$(MANSOFILES)
+intro.1		:= LINKSRC = Intro.1
 
-intro.1		:= SOSRC = man1/Intro.1
+whatis.1	:= LINKSRC = apropos.1
 
-unalias.1	:= SOSRC = man1/alias.1
+unalias.1	:= LINKSRC = alias.1
 
-batch.1		:= SOSRC = man1/at.1
+batch.1		:= LINKSRC = at.1
 
-dirname.1	:= SOSRC = man1/basename.1
+dirname.1	:= LINKSRC = basename.1
 
-continue.1	:= SOSRC = man1/break.1
+continue.1	:= LINKSRC = break.1
 
-chdir.1		:= SOSRC = man1/cd.1
-dirs.1		:= SOSRC = man1/cd.1
-popd.1		:= SOSRC = man1/cd.1
-pushd.1		:= SOSRC = man1/cd.1
+chdir.1		:= LINKSRC = cd.1
+dirs.1		:= LINKSRC = cd.1
+popd.1		:= LINKSRC = cd.1
+pushd.1		:= LINKSRC = cd.1
 
-errdate.1	:= SOSRC = man1/ckdate.1
-helpdate.1	:= SOSRC = man1/ckdate.1
-valdate.1	:= SOSRC = man1/ckdate.1
+errdate.1	:= LINKSRC = ckdate.1
+helpdate.1	:= LINKSRC = ckdate.1
+valdate.1	:= LINKSRC = ckdate.1
 
-errgid.1	:= SOSRC = man1/ckgid.1
-helpgid.1	:= SOSRC = man1/ckgid.1
-valgid.1	:= SOSRC = man1/ckgid.1
+errgid.1	:= LINKSRC = ckgid.1
+helpgid.1	:= LINKSRC = ckgid.1
+valgid.1	:= LINKSRC = ckgid.1
 
-errint.1	:= SOSRC = man1/ckint.1
-helpint.1	:= SOSRC = man1/ckint.1
-valint.1	:= SOSRC = man1/ckint.1
+errint.1	:= LINKSRC = ckint.1
+helpint.1	:= LINKSRC = ckint.1
+valint.1	:= LINKSRC = ckint.1
 
-erritem.1	:= SOSRC = man1/ckitem.1
-helpitem.1	:= SOSRC = man1/ckitem.1
+erritem.1	:= LINKSRC = ckitem.1
+helpitem.1	:= LINKSRC = ckitem.1
 
-errpath.1	:= SOSRC = man1/ckpath.1
-helppath.1	:= SOSRC = man1/ckpath.1
-valpath.1	:= SOSRC = man1/ckpath.1
+errpath.1	:= LINKSRC = ckpath.1
+helppath.1	:= LINKSRC = ckpath.1
+valpath.1	:= LINKSRC = ckpath.1
 
-errange.1	:= SOSRC = man1/ckrange.1
-helprange.1	:= SOSRC = man1/ckrange.1
-valrange.1	:= SOSRC = man1/ckrange.1
+errange.1	:= LINKSRC = ckrange.1
+helprange.1	:= LINKSRC = ckrange.1
+valrange.1	:= LINKSRC = ckrange.1
 
-errstr.1	:= SOSRC = man1/ckstr.1
-helpstr.1	:= SOSRC = man1/ckstr.1
-valstr.1	:= SOSRC = man1/ckstr.1
+errstr.1	:= LINKSRC = ckstr.1
+helpstr.1	:= LINKSRC = ckstr.1
+valstr.1	:= LINKSRC = ckstr.1
 
-errtime.1	:= SOSRC = man1/cktime.1
-helptime.1	:= SOSRC = man1/cktime.1
-valtime.1	:= SOSRC = man1/cktime.1
+errtime.1	:= LINKSRC = cktime.1
+helptime.1	:= LINKSRC = cktime.1
+valtime.1	:= LINKSRC = cktime.1
 
-erruid.1	:= SOSRC = man1/ckuid.1
-helpuid.1	:= SOSRC = man1/ckuid.1
-valuid.1	:= SOSRC = man1/ckuid.1
+erruid.1	:= LINKSRC = ckuid.1
+helpuid.1	:= LINKSRC = ckuid.1
+valuid.1	:= LINKSRC = ckuid.1
 
-erryorn.1	:= SOSRC = man1/ckyorn.1
-helpyorn.1	:= SOSRC = man1/ckyorn.1
-valyorn.1	:= SOSRC = man1/ckyorn.1
+erryorn.1	:= LINKSRC = ckyorn.1
+helpyorn.1	:= LINKSRC = ckyorn.1
+valyorn.1	:= LINKSRC = ckyorn.1
 
-uncompress.1	:= SOSRC = man1/compress.1
-zcat.1		:= SOSRC = man1/compress.1
+uncompress.1	:= LINKSRC = compress.1
+zcat.1		:= LINKSRC = compress.1
 
-red.1		:= SOSRC = man1/ed.1
+red.1		:= LINKSRC = ed.1
 
-disable.1	:= SOSRC = man1/enable.1
+disable.1	:= LINKSRC = enable.1
 
-decrypt.1	:= SOSRC = man1/encrypt.1
+decrypt.1	:= LINKSRC = encrypt.1
 
-checkeq.1	:= SOSRC = man1/eqn.1
-neqn.1		:= SOSRC = man1/eqn.1
+dmake.1		:= LINKSRC = make.1
 
-eval.1		:= SOSRC = man1/exec.1
-source.1	:= SOSRC = man1/exec.1
+checkeq.1	:= LINKSRC = eqn.1
+neqn.1		:= LINKSRC = eqn.1
 
-goto.1		:= SOSRC = man1/exit.1
-return.1	:= SOSRC = man1/exit.1
+eval.1		:= LINKSRC = exec.1
+source.1	:= LINKSRC = exec.1
 
-unexpand.1	:= SOSRC = man1/expand.1
+goto.1		:= LINKSRC = exit.1
+return.1	:= LINKSRC = exit.1
 
-hashstat.1	:= SOSRC = man1/hash.1
-rehash.1	:= SOSRC = man1/hash.1
-unhash.1	:= SOSRC = man1/hash.1
+unexpand.1	:= LINKSRC = expand.1
 
-fc.1		:= SOSRC = man1/history.1
-hist.1		:= SOSRC = man1/history.1
+hashstat.1	:= LINKSRC = hash.1
+rehash.1	:= LINKSRC = hash.1
+unhash.1	:= LINKSRC = hash.1
 
-bg.1		:= SOSRC = man1/jobs.1
-fg.1		:= SOSRC = man1/jobs.1
-notify.1	:= SOSRC = man1/jobs.1
-stop.1		:= SOSRC = man1/jobs.1
+fc.1		:= LINKSRC = history.1
+hist.1		:= LINKSRC = history.1
 
-jsh.1		:= SOSRC = man1/ksh93.1
-ksh.1		:= SOSRC = man1/ksh93.1
-rksh.1		:= SOSRC = man1/ksh93.1
-rksh93.1	:= SOSRC = man1/ksh93.1
-sh.1		:= SOSRC = man1/ksh93.1
+bg.1		:= LINKSRC = jobs.1
+fg.1		:= LINKSRC = jobs.1
+notify.1	:= LINKSRC = jobs.1
+stop.1		:= LINKSRC = jobs.1
 
-ldapadd.1	:= SOSRC = man1/ldapmodify.1
+jsh.1		:= LINKSRC = ksh93.1
+ksh.1		:= LINKSRC = ksh93.1
+rksh.1		:= LINKSRC = ksh93.1
+rksh93.1	:= LINKSRC = ksh93.1
+sh.1		:= LINKSRC = ksh93.1
 
-ulimit.1	:= SOSRC = man1/limit.1
-unlimit.1	:= SOSRC = man1/limit.1
+ldapadd.1	:= LINKSRC = ldapmodify.1
 
-dumpkeys.1	:= SOSRC = man1/loadkeys.1
+mailq.1		:= LINKSRC = sendmail-mailq.1
 
-i286.1		:= SOSRC = man1/machid.1
-i386.1		:= SOSRC = man1/machid.1
-i486.1		:= SOSRC = man1/machid.1
-i860.1		:= SOSRC = man1/machid.1
-iAPX286.1	:= SOSRC = man1/machid.1
-pdp11.1		:= SOSRC = man1/machid.1
-sparc.1		:= SOSRC = man1/machid.1
-sun.1		:= SOSRC = man1/machid.1
-u370.1		:= SOSRC = man1/machid.1
-u3b.1		:= SOSRC = man1/machid.1
-u3b15.1		:= SOSRC = man1/machid.1
-u3b2.1		:= SOSRC = man1/machid.1
-u3b5.1		:= SOSRC = man1/machid.1
-vax.1		:= SOSRC = man1/machid.1
+ulimit.1	:= LINKSRC = limit.1
+unlimit.1	:= LINKSRC = limit.1
 
-rmail.1		:= SOSRC = man1/mail.1
+dumpkeys.1	:= LINKSRC = loadkeys.1
 
-page.1		:= SOSRC = man1/more.1
+rmail.1		:= LINKSRC = mail.1
 
-snca.1		:= SOSRC = man1/nca.1
+page.1		:= LINKSRC = more.1
 
-pcat.1		:= SOSRC = man1/pack.1
-unpack.1	:= SOSRC = man1/pack.1
+snca.1		:= LINKSRC = nca.1
 
-pfcsh.1		:= SOSRC = man1/pfexec.1
-pfksh.1		:= SOSRC = man1/pfexec.1
-pfsh.1		:= SOSRC = man1/pfexec.1
+pcat.1		:= LINKSRC = pack.1
+unpack.1	:= LINKSRC = pack.1
 
-pkill.1		:= SOSRC = man1/pgrep.1
+pfcsh.1		:= LINKSRC = pfexec.1
+pfksh.1		:= LINKSRC = pfexec.1
+pfsh.1		:= LINKSRC = pfexec.1
 
-pcred.1		:= SOSRC = man1/proc.1
-pfiles.1	:= SOSRC = man1/proc.1
-pflags.1	:= SOSRC = man1/proc.1
-pldd.1		:= SOSRC = man1/proc.1
-prun.1		:= SOSRC = man1/proc.1
-psig.1		:= SOSRC = man1/proc.1
-pstack.1	:= SOSRC = man1/proc.1
-pstop.1		:= SOSRC = man1/proc.1
-ptime.1		:= SOSRC = man1/proc.1
-pwait.1		:= SOSRC = man1/proc.1
-pwdx.1		:= SOSRC = man1/proc.1
+pkill.1		:= LINKSRC = pgrep.1
 
-rmdir.1		:= SOSRC = man1/rm.1
+pcred.1		:= LINKSRC = proc.1
+pfiles.1	:= LINKSRC = proc.1
+pflags.1	:= LINKSRC = proc.1
+pldd.1		:= LINKSRC = proc.1
+prun.1		:= LINKSRC = proc.1
+psig.1		:= LINKSRC = proc.1
+pstack.1	:= LINKSRC = proc.1
+pstop.1		:= LINKSRC = proc.1
+ptime.1		:= LINKSRC = proc.1
+pwait.1		:= LINKSRC = proc.1
+pwdx.1		:= LINKSRC = proc.1
 
-rmumount.1	:= SOSRC = man1/rmmount.1
+rmdir.1		:= LINKSRC = rm.1
 
-remote_shell.1	:= SOSRC = man1/rsh.1
-remsh.1		:= SOSRC = man1/rsh.1
+rmumount.1	:= LINKSRC = rmmount.1
 
-export.1	:= SOSRC = man1/set.1
-setenv.1	:= SOSRC = man1/set.1
-unset.1		:= SOSRC = man1/set.1
-unsetenv.1	:= SOSRC = man1/set.1
+remote_shell.1	:= LINKSRC = rsh.1
+remsh.1		:= LINKSRC = rsh.1
 
-case.1		:= SOSRC = man1/shell_builtins.1
-for.1		:= SOSRC = man1/shell_builtins.1
-foreach.1	:= SOSRC = man1/shell_builtins.1
-function.1	:= SOSRC = man1/shell_builtins.1
-if.1		:= SOSRC = man1/shell_builtins.1
-repeat.1	:= SOSRC = man1/shell_builtins.1
-select.1	:= SOSRC = man1/shell_builtins.1
-switch.1	:= SOSRC = man1/shell_builtins.1
-until.1		:= SOSRC = man1/shell_builtins.1
-while.1		:= SOSRC = man1/shell_builtins.1
+export.1	:= LINKSRC = set.1
+setenv.1	:= LINKSRC = set.1
+unset.1		:= LINKSRC = set.1
+unsetenv.1	:= LINKSRC = set.1
 
-hashcheck.1	:= SOSRC = man1/spell.1
-hashmake.1	:= SOSRC = man1/spell.1
-spellin.1	:= SOSRC = man1/spell.1
+case.1		:= LINKSRC = shell_builtins.1
+for.1		:= LINKSRC = shell_builtins.1
+foreach.1	:= LINKSRC = shell_builtins.1
+function.1	:= LINKSRC = shell_builtins.1
+if.1		:= LINKSRC = shell_builtins.1
+repeat.1	:= LINKSRC = shell_builtins.1
+select.1	:= LINKSRC = shell_builtins.1
+switch.1	:= LINKSRC = shell_builtins.1
+until.1		:= LINKSRC = shell_builtins.1
+while.1		:= LINKSRC = shell_builtins.1
 
-strconf.1	:= SOSRC = man1/strchg.1
+hashcheck.1	:= LINKSRC = spell.1
+hashmake.1	:= LINKSRC = spell.1
+spellin.1	:= LINKSRC = spell.1
 
-settime.1	:= SOSRC = man1/touch.1
+scp.1				:= LINKSRC = scp.sunssh.1
+sftp.1				:= LINKSRC = sftp.sunssh.1
+ssh.1				:= LINKSRC = ssh.sunssh.1
+ssh-add.1			:= LINKSRC = ssh-add.sunssh.1
+ssh-agent.1			:= LINKSRC = ssh-agent.sunssh.1
+ssh-http-proxy-connect.1	:= LINKSRC = ssh-http-proxy-connect.sunssh.1
+ssh-keygen.1			:= LINKSRC = ssh-keygen.sunssh.1
+ssh-keyscan.1			:= LINKSRC = ssh-keyscan.sunssh.1
+ssh-socks5-proxy-connect.1	:= LINKSRC = ssh-socks5-proxy-connect.sunssh.1
 
-onintr.1	:= SOSRC = man1/trap.1
+strconf.1	:= LINKSRC = strchg.1
 
-false.1		:= SOSRC = man1/true.1
+settime.1	:= LINKSRC = touch.1
 
-whence.1	:= SOSRC = man1/typeset.1
+onintr.1	:= LINKSRC = trap.1
 
-vedit.1		:= SOSRC = man1/vi.1
+false.1		:= LINKSRC = true.1
 
-edit.1		:= SOSRC = man1has/edit.1
+whence.1	:= LINKSRC = typeset.1
+
+# Links to usr/has/man
+
+edit.1		:= LINKSRC = ../../../has/man/man1has/edit.1has
+
+vedit.1		:= LINKSRC = ../../../has/man/man1has/vi.1has
 
 .KEEP_STATE:
 
-include ../Makefile.man
+include		$(SRC)/man/Makefile.man
 
-install: $(ROOTMANFILES)
+install:	$(ROOTMANFILES) $(ROOTMANLINKS)

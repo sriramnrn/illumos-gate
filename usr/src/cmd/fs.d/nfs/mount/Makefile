@@ -42,6 +42,13 @@ SRCS=	$(LIBPROG).c $(FSLIBSRC) ../lib/nfs_sec.c ../lib/replica.c \
 
 UNCHECKED_HDRS=	webnfs.h
 
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-switch
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-address
+CERRWARN += -_gcc=-Wno-unused-function
+
 #
 # Message catalog
 #
@@ -111,5 +118,5 @@ install:	$(ROOTETCPROG)
 
 lint:	webnfs.h webnfs_xdr.c webnfs_client.c lint_SRCS
 
-clean:     
+clean:
 	$(RM) $(OBJS) webnfs.x webnfs.h webnfs_xdr.c webnfs_client.c

@@ -20,6 +20,7 @@
 #
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2012 Milan Jurik. All rights reserved.
 #
 
 PROG = svc.startd
@@ -61,8 +62,14 @@ include ../../Makefile.ctf
 
 ROOTCMDDIR=	$(ROOT)/lib/svc/bin
 
-CFLAGS += -v
+$(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
+CFLAGS += $(CCVERBOSE)
 CPPFLAGS += -I. -I../common
+
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-switch
+CERRWARN += -_gcc=-Wno-uninitialized
 
 $(OBJS) := CPPFLAGS += -D_FILE_OFFSET_BITS=64 -D_REENTRANT
 

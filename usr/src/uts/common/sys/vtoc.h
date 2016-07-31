@@ -20,8 +20,12 @@
  */
 
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  */
 
 
@@ -77,8 +81,14 @@ extern "C" {
 #define	V_VAR		0x07		/* Var partition */
 #define	V_HOME		0x08		/* Home partition */
 #define	V_ALTSCTR	0x09		/* Alternate sector partition */
-#define	V_CACHE		0x0a		/* Cache (cachefs) partition */
+#define	V_CACHE		0x0a		/* CacheFS partition (obsolete) */
+
+/* Tags for EFI/GPT labels */
 #define	V_RESERVED	0x0b		/* SMI reserved data */
+#define	V_SYSTEM	0x0c		/* EFI/GPT system partition */
+#define	V_BIOS_BOOT	0x18		/* BIOS Boot partition */
+
+#define	V_UNKNOWN	0xff		/* Unknown partition */
 
 /*
  * Partition permission flags
@@ -263,15 +273,15 @@ struct vtoc32 {
 #define	vtoctovtoc32(v, v32)				\
 	{						\
 	int i;						\
-	v32.v_bootinfo[0]	= v.v_bootinfo[0];	\
-	v32.v_bootinfo[1]	= v.v_bootinfo[1];	\
-	v32.v_bootinfo[2]	= v.v_bootinfo[2];	\
-	v32.v_sanity		= v.v_sanity;		\
-	v32.v_version		= v.v_version;		\
+	v32.v_bootinfo[0]	= (uint32_t)v.v_bootinfo[0];	\
+	v32.v_bootinfo[1]	= (uint32_t)v.v_bootinfo[1];	\
+	v32.v_bootinfo[2]	= (uint32_t)v.v_bootinfo[2];	\
+	v32.v_sanity		= (uint32_t)v.v_sanity;		\
+	v32.v_version		= (uint32_t)v.v_version;		\
 	bcopy(v.v_volume, v32.v_volume, LEN_DKL_VVOL);	\
 	v32.v_sectorsz		= v.v_sectorsz;		\
 	v32.v_nparts		= v.v_nparts;		\
-	v32.v_version		= v.v_version;		\
+	v32.v_version		= (uint32_t)v.v_version;		\
 	for (i = 0; i < 10; i++)			\
 		v32.v_reserved[i] = v.v_reserved[i];	\
 	for (i = 0; i < V_NUMPAR; i++) {		\
@@ -327,21 +337,10 @@ struct vtoc32 {
 #define	CK_CHECKSUM	0	/* check checksum */
 #define	CK_MAKESUM	1	/* generate checksum */
 
-#if defined(__STDC__)
-
 extern	int	read_vtoc(int, struct vtoc *);
 extern	int	write_vtoc(int, struct vtoc *);
 extern	int	read_extvtoc(int, struct extvtoc *);
 extern	int	write_extvtoc(int, struct extvtoc *);
-
-#else
-
-extern	int	read_vtoc();
-extern	int	write_vtoc();
-extern	int	read_extvtoc();
-extern	int	write_extvtoc();
-
-#endif 	/* __STDC__ */
 
 #ifdef	__cplusplus
 }

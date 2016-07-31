@@ -2,8 +2,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 PROG= krb5kdc
 MANIFEST=	krb5kdc.xml
@@ -42,12 +40,21 @@ POFILES = generic.po
 ROOTMANIFESTDIR=	$(ROOTSVCNETWORKSECURITY)
 
 CFLAGS += $(CCOPTS) $(DEFS) $(LOCALINCLUDE)
+# The SET macros in network.c will be mis-optimized if GCC believes it
+# may rely on undefined signed overflow behaviour.
+CFLAGS += -_gcc=-fno-strict-overflow
 
 CPPFLAGS += \
 	-I$(SRC)/lib/gss_mechs/mech_krb5/include \
 	-I$(SRC)/lib/gss_mechs/mech_krb5/include/krb5\
 	-I$(SRC)/uts/common/gssapi/mechs/krb5/include \
 	-DHAVE_SYSLOG_H=1 
+
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-type-limits
+CERRWARN += -_gcc=-Wno-implicit-function-declaration
+CERRWARN += -_gcc=-Wno-parentheses
 
 LDFLAGS += $(KRUNPATH) $(KERBRUNPATH)
 LDLIBS += -L$(ROOT_KLIBDIR) -L$(KRB5LIB) \

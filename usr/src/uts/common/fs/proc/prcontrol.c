@@ -24,6 +24,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
+
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/param.h>
@@ -935,7 +939,7 @@ pr_control32(int32_t cmd, arg32_t *argp, prnode_t *pnp, cred_t *cr)
 
 	case PCREAD:	/* read from the address space */
 	case PCWRITE:	/* write to the address space */
-		if (PROCESS_NOT_32BIT(p))
+		if (PROCESS_NOT_32BIT(p) || (pnp->pr_flags & PR_OFFMAX))
 			error = EOVERFLOW;
 		else {
 			enum uio_rw rw = (cmd == PCREAD)? UIO_READ : UIO_WRITE;
@@ -2008,6 +2012,23 @@ pr_agent(prnode_t *pnp, prgregset_t prgregset, int *unlocked)
 		return (ENOMEM);
 	}
 	prsetprregs(clwp, prgregset, 1);
+
+	/*
+	 * Because abandoning the agent inside the target process leads to
+	 * a state that is essentially undebuggable, we record the psinfo of
+	 * the process creating the agent and hang that off of the lwp.
+	 */
+	clwp->lwp_spymaster = kmem_zalloc(sizeof (psinfo_t), KM_SLEEP);
+	mutex_enter(&curproc->p_lock);
+	prgetpsinfo(curproc, clwp->lwp_spymaster);
+	mutex_exit(&curproc->p_lock);
+
+	/*
+	 * We overload pr_time in the spymaster to denote the time at which the
+	 * agent was created.
+	 */
+	gethrestime(&clwp->lwp_spymaster->pr_time);
+
 retry:
 	cid = t->t_cid;
 	(void) CL_ALLOC(&bufp, cid, KM_SLEEP);
@@ -2492,7 +2513,7 @@ pr_cancel_watch(prnode_t *pnp)
 			tree = &as->a_wpage;
 
 		mutex_exit(&p->p_lock);
-		AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+		AS_LOCK_ENTER(as, RW_WRITER);
 
 		for (pwp = avl_first(tree); pwp != NULL;
 		    pwp = AVL_NEXT(tree, pwp)) {
@@ -2507,7 +2528,7 @@ pr_cancel_watch(prnode_t *pnp)
 			}
 		}
 
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		mutex_enter(&p->p_lock);
 	}
 

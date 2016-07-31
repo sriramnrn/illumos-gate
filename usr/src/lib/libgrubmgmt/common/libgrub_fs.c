@@ -22,9 +22,13 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Toomas Soome <tsoome@me.com>
+ */
 
 /*
- * This file contains all the functions that manipualte the file
+ * This file contains all the functions that manipulate the file
  * system where the GRUB menu resides.
  */
 #include <stdio.h>
@@ -39,9 +43,14 @@
 #include <sys/mount.h>
 #include <sys/mntent.h>
 #include <sys/mnttab.h>
+#include <sys/efi_partition.h>
+#include <sys/vtoc.h>
 #include <sys/fs/ufs_mount.h>
 #include <sys/dktp/fdisk.h>
 #include <libfstyp.h>
+#if defined(i386) || defined(__amd64)
+#include <libfdisk.h>
+#endif
 
 #include "libgrub_impl.h"
 
@@ -49,6 +58,10 @@ static int
 slice_match(const char *physpath, int slice)
 {
 	const char *pos;
+
+	/* always match whole disk slice */
+	if (slice == SLCNUM_WHOLE_DISK)
+		return (0);
 
 	return ((pos = strrchr(physpath, slice)) == NULL ||
 	    pos[1] != 0 || pos[-1] != ':');
@@ -84,11 +97,35 @@ get_sol_prtnum(const char *physpath)
 	struct ipart *ipart;
 	char boot_sect[512];
 	char rdev[MAXNAMELEN];
+#if defined(i386) || defined(__amd64)
+	ext_part_t *epp;
+	int ext_part_found = 0;
+#endif
 
 	(void) snprintf(rdev, sizeof (rdev), "/devices%s,raw", physpath);
 
 	if ((pos = strrchr(rdev, ':')) == NULL)
 		return (PRTNUM_INVALID);
+
+	/*
+	 * first check for EFI partitioning, efi_alloc_and_read()
+	 * will return partition number.
+	 */
+	if ((fd = open(rdev, O_RDONLY|O_NDELAY)) >= 0) {
+		struct dk_gpt *vtoc;
+
+		if ((i = efi_alloc_and_read(fd, &vtoc)) >= 0) {
+			/* zfs is using V_USR */
+			if (vtoc->efi_parts[i].p_tag != V_USR)
+				i = PRTNUM_INVALID; /* error */
+			efi_free(vtoc);
+			(void) close(fd);
+			return (i);
+		}
+		(void) close(fd);
+	} else {
+		return (PRTNUM_INVALID);
+	}
 
 	pos[1] = SLCNUM_WHOLE_DISK;
 
@@ -105,6 +142,28 @@ get_sol_prtnum(const char *physpath)
 	for (i = 0; i < FD_NUMPART; ++i) {
 		if (ipart[i].systid == SUNIXOS || ipart[i].systid == SUNIXOS2)
 			return (i);
+
+#if defined(i386) || defined(__amd64)
+		if (!fdisk_is_dos_extended(ipart[i].systid) ||
+		    (ext_part_found == 1))
+			continue;
+
+		ext_part_found = 1;
+
+		if (libfdisk_init(&epp, rdev, NULL, FDISK_READ_DISK) ==
+		    FDISK_SUCCESS) {
+			uint32_t begs, nums;
+			int pno;
+			int rval;
+
+			rval = fdisk_get_solaris_part(epp, &pno, &begs, &nums);
+
+			libfdisk_fini(&epp);
+
+			if (rval == FDISK_SUCCESS)
+				return (pno - 1);
+		}
+#endif
 	}
 	return (PRTNUM_INVALID);
 }
@@ -129,7 +188,8 @@ get_zfs_root(zfs_handle_t *zfh, grub_fs_t *fs, grub_root_t *root)
 	    sizeof (root->gr_physpath))) == 0 &&
 	    (ret = zpool_get_prop(zph, ZPOOL_PROP_BOOTFS,
 	    root->gr_fs[GRBM_ZFS_BOOTFS].gfs_dev,
-	    sizeof (root->gr_fs[GRBM_ZFS_BOOTFS].gfs_dev), NULL)) == 0) {
+	    sizeof (root->gr_fs[GRBM_ZFS_BOOTFS].gfs_dev), NULL,
+	    B_FALSE)) == 0) {
 
 		(void) strlcpy(root->gr_fs[GRBM_ZFS_TOPFS].gfs_dev, name,
 		    sizeof (root->gr_fs[GRBM_ZFS_TOPFS].gfs_dev));
@@ -146,7 +206,7 @@ get_zfs_root(zfs_handle_t *zfh, grub_fs_t *fs, grub_root_t *root)
 /*
  * On entry physpath parameter supposed to contain:
  * <disk_physpath>[<space><disk_physpath>]*.
- * Retireives first <disk_physpath> that matches both partition and slice.
+ * Retrieves first <disk_physpath> that matches both partition and slice.
  * If any partition and slice is acceptable, first <disk_physpath> is returned.
  */
 static int

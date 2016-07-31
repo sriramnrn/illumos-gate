@@ -24,6 +24,11 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ */
+
 #include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/types.h>
@@ -332,6 +337,23 @@ dt_opt_linktype(dtrace_hdl_t *dtp, const char *arg, uintptr_t option)
 
 /*ARGSUSED*/
 static int
+dt_opt_encoding(dtrace_hdl_t *dtp, const char *arg, uintptr_t option)
+{
+	if (arg == NULL)
+		return (dt_set_errno(dtp, EDT_BADOPTVAL));
+
+	if (strcmp(arg, "ascii") == 0)
+		dtp->dt_encoding = DT_ENCODING_ASCII;
+	else if (strcmp(arg, "utf8") == 0)
+		dtp->dt_encoding = DT_ENCODING_UTF8;
+	else
+		return (dt_set_errno(dtp, EDT_BADOPTVAL));
+
+	return (0);
+}
+
+/*ARGSUSED*/
+static int
 dt_opt_evaltime(dtrace_hdl_t *dtp, const char *arg, uintptr_t option)
 {
 	if (arg == NULL)
@@ -361,6 +383,61 @@ dt_opt_pgmax(dtrace_hdl_t *dtp, const char *arg, uintptr_t option)
 		return (dt_set_errno(dtp, EDT_BADOPTVAL));
 
 	dtp->dt_procs->dph_lrulim = n;
+	return (0);
+}
+
+static int
+dt_opt_setenv(dtrace_hdl_t *dtp, const char *arg, uintptr_t option)
+{
+	char **p;
+	char *var;
+	int i;
+
+	/*
+	 * We can't effectively set environment variables from #pragma lines
+	 * since the processes have already been spawned.
+	 */
+	if (dtp->dt_pcb != NULL)
+		return (dt_set_errno(dtp, EDT_BADOPTCTX));
+
+	if (arg == NULL)
+		return (dt_set_errno(dtp, EDT_BADOPTVAL));
+
+	if (!option && strchr(arg, '=') != NULL)
+		return (dt_set_errno(dtp, EDT_BADOPTVAL));
+
+	for (i = 1, p = dtp->dt_proc_env; *p != NULL; i++, p++)
+		continue;
+
+	for (p = dtp->dt_proc_env; *p != NULL; p++) {
+		var = strchr(*p, '=');
+		if (var == NULL)
+			var = *p + strlen(*p);
+		if (strncmp(*p, arg, var - *p) == 0) {
+			dt_free(dtp, *p);
+			*p = dtp->dt_proc_env[i - 1];
+			dtp->dt_proc_env[i - 1] = NULL;
+			i--;
+		}
+	}
+
+	if (option) {
+		if ((var = strdup(arg)) == NULL)
+			return (dt_set_errno(dtp, EDT_NOMEM));
+
+		if ((p = dt_alloc(dtp, sizeof (char *) * (i + 1))) == NULL) {
+			dt_free(dtp, var);
+			return (dt_set_errno(dtp, EDT_NOMEM));
+		}
+
+		bcopy(dtp->dt_proc_env, p, sizeof (char *) * i);
+		dt_free(dtp, dtp->dt_proc_env);
+		dtp->dt_proc_env = p;
+
+		dtp->dt_proc_env[i - 1] = var;
+		dtp->dt_proc_env[i] = NULL;
+	}
+
 	return (0);
 }
 
@@ -406,7 +483,6 @@ dt_opt_syslibdir(dtrace_hdl_t *dtp, const char *arg, uintptr_t option)
 
 	return (0);
 }
-
 
 /*ARGSUSED*/
 static int
@@ -859,6 +935,7 @@ static const dt_option_t _dtrace_ctoptions[] = {
 	{ "define", dt_opt_cpp_opts, (uintptr_t)"-D" },
 	{ "droptags", dt_opt_droptags },
 	{ "empty", dt_opt_cflags, DTRACE_C_EMPTY },
+	{ "encoding", dt_opt_encoding },
 	{ "errtags", dt_opt_cflags, DTRACE_C_ETAGS },
 	{ "evaltime", dt_opt_evaltime },
 	{ "incdir", dt_opt_cpp_opts, (uintptr_t)"-I" },
@@ -874,6 +951,7 @@ static const dt_option_t _dtrace_ctoptions[] = {
 	{ "nolibs", dt_opt_cflags, DTRACE_C_NOLIBS },
 	{ "pgmax", dt_opt_pgmax },
 	{ "pspec", dt_opt_cflags, DTRACE_C_PSPEC },
+	{ "setenv", dt_opt_setenv, 1 },
 	{ "stdc", dt_opt_stdc },
 	{ "strip", dt_opt_dflags, DTRACE_D_STRIP },
 	{ "syslibdir", dt_opt_syslibdir },
@@ -882,6 +960,7 @@ static const dt_option_t _dtrace_ctoptions[] = {
 	{ "udefs", dt_opt_invcflags, DTRACE_C_UNODEF },
 	{ "undef", dt_opt_cpp_opts, (uintptr_t)"-U" },
 	{ "unodefs", dt_opt_cflags, DTRACE_C_UNODEF },
+	{ "unsetenv", dt_opt_setenv, 0 },
 	{ "verbose", dt_opt_cflags, DTRACE_C_DIFV },
 	{ "version", dt_opt_version },
 	{ "zdefs", dt_opt_cflags, DTRACE_C_ZDEFS },
@@ -909,6 +988,7 @@ static const dt_option_t _dtrace_rtoptions[] = {
 	{ "statusrate", dt_opt_rate, DTRACEOPT_STATUSRATE },
 	{ "strsize", dt_opt_strsize, DTRACEOPT_STRSIZE },
 	{ "ustackframes", dt_opt_runtime, DTRACEOPT_USTACKFRAMES },
+	{ "temporal", dt_opt_runtime, DTRACEOPT_TEMPORAL },
 	{ NULL }
 };
 
@@ -916,11 +996,14 @@ static const dt_option_t _dtrace_rtoptions[] = {
  * Dynamic run-time options.
  */
 static const dt_option_t _dtrace_drtoptions[] = {
+	{ "agghist", dt_opt_runtime, DTRACEOPT_AGGHIST },
+	{ "aggpack", dt_opt_runtime, DTRACEOPT_AGGPACK },
 	{ "aggrate", dt_opt_rate, DTRACEOPT_AGGRATE },
 	{ "aggsortkey", dt_opt_runtime, DTRACEOPT_AGGSORTKEY },
 	{ "aggsortkeypos", dt_opt_runtime, DTRACEOPT_AGGSORTKEYPOS },
 	{ "aggsortpos", dt_opt_runtime, DTRACEOPT_AGGSORTPOS },
 	{ "aggsortrev", dt_opt_runtime, DTRACEOPT_AGGSORTREV },
+	{ "aggzoom", dt_opt_runtime, DTRACEOPT_AGGZOOM },
 	{ "flowindent", dt_opt_runtime, DTRACEOPT_FLOWINDENT },
 	{ "quiet", dt_opt_runtime, DTRACEOPT_QUIET },
 	{ "rawbytes", dt_opt_runtime, DTRACEOPT_RAWBYTES },

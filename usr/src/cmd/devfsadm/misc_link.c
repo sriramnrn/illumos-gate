@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
  */
 
 #include <regex.h>
@@ -88,6 +89,12 @@ static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo", "consms",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, consms
 	},
+	{ "pseudo", "ddi_pseudo", "eventfd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
+	{ "pseudo", "ddi_pseudo", "signalfd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
 	{ "pseudo", "ddi_pseudo", "rsm",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
 	},
@@ -107,6 +114,9 @@ static devfsadm_create_t misc_cbt[] = {
 	    "(^nca$)|(^rds$)|(^sdp$)|(^ipnet$)|(^dlpistub$)|(^bpf$)",
 	    TYPE_EXACT | DRV_RE, ILEVEL_1, minor_name
 	},
+	{ "pseudo", "ddi_pseudo", "ipd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
+	},
 	{ "pseudo", "ddi_pseudo",
 	    "(^ipf$)|(^ipnat$)|(^ipstate$)|(^ipauth$)|"
 	    "(^ipsync$)|(^ipscan$)|(^iplookup$)",
@@ -118,6 +128,9 @@ static devfsadm_create_t misc_cbt[] = {
 	{ "pseudo", "ddi_pseudo",
 	    "(^kdmouse$)|(^rootprop$)",
 	    TYPE_EXACT | DRV_RE, ILEVEL_0, node_name
+	},
+	{ "pseudo", "ddi_pseudo", "timerfd",
+	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, minor_name
 	},
 	{ "pseudo", "ddi_pseudo", "tod",
 	    TYPE_EXACT | DRV_EXACT, ILEVEL_0, node_name

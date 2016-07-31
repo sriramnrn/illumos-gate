@@ -113,11 +113,6 @@ typedef struct ip6_stat {
 	kstat_named_t	ip6_udp_in_full_hw_cksum_err;
 	kstat_named_t	ip6_udp_in_part_hw_cksum_err;
 	kstat_named_t	ip6_udp_in_sw_cksum_err;
-	kstat_named_t	ip6_frag_mdt_pkt_out;
-	kstat_named_t	ip6_frag_mdt_discarded;
-	kstat_named_t	ip6_frag_mdt_allocfail;
-	kstat_named_t	ip6_frag_mdt_addpdescfail;
-	kstat_named_t	ip6_frag_mdt_allocd;
 } ip6_stat_t;
 
 typedef struct ire_stats {
@@ -210,6 +205,7 @@ struct ip_stack {
 	int		ips_igmp_deferred_next;
 	timeout_id_t	ips_igmp_timeout_id;
 	boolean_t	ips_igmp_timer_setter_active;
+	boolean_t	ips_igmp_timer_quiesce;
 
 	/* Following protected by mld_timer_lock */
 	int 		ips_mld_time_to_next;	/* Time since last timeout */
@@ -217,14 +213,17 @@ struct ip_stack {
 	int		ips_mld_deferred_next;
 	timeout_id_t	ips_mld_timeout_id;
 	boolean_t	ips_mld_timer_setter_active;
+	boolean_t	ips_mld_timer_quiesce;
 
 	/* Protected by igmp_slowtimeout_lock */
 	timeout_id_t	ips_igmp_slowtimeout_id;
 	kmutex_t	ips_igmp_slowtimeout_lock;
+	boolean_t	ips_igmp_slowtimeout_quiesce;
 
 	/* Protected by mld_slowtimeout_lock */
 	timeout_id_t	ips_mld_slowtimeout_id;
 	kmutex_t	ips_mld_slowtimeout_lock;
+	boolean_t	ips_mld_slowtimeout_quiesce;
 
 	/* IPv4 forwarding table */
 	struct radix_node_head *ips_ip_ftable;
@@ -269,6 +268,7 @@ struct ip_stack {
 	uint_t		ips_dce_hashsize;
 	struct dcb_s	*ips_dce_hash_v4;
 	struct dcb_s	*ips_dce_hash_v6;
+	uint_t		ips_dce_reclaim_needed;
 
 	/* pending binds */
 	mblk_t		*ips_ip6_asp_pending_ops;

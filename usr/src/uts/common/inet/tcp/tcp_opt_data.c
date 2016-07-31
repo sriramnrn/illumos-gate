@@ -42,6 +42,8 @@
 #include <inet/proto_set.h>
 #include <inet/tcp_impl.h>
 
+static int	tcp_opt_default(queue_t *, int, int, uchar_t *);
+
 /*
  * Table of all known options handled on a TCP protocol stack.
  *
@@ -267,9 +269,6 @@ optdb_obj_t tcp_opt_obj = {
 	tcp_valid_levels_arr	/* TCP valid level array */
 };
 
-/* Maximum TCP initial cwin (start/restart). */
-#define	TCP_MAX_INIT_CWND	16
-
 static int tcp_max_init_cwnd = TCP_MAX_INIT_CWND;
 
 /*
@@ -306,7 +305,7 @@ tcp_allow_connopt_set(int level, int name)
  * values are maintained by protocol specific code
  */
 /* ARGSUSED */
-int
+static int
 tcp_opt_default(queue_t *q, int level, int name, uchar_t *ptr)
 {
 	int32_t	*i1 = (int32_t *)ptr;

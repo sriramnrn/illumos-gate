@@ -25,6 +25,9 @@
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
 
 #include <sys/types.h>
 #include <sys/param.h>
@@ -61,6 +64,7 @@
 #include <sys/brand.h>
 #include "elf_impl.h"
 #include <sys/sdt.h>
+#include <sys/siginfo.h>
 
 extern int at_flags;
 
@@ -340,8 +344,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	 * We do this because now the brand library can just check
 	 * args->to_model to see if the target is 32-bit or 64-bit without
 	 * having do duplicate all the code above.
+	 *
+	 * The level checks associated with brand handling below are used to
+	 * prevent a loop since the brand elfexec function typically comes back
+	 * through this function. We must check <= here since the nested
+	 * handling in the #! interpreter code will increment the level before
+	 * calling gexec to run the final elfexec interpreter.
 	 */
-	if ((level < 2) &&
+	if ((level <= INTP_MAXDEPTH) &&
 	    (brand_action != EBA_NATIVE) && (PROC_IS_BRANDED(p))) {
 		error = BROP(p)->b_elfexec(vp, uap, args,
 		    idatap, level + 1, execsz, setid, exec_file, cred,
@@ -413,13 +423,14 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 *	AT_BASE
 		 *	AT_FLAGS
 		 *	AT_PAGESZ
-		 *	AT_SUN_LDSECURE
+		 *	AT_SUN_AUXFLAGS
 		 *	AT_SUN_HWCAP
-		 *	AT_SUN_PLATFORM
-		 *	AT_SUN_EXECNAME
+		 *	AT_SUN_HWCAP2
+		 *	AT_SUN_PLATFORM (added in stk_copyout)
+		 *	AT_SUN_EXECNAME (added in stk_copyout)
 		 *	AT_NULL
 		 *
-		 * total == 8
+		 * total == 9
 		 */
 		if (hasdy && hasu) {
 			/*
@@ -434,7 +445,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 *
 			 * total = 5
 			 */
-			args->auxsize = (8 + 5) * sizeof (aux_entry_t);
+			args->auxsize = (9 + 5) * sizeof (aux_entry_t);
 		} else if (hasdy) {
 			/*
 			 * Has PT_INTERP but no PT_PHDR
@@ -444,9 +455,9 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 			 *
 			 * total = 2
 			 */
-			args->auxsize = (8 + 2) * sizeof (aux_entry_t);
+			args->auxsize = (9 + 2) * sizeof (aux_entry_t);
 		} else {
-			args->auxsize = 8 * sizeof (aux_entry_t);
+			args->auxsize = 9 * sizeof (aux_entry_t);
 		}
 	} else {
 		args->auxsize = 0;
@@ -496,6 +507,7 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	aux = bigwad->elfargs;
 	/*
 	 * Move args to the user's stack.
+	 * This can fill in the AT_SUN_PLATFORM and AT_SUN_EXECNAME aux entries.
 	 */
 	if ((error = exec_args(uap, args, idatap, (void **)&aux)) != 0) {
 		if (error == -1) {
@@ -565,6 +577,15 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 			if (strncmp(++p, ORIGIN_STR, ORIGIN_STR_SIZE))
 				continue;
+
+			/*
+			 * We don't support $ORIGIN on setid programs to close
+			 * a potential attack vector.
+			 */
+			if ((setid & EXECSETID_SETID) != 0) {
+				error = ENOEXEC;
+				goto bad;
+			}
 
 			curlen = 0;
 			len = p - dlnp - 1;
@@ -712,7 +733,8 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 	if (hasauxv) {
 		int auxf = AF_SUN_HWCAPVERIFY;
 		/*
-		 * Note: AT_SUN_PLATFORM was filled in via exec_args()
+		 * Note: AT_SUN_PLATFORM and AT_SUN_EXECNAME were filled in via
+		 * exec_args()
 		 */
 		ADDAUX(aux, AT_BASE, voffset)
 		ADDAUX(aux, AT_FLAGS, at_flags)
@@ -759,12 +781,16 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 		 * (Potentially different between 32-bit and 64-bit ABIs)
 		 */
 #if defined(_LP64)
-		if (args->to_model == DATAMODEL_NATIVE)
+		if (args->to_model == DATAMODEL_NATIVE) {
 			ADDAUX(aux, AT_SUN_HWCAP, auxv_hwcap)
-		else
+			ADDAUX(aux, AT_SUN_HWCAP2, auxv_hwcap_2)
+		} else {
 			ADDAUX(aux, AT_SUN_HWCAP, auxv_hwcap32)
+			ADDAUX(aux, AT_SUN_HWCAP2, auxv_hwcap32_2)
+		}
 #else
 		ADDAUX(aux, AT_SUN_HWCAP, auxv_hwcap)
+		ADDAUX(aux, AT_SUN_HWCAP2, auxv_hwcap_2)
 #endif
 		if (branded) {
 			/*
@@ -782,7 +808,20 @@ elfexec(vnode_t *vp, execa_t *uap, uarg_t *args, intpdata_t *idatap,
 
 		ADDAUX(aux, AT_NULL, 0)
 		postfixsize = (char *)aux - (char *)bigwad->elfargs;
-		ASSERT(postfixsize == args->auxsize);
+
+		/*
+		 * We make assumptions above when we determine how many aux
+		 * vector entries we will be adding. However, if we have an
+		 * invalid elf file, it is possible that mapelfexec might
+		 * behave differently (but not return an error), in which case
+		 * the number of aux entries we actually add will be different.
+		 * We detect that now and error out.
+		 */
+		if (postfixsize != args->auxsize) {
+			DTRACE_PROBE2(elfexec_badaux, int, postfixsize,
+			    int, args->auxsize);
+			goto bad;
+		}
 		ASSERT(postfixsize <= __KERN_NAUXV_IMPL * sizeof (aux_entry_t));
 	}
 
@@ -1718,6 +1757,7 @@ elfcore(vnode_t *vp, proc_t *p, cred_t *credp, rlim64_t rlimit, int sig,
 	caddr_t stkbase;
 	size_t stksize;
 	int ntries = 0;
+	klwp_t *lwp = ttolwp(curthread);
 
 top:
 	/*
@@ -1727,7 +1767,7 @@ top:
 	ASSERT(p == ttoproc(curthread));
 	prstop(0, 0);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	nphdrs = prnsegs(as, 0) + 2;		/* two CORE note sections */
 
 	/*
@@ -1738,7 +1778,7 @@ top:
 		(void) process_scns(content, p, credp, NULL, NULL, NULL, 0,
 		    NULL, &nshdrs);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT(nshdrs == 0 || nshdrs > 1);
 
@@ -1854,7 +1894,7 @@ top:
 
 	mutex_exit(&p->p_lock);
 
-	AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+	AS_LOCK_ENTER(as, RW_WRITER);
 	i = 2;
 	for (seg = AS_SEGFIRST(as); seg != NULL; seg = AS_SEGNEXT(as, seg)) {
 		caddr_t eaddr = seg->s_base + pr_getsegsize(seg, 0);
@@ -1954,7 +1994,7 @@ exclude:
 		}
 		ASSERT(tmp == NULL);
 	}
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	if (overflow || i != nphdrs) {
 		if (ntries++ == 0) {
@@ -1981,6 +2021,10 @@ exclude:
 		goto done;
 
 	for (i = 2; i < nphdrs; i++) {
+		prkillinfo_t killinfo;
+		sigqueue_t *sq;
+		int sig, j;
+
 		if (v[i].p_filesz == 0)
 			continue;
 
@@ -1994,9 +2038,13 @@ exclude:
 		 */
 		if ((error = core_seg(p, vp, v[i].p_offset,
 		    (caddr_t)(uintptr_t)v[i].p_vaddr, v[i].p_filesz,
-		    rlimit, credp)) != 0) {
+		    rlimit, credp)) == 0) {
+			continue;
+		}
 
+		if ((sig = lwp->lwp_cursig) == 0) {
 			/*
+			 * We failed due to something other than a signal.
 			 * Since the space reserved for the segment is now
 			 * unused, we stash the errno in the first four
 			 * bytes. This undocumented interface will let us
@@ -2011,7 +2059,75 @@ exclude:
 			    poffset + sizeof (v[i]) * i, &v[i], sizeof (v[i]),
 			    rlimit, credp)) != 0)
 				goto done;
+
+			continue;
 		}
+
+		/*
+		 * We took a signal.  We want to abort the dump entirely, but
+		 * we also want to indicate what failed and why.  We therefore
+		 * use the space reserved for the first failing segment to
+		 * write our error (which, for purposes of compatability with
+		 * older core dump readers, we set to EINTR) followed by any
+		 * siginfo associated with the signal.
+		 */
+		bzero(&killinfo, sizeof (killinfo));
+		killinfo.prk_error = EINTR;
+
+		sq = sig == SIGKILL ? curproc->p_killsqp : lwp->lwp_curinfo;
+
+		if (sq != NULL) {
+			bcopy(&sq->sq_info, &killinfo.prk_info,
+			    sizeof (sq->sq_info));
+		} else {
+			killinfo.prk_info.si_signo = lwp->lwp_cursig;
+			killinfo.prk_info.si_code = SI_NOINFO;
+		}
+
+#if (defined(_SYSCALL32_IMPL) || defined(_LP64))
+		/*
+		 * If this is a 32-bit process, we need to translate from the
+		 * native siginfo to the 32-bit variant.  (Core readers must
+		 * always have the same data model as their target or must
+		 * be aware of -- and compensate for -- data model differences.)
+		 */
+		if (curproc->p_model == DATAMODEL_ILP32) {
+			siginfo32_t si32;
+
+			siginfo_kto32((k_siginfo_t *)&killinfo.prk_info, &si32);
+			bcopy(&si32, &killinfo.prk_info, sizeof (si32));
+		}
+#endif
+
+		(void) core_write(vp, UIO_SYSSPACE, v[i].p_offset,
+		    &killinfo, sizeof (killinfo), rlimit, credp);
+
+		/*
+		 * For the segment on which we took the signal, indicate that
+		 * its data now refers to a siginfo.
+		 */
+		v[i].p_filesz = 0;
+		v[i].p_flags |= PF_SUNW_FAILURE | PF_SUNW_KILLED |
+		    PF_SUNW_SIGINFO;
+
+		/*
+		 * And for every other segment, indicate that its absence
+		 * is due to a signal.
+		 */
+		for (j = i + 1; j < nphdrs; j++) {
+			v[j].p_filesz = 0;
+			v[j].p_flags |= PF_SUNW_FAILURE | PF_SUNW_KILLED;
+		}
+
+		/*
+		 * Finally, write out our modified program headers.
+		 */
+		if ((error = core_write(vp, UIO_SYSSPACE,
+		    poffset + sizeof (v[i]) * i, &v[i],
+		    sizeof (v[i]) * (nphdrs - i), rlimit, credp)) != 0)
+			goto done;
+
+		break;
 	}
 
 	if (nshdrs > 0) {
@@ -2027,14 +2143,14 @@ exclude:
 			bigwad->shdr[0].sh_info = nphdrs;
 
 		if (nshdrs > 1) {
-			AS_LOCK_ENTER(as, &as->a_lock, RW_WRITER);
+			AS_LOCK_ENTER(as, RW_WRITER);
 			if ((error = process_scns(content, p, credp, vp,
 			    &bigwad->shdr[0], nshdrs, rlimit, &doffset,
 			    NULL)) != 0) {
-				AS_LOCK_EXIT(as, &as->a_lock);
+				AS_LOCK_EXIT(as);
 				goto done;
 			}
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 		}
 
 		if ((error = core_write(vp, UIO_SYSSPACE, soffset,

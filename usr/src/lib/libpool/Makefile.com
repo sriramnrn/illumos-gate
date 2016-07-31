@@ -22,8 +22,6 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBRARY =	libpool.a
 VERS =		.1
@@ -50,8 +48,12 @@ SRCDIR =	../common
 $(LINTLIB) :=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 CFLAGS +=	$(CCVERBOSE)
-CPPFLAGS +=	-D_REENTRANT -D_FILE_OFFSET_BITS=64 -I/usr/include/libxml2
+CPPFLAGS +=	-D_REENTRANT -D_FILE_OFFSET_BITS=64 \
+		-I$(ADJUNCT_PROTO)/usr/include/libxml2
 
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-switch
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 .KEEP_STATE:
 

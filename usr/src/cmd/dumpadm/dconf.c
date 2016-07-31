@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 1998, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -70,6 +71,7 @@ static const char DC_STR_OFF[] = "off";		/* Off string */
 static const char DC_STR_YES[] = "yes";		/* Enable on string */
 static const char DC_STR_NO[] = "no";		/* Enable off string */
 static const char DC_STR_SWAP[] = "swap";	/* Default dump device */
+static const char DC_STR_NONE[] = "none";
 
 /* The pages included in the dump */
 static const char DC_STR_KERNEL[] = "kernel";	/* Kernel only */
@@ -367,7 +369,7 @@ dconf_dev_ioctl(dumpconf_t *dcp, int cmd)
 int
 dconf_update(dumpconf_t *dcp, int checkinuse)
 {
-	int 		oconf;
+	int		oconf;
 	int		error;
 	char		*msg;
 
@@ -438,6 +440,11 @@ dconf_update(dumpconf_t *dcp, int checkinuse)
 		}
 		free(swt);
 
+	} else if (strcmp(dcp->dc_device, DC_STR_NONE) == 0) {
+		if (ioctl(dcp->dc_dump_fd, DIOCRMDEV, NULL) == -1) {
+			warn(gettext("failed to remove dump device"));
+			return (-1);
+		}
 	} else if (dcp->dc_device[0] != '\0') {
 		/*
 		 * If we're not in forcible update mode, then fail the change
@@ -513,6 +520,23 @@ dconf_write_uuid(dumpconf_t *dcp)
 	return (err == 0);
 }
 
+int
+dconf_get_dumpsize(dumpconf_t *dcp)
+{
+	char buf[32];
+	uint64_t d;
+
+	if (ioctl(dcp->dc_dump_fd, DIOCGETDUMPSIZE, &d) == -1) {
+		warn(gettext("failed to get kernel dump size"));
+		return (-1);
+	}
+
+	zfs_nicenum(d, buf, sizeof (buf));
+
+	(void) printf(gettext("Estimated dump size: %s\n"), buf);
+	return (0);
+}
+
 void
 dconf_print(dumpconf_t *dcp, FILE *fp)
 {
@@ -561,6 +585,11 @@ dconf_str2device(dumpconf_t *dcp, char *buf)
 {
 	if (strcasecmp(buf, DC_STR_SWAP) == 0) {
 		(void) strcpy(dcp->dc_device, DC_STR_SWAP);
+		return (0);
+	}
+
+	if (strcasecmp(buf, DC_STR_NONE) == 0) {
+		(void) strcpy(dcp->dc_device, DC_STR_NONE);
 		return (0);
 	}
 

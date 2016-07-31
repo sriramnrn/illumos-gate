@@ -47,6 +47,10 @@ LIBS = $(DYNLIB)
 CFLAGS +=	$(CCVERBOSE)
 LDLIBS +=	-lc -lkstat -lnvpair
 
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-char-subscripts
+CERRWARN +=	-_gcc=-Wno-uninitialized
+
 CPPFLAGS +=	-I$(ROOT)/usr/platform/$(PLATFORM)/include -DSBD_DEBUG
 #
 #	Generate the error messages form sbd_ioctl.h
@@ -79,6 +83,8 @@ $(USR_PSM_LIB_CFG_DIR)/%: % $(USR_PSM_LIB_CFG_DIR)
 
 $(USR_PSM_LIB_CFG_DIR_64)/%: % $(USR_PSM_LIB_CFG_DIR_64)
 	-$(INS.file)
+
+CLOBBERFILES += ../common/ap_err.c sbdgenerr $(GENERR)
 
 # include library targets
 include ../../../Makefile.targ

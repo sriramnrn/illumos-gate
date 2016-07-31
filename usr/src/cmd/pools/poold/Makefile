@@ -74,7 +74,8 @@ INCS =		-I../common \
 		-I$(JAVA_ROOT)/include \
 		-I$(JAVA_ROOT)/include/solaris
 LDLIBS +=	-lpool -L$(JAVA_ROOT)/jre/lib/$(MACH)/client -ljvm
-LDFLAGS +=	-R$(JAVA_ROOT)/jre/lib/$(MACH)/client
+# runpath should point to runtime JAVA_HOME
+LDFLAGS +=	-R$(JAVA_HOME)/jre/lib/$(MACH)/client
 LINTFLAGS +=	-erroff=E_NAME_USED_NOT_DEF2
 LINTLIBS +=	-L$(ROOTLIB) -lpool
 
@@ -100,8 +101,13 @@ $(ROOTJAVA) :=	FILEMODE = 444
 all:	$(PROG) $(JAVA_SUBDIRS) $(JARFILE) \
 		    .WAIT $(SUBDIRS)
 
-clean :	$(JAVA_SUBDIRS) $(SUBDIRS)
-	-$(RM) $(OBJS) $(POFILES)
+clean :	$(JAVA_SUBDIRS) $(SUBDIRS) clean_local
+clean_local:
+	$(RM) $(OBJS)
+
+clobber : $(JAVA_SUBDIRS) $(SUBDIRS) clobber_local
+clobber_local: clean_local
+	$(RM) $(CLOBBERFILES)
 
 lint: $(SUBDIRS)
 

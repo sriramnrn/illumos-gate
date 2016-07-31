@@ -21,7 +21,7 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  */
 
@@ -36,7 +36,6 @@ extern "C" {
 #define	_SYS_RWLOCK_H
 #define	_SYS_CONDVAR_H
 #define	_SYS_SYSTM_H
-#define	_SYS_DEBUG_H
 #define	_SYS_T_LOCK_H
 #define	_SYS_VNODE_H
 #define	_SYS_VFS_H
@@ -61,6 +60,9 @@ extern "C" {
 #include <atomic.h>
 #include <dirent.h>
 #include <time.h>
+#include <procfs.h>
+#include <pthread.h>
+#include <sys/debug.h>
 #include <libsysevent.h>
 #include <sys/note.h>
 #include <sys/types.h>
@@ -78,6 +80,8 @@ extern "C" {
 #include <sys/sysevent/eventdefs.h>
 #include <sys/sysevent/dev.h>
 #include <sys/sunddi.h>
+#include <sys/debug.h>
+#include "zfs.h"
 
 /*
  * Debugging
@@ -110,100 +114,73 @@ extern void vpanic(const char *, __va_list);
 
 extern int aok;
 
-/* This definition is copied from assert.h. */
-#if defined(__STDC__)
-#if __STDC_VERSION__ - 0 >= 199901L
-#define	zverify(EX) (void)((EX) || (aok) || \
-	(__assert_c99(#EX, __FILE__, __LINE__, __func__), 0))
-#else
-#define	zverify(EX) (void)((EX) || (aok) || \
-	(__assert(#EX, __FILE__, __LINE__), 0))
-#endif /* __STDC_VERSION__ - 0 >= 199901L */
-#else
-#define	zverify(EX) (void)((EX) || (aok) || \
-	(_assert("EX", __FILE__, __LINE__), 0))
-#endif	/* __STDC__ */
-
-
-#define	VERIFY	zverify
-#define	ASSERT	zverify
-#undef	assert
-#define	assert	zverify
-
-extern void __assert(const char *, const char *, int);
-
-#ifdef lint
-#define	VERIFY3_IMPL(x, y, z, t)	if (x == z) ((void)0)
-#else
-/* BEGIN CSTYLED */
-#define	VERIFY3_IMPL(LEFT, OP, RIGHT, TYPE) do { \
-	const TYPE __left = (TYPE)(LEFT); \
-	const TYPE __right = (TYPE)(RIGHT); \
-	if (!(__left OP __right) && (!aok)) { \
-		char *__buf = alloca(256); \
-		(void) snprintf(__buf, 256, "%s %s %s (0x%llx %s 0x%llx)", \
-			#LEFT, #OP, #RIGHT, \
-			(u_longlong_t)__left, #OP, (u_longlong_t)__right); \
-		__assert(__buf, __FILE__, __LINE__); \
-	} \
-_NOTE(CONSTCOND) } while (0)
-/* END CSTYLED */
-#endif /* lint */
-
-#define	VERIFY3S(x, y, z)	VERIFY3_IMPL(x, y, z, int64_t)
-#define	VERIFY3U(x, y, z)	VERIFY3_IMPL(x, y, z, uint64_t)
-#define	VERIFY3P(x, y, z)	VERIFY3_IMPL(x, y, z, uintptr_t)
-
-#ifdef NDEBUG
-#define	ASSERT3S(x, y, z)	((void)0)
-#define	ASSERT3U(x, y, z)	((void)0)
-#define	ASSERT3P(x, y, z)	((void)0)
-#else
-#define	ASSERT3S(x, y, z)	VERIFY3S(x, y, z)
-#define	ASSERT3U(x, y, z)	VERIFY3U(x, y, z)
-#define	ASSERT3P(x, y, z)	VERIFY3P(x, y, z)
-#endif
-
 /*
  * DTrace SDT probes have different signatures in userland than they do in
- * kernel.  If they're being used in kernel code, re-define them out of
+ * the kernel.  If they're being used in kernel code, re-define them out of
  * existence for their counterparts in libzpool.
+ *
+ * Here's an example of how to use the set-error probes in userland:
+ * zfs$target:::set-error /arg0 == EBUSY/ {stack();}
+ *
+ * Here's an example of how to use DTRACE_PROBE probes in userland:
+ * If there is a probe declared as follows:
+ * DTRACE_PROBE2(zfs__probe_name, uint64_t, blkid, dnode_t *, dn);
+ * Then you can use it as follows:
+ * zfs$target:::probe2 /copyinstr(arg0) == "zfs__probe_name"/
+ *     {printf("%u %p\n", arg1, arg2);}
  */
 
 #ifdef DTRACE_PROBE
 #undef	DTRACE_PROBE
-#define	DTRACE_PROBE(a)	((void)0)
 #endif	/* DTRACE_PROBE */
+#define	DTRACE_PROBE(a) \
+	ZFS_PROBE0(#a)
 
 #ifdef DTRACE_PROBE1
 #undef	DTRACE_PROBE1
-#define	DTRACE_PROBE1(a, b, c)	((void)0)
 #endif	/* DTRACE_PROBE1 */
+#define	DTRACE_PROBE1(a, b, c) \
+	ZFS_PROBE1(#a, (unsigned long)c)
 
 #ifdef DTRACE_PROBE2
 #undef	DTRACE_PROBE2
-#define	DTRACE_PROBE2(a, b, c, d, e)	((void)0)
 #endif	/* DTRACE_PROBE2 */
+#define	DTRACE_PROBE2(a, b, c, d, e) \
+	ZFS_PROBE2(#a, (unsigned long)c, (unsigned long)e)
 
 #ifdef DTRACE_PROBE3
 #undef	DTRACE_PROBE3
-#define	DTRACE_PROBE3(a, b, c, d, e, f, g)	((void)0)
 #endif	/* DTRACE_PROBE3 */
+#define	DTRACE_PROBE3(a, b, c, d, e, f, g) \
+	ZFS_PROBE3(#a, (unsigned long)c, (unsigned long)e, (unsigned long)g)
 
 #ifdef DTRACE_PROBE4
 #undef	DTRACE_PROBE4
-#define	DTRACE_PROBE4(a, b, c, d, e, f, g, h, i)	((void)0)
 #endif	/* DTRACE_PROBE4 */
+#define	DTRACE_PROBE4(a, b, c, d, e, f, g, h, i) \
+	ZFS_PROBE4(#a, (unsigned long)c, (unsigned long)e, (unsigned long)g, \
+	(unsigned long)i)
+
+/*
+ * We use the comma operator so that this macro can be used without much
+ * additional code.  For example, "return (EINVAL);" becomes
+ * "return (SET_ERROR(EINVAL));".  Note that the argument will be evaluated
+ * twice, so it should not have side effects (e.g. something like:
+ * "return (SET_ERROR(log_error(EINVAL, info)));" would log the error twice).
+ */
+#define	SET_ERROR(err) (ZFS_SET_ERROR(err), err)
 
 /*
  * Threads
  */
 #define	curthread	((void *)(uintptr_t)thr_self())
 
+#define	kpreempt(x)	yield()
+
 typedef struct kthread kthread_t;
 
 #define	thread_create(stk, stksize, func, arg, len, pp, state, pri)	\
-	zk_thread_create(func, arg)
+	zk_thread_create(func, arg, len)
 #define	thread_exit() thr_exit(NULL)
 #define	thread_join(t)	panic("libzpool cannot join threads")
 
@@ -219,7 +196,7 @@ extern struct proc p0;
 
 #define	PS_NONE		-1
 
-extern kthread_t *zk_thread_create(void (*func)(), void *arg);
+extern kthread_t *zk_thread_create(void (*func)(), void *arg, uint64_t len);
 
 #define	issig(why)	(FALSE)
 #define	ISSIG(thr, why)	(FALSE)
@@ -248,11 +225,13 @@ extern int _mutex_destroy(mutex_t *mp);
 
 #define	mutex_init(mp, b, c, d)		zmutex_init((kmutex_t *)(mp))
 #define	mutex_destroy(mp)		zmutex_destroy((kmutex_t *)(mp))
+#define	mutex_enter(mp)			zmutex_enter(mp)
+#define	mutex_exit(mp)			zmutex_exit(mp)
 
 extern void zmutex_init(kmutex_t *mp);
 extern void zmutex_destroy(kmutex_t *mp);
-extern void mutex_enter(kmutex_t *mp);
-extern void mutex_exit(kmutex_t *mp);
+extern void zmutex_enter(kmutex_t *mp);
+extern void zmutex_exit(kmutex_t *mp);
 extern int mutex_tryenter(kmutex_t *mp);
 extern void *mutex_owner(kmutex_t *mp);
 
@@ -277,6 +256,9 @@ typedef int krw_t;
 #undef RW_WRITE_HELD
 #define	RW_WRITE_HELD(x)	_rw_write_held(&(x)->rw_lock)
 
+#undef RW_LOCK_HELD
+#define	RW_LOCK_HELD(x)		(RW_READ_HELD(x) || RW_WRITE_HELD(x))
+
 extern void rw_init(krwlock_t *rwlp, char *name, int type, void *arg);
 extern void rw_destroy(krwlock_t *rwlp);
 extern void rw_enter(krwlock_t *rwlp, krw_t rw);
@@ -286,6 +268,7 @@ extern void rw_exit(krwlock_t *rwlp);
 #define	rw_downgrade(rwlp) do { } while (0)
 
 extern uid_t crgetuid(cred_t *cr);
+extern uid_t crgetruid(cred_t *cr);
 extern gid_t crgetgid(cred_t *cr);
 extern int crgetngroups(cred_t *cr);
 extern gid_t *crgetgroups(cred_t *cr);
@@ -296,21 +279,38 @@ extern gid_t *crgetgroups(cred_t *cr);
 typedef cond_t kcondvar_t;
 
 #define	CV_DEFAULT	USYNC_THREAD
+#define	CALLOUT_FLAG_ABSOLUTE	0x2
 
 extern void cv_init(kcondvar_t *cv, char *name, int type, void *arg);
 extern void cv_destroy(kcondvar_t *cv);
 extern void cv_wait(kcondvar_t *cv, kmutex_t *mp);
 extern clock_t cv_timedwait(kcondvar_t *cv, kmutex_t *mp, clock_t abstime);
+extern clock_t cv_timedwait_hires(kcondvar_t *cvp, kmutex_t *mp, hrtime_t tim,
+    hrtime_t res, int flag);
 extern void cv_signal(kcondvar_t *cv);
 extern void cv_broadcast(kcondvar_t *cv);
 
 /*
+ * Thread-specific data
+ */
+#define	tsd_get(k) pthread_getspecific(k)
+#define	tsd_set(k, v) pthread_setspecific(k, v)
+#define	tsd_create(kp, d) pthread_key_create(kp, d)
+#define	tsd_destroy(kp) /* nothing */
+
+/*
  * kstat creation, installation and deletion
  */
-extern kstat_t *kstat_create(char *, int,
-    char *, char *, uchar_t, ulong_t, uchar_t);
+extern kstat_t *kstat_create(const char *, int,
+    const char *, const char *, uchar_t, ulong_t, uchar_t);
 extern void kstat_install(kstat_t *);
 extern void kstat_delete(kstat_t *);
+extern void kstat_waitq_enter(kstat_io_t *);
+extern void kstat_waitq_exit(kstat_io_t *);
+extern void kstat_runq_enter(kstat_io_t *);
+extern void kstat_runq_exit(kstat_io_t *);
+extern void kstat_waitq_to_runq(kstat_io_t *);
+extern void kstat_runq_back_to_waitq(kstat_io_t *);
 
 /*
  * Kernel memory
@@ -402,8 +402,10 @@ typedef struct vnode {
 	uint64_t	v_size;
 	int		v_fd;
 	char		*v_path;
+	int		v_dump_fd;
 } vnode_t;
 
+extern char *vn_dumpdir;
 #define	AV_SCANSTAMP_SZ	32		/* length of anti-virus scanstamp */
 
 typedef struct xoptattr {
@@ -505,6 +507,9 @@ extern vnode_t *rootdir;
 
 extern void delay(clock_t ticks);
 
+#define	SEC_TO_TICK(sec)	((sec) * hz)
+#define	NSEC_TO_TICK(usec)	((usec) / (NANOSEC / hz))
+
 #define	gethrestime_sec() time(NULL)
 #define	gethrestime(t) \
 	do {\
@@ -513,6 +518,7 @@ extern void delay(clock_t ticks);
 	} while (0);
 
 #define	max_ncpus	64
+#define	boot_ncpus	(sysconf(_SC_NPROCESSORS_ONLN))
 
 #define	minclsyspri	60
 #define	maxclsyspri	99
@@ -526,7 +532,7 @@ extern void delay(clock_t ticks);
 
 extern uint64_t physmem;
 
-extern int highbit(ulong_t i);
+extern int highbit64(uint64_t i);
 extern int random_get_bytes(uint8_t *ptr, size_t len);
 extern int random_get_pseudo_bytes(uint8_t *ptr, size_t len);
 
@@ -562,7 +568,7 @@ typedef struct callb_cpr {
 #define	INGLOBALZONE(z)			(1)
 
 extern char *kmem_asprintf(const char *fmt, ...);
-#define	strfree(str) kmem_free((str), strlen(str)+1)
+#define	strfree(str) kmem_free((str), strlen(str) + 1)
 
 /*
  * Hostname information
@@ -623,6 +629,64 @@ void ksiddomain_rele(ksiddomain_t *);
 #define	DDI_SLEEP	KM_SLEEP
 #define	ddi_log_sysevent(_a, _b, _c, _d, _e, _f, _g) \
 	sysevent_post_event(_c, _d, _b, "libzpool", _e, _f)
+
+/*
+ * Cyclic information
+ */
+extern kmutex_t cpu_lock;
+
+typedef uintptr_t cyclic_id_t;
+typedef uint16_t cyc_level_t;
+typedef void (*cyc_func_t)(void *);
+
+#define	CY_LOW_LEVEL	0
+#define	CY_INFINITY	INT64_MAX
+#define	CYCLIC_NONE	((cyclic_id_t)0)
+
+typedef struct cyc_time {
+	hrtime_t cyt_when;
+	hrtime_t cyt_interval;
+} cyc_time_t;
+
+typedef struct cyc_handler {
+	cyc_func_t cyh_func;
+	void *cyh_arg;
+	cyc_level_t cyh_level;
+} cyc_handler_t;
+
+extern cyclic_id_t cyclic_add(cyc_handler_t *, cyc_time_t *);
+extern void cyclic_remove(cyclic_id_t);
+extern int cyclic_reprogram(cyclic_id_t, hrtime_t);
+
+/*
+ * Buf structure
+ */
+#define	B_BUSY		0x0001
+#define	B_DONE		0x0002
+#define	B_ERROR		0x0004
+#define	B_READ		0x0040	/* read when I/O occurs */
+#define	B_WRITE		0x0100	/* non-read pseudo-flag */
+
+typedef struct buf {
+	int	b_flags;
+	size_t b_bcount;
+	union {
+		caddr_t b_addr;
+	} b_un;
+
+	lldaddr_t	_b_blkno;
+#define	b_lblkno	_b_blkno._f
+	size_t	b_resid;
+	size_t	b_bufsize;
+	int	(*b_iodone)(struct buf *);
+	int	b_error;
+	void	*b_private;
+} buf_t;
+
+extern void bioinit(buf_t *);
+extern void biodone(buf_t *);
+extern void bioerror(buf_t *, int);
+extern int geterror(buf_t *);
 
 #ifdef	__cplusplus
 }

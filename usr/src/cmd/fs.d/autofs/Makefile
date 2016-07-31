@@ -18,9 +18,11 @@
 #
 # CDDL HEADER END
 #
-# Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+
 #
-# cmd/fs.d/autofs/Makefile
+# Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015 RackTop Systems.
+#
 
 FSTYPE=		autofs
 AUTO=		automount
@@ -88,6 +90,14 @@ $(TYPEPROG) :=	LDLIBS += -lrpcsvc -lsocket -lnsl -lsldap -lkstat -lscf
 CFLAGS +=	$(CCVERBOSE) -D_FILE_OFFSET_BITS=64
 CPPFLAGS=	-I. -I.. -I../nfs/lib $(CPPFLAGS.master) -D_REENTRANT  \
 			$(MALLOC_DEBUG)
+
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-switch
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-unused-function
+
 OBJS=		$(AUTOOBJS) $(MOUNTOBJS) $(TYPEOBJS) \
 		$(SHAREOBJS) $(UNSHAREOBJS)
 
@@ -117,11 +127,11 @@ $(TYPEPROG):	webnfs.h $(TYPEOBJS)
 		$(POST_PROCESS)
 
 $(SHARE):	$(SHAREOBJS)
-		$(LINK.c) -o $@ $(SHAREOBJS)
+		$(LINK.c) -o $@ $(SHAREOBJS) $(LDLIBS)
 		$(POST_PROCESS)
 
 $(UNSHARE):	$(UNSHAREOBJS)
-		$(LINK.c) -o $@ $(UNSHAREOBJS)
+		$(LINK.c) -o $@ $(UNSHAREOBJS) $(LDLIBS)
 		$(POST_PROCESS)
 
 $(ROOTSVCSYSTEM)/filesystem/%: %

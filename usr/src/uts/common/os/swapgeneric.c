@@ -18,11 +18,10 @@
  *
  * CDDL HEADER END
  */
-/* ONC_PLUS EXTRACT START */
 /*
  * Copyright (c) 1982, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
-/* ONC_PLUS EXTRACT END */
 
 /*
  * Configure root, swap and dump devices.
@@ -326,7 +325,6 @@ preload_module(struct sysparam *sysp, void *p)
 	return (0);
 }
 
-/* ONC_PLUS EXTRACT START */
 /*
  * We want to load all the modules needed to mount the root filesystem,
  * so that when we start the ball rolling in 'getrootdev', every module
@@ -340,7 +338,6 @@ loadrootmodules(void)
 	char		*this;
 	char		*name;
 	int		err;
-/* ONC_PLUS EXTRACT END */
 	int		i, proplen;
 	extern char	*impl_module_list[];
 	extern char	*platform_module_list[];
@@ -483,7 +480,6 @@ loop:
 	BMDPRINTF(("loadrootmodules: preload_module\n"));
 	(void) mod_sysctl_type(MOD_FORCELOAD, preload_module, NULL);
 
-/* ONC_PLUS EXTRACT START */
 	/*
 	 * If we booted otw then load in the plumbing
 	 * routine now while we still can. If we didn't
@@ -582,7 +578,6 @@ out:
 
 	return (err);
 }
-/* ONC_PLUS EXTRACT END */
 
 static int
 get_bootpath_prop(char *bootpath)
@@ -638,8 +633,8 @@ get_fstype_prop(char *fstype)
  * convention that the NFS V2 filesystem name is "nfs" (see vfs_conf.c)
  * we need to map "nfs" => "nfsdyn" and "nfs2" => "nfs".  The dynamic
  * nfs module will map the type back to either "nfs", "nfs3", or "nfs4".
- * This is only for root filesystems, all other uses such as cachefs
- * will expect that "nfs" == NFS V2.
+ * This is only for root filesystems, all other uses will expect
+ * that "nfs" == NFS V2.
  *
  * If the filesystem isn't already loaded, vfs_getvfssw() will load
  * it for us, but if (at the time we call it) modrootloaded is

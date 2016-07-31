@@ -22,6 +22,11 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ */
 
 #ifndef	_PCONTROL_H
 #define	_PCONTROL_H
@@ -39,6 +44,7 @@
 #include <libproc.h>
 #include <libctf.h>
 #include <limits.h>
+#include <libproc.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -136,8 +142,14 @@ typedef struct lwp_info {	/* per-lwp information from core file */
 #endif
 } lwp_info_t;
 
+typedef struct fd_info {
+	plist_t	fd_list;	/* linked list */
+	prfdinfo_t fd_info;	/* fd info */
+} fd_info_t;
+
 typedef struct core_info {	/* information specific to core files */
 	char core_dmodel;	/* data model for core file */
+	char core_osabi;	/* ELF OS ABI */
 	int core_errno;		/* error during initialization if != 0 */
 	plist_t core_lwp_head;	/* head of list of lwp info */
 	lwp_info_t *core_lwp;	/* current lwp information */
@@ -181,13 +193,6 @@ typedef struct elf_file {	/* convenience for managing ELF files */
 	int e_fd;		/* file descriptor */
 } elf_file_t;
 
-typedef struct ps_rwops {	/* ops vector for Pread() and Pwrite() */
-	ssize_t (*p_pread)(struct ps_prochandle *,
-	    void *, size_t, uintptr_t);
-	ssize_t (*p_pwrite)(struct ps_prochandle *,
-	    const void *, size_t, uintptr_t);
-} ps_rwops_t;
-
 #define	HASHSIZE		1024	/* hash table size, power of 2 */
 
 struct ps_prochandle {
@@ -218,11 +223,16 @@ struct ps_prochandle {
 	rd_agent_t *rap;	/* cookie for rtld_db */
 	map_info_t *map_exec;	/* the mapping for the executable file */
 	map_info_t *map_ldso;	/* the mapping for ld.so.1 */
-	const ps_rwops_t *ops;	/* pointer to ops-vector for read and write */
-	core_info_t *core;	/* information specific to core (if PS_DEAD) */
+	ps_ops_t ops;		/* ops-vector */
 	uintptr_t *ucaddrs;	/* ucontext-list addresses */
 	uint_t	ucnelems;	/* number of elements in the ucaddrs list */
 	char	*zoneroot;	/* cached path to zone root */
+	plist_t	fd_head;	/* head of file desc info list */
+	int	num_fd;		/* number of file descs in list */
+	uintptr_t map_missing;	/* first missing mapping in core due to sig */
+	siginfo_t killinfo;	/* signal that interrupted core dump */
+	psinfo_t spymaster;	/* agent LWP's spymaster, if any */
+	void *data;		/* private data */
 };
 
 /* flags */
@@ -233,6 +243,7 @@ struct ps_prochandle {
 #define	SETEXIT		0x10	/* set sysexit trace mask before continuing */
 #define	SETHOLD		0x20	/* set signal hold mask before continuing */
 #define	SETREGS		0x40	/* set registers before continuing */
+#define	INCORE		0x80	/* use in-core data to build symbol tables */
 
 struct ps_lwphandle {
 	struct ps_prochandle *lwp_proc;	/* process to which this lwp belongs */
@@ -269,6 +280,8 @@ extern	char	*Plofspath(const char *, char *, size_t);
 extern	char	*Pzoneroot(struct ps_prochandle *, char *, size_t);
 extern	char	*Pzonepath(struct ps_prochandle *, const char *, char *,
 	size_t);
+extern	fd_info_t *Pfd2info(struct ps_prochandle *, int);
+
 extern	char	*Pfindmap(struct ps_prochandle *, map_info_t *, char *,
 	size_t);
 

@@ -23,7 +23,9 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ */
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,7 +62,7 @@ Pabort_agent(struct ps_prochandle *P)
 	int sysnum = P->status.pr_lwp.pr_syscall;
 	int stop;
 
-	dprintf("agent LWP is asleep in syscall %d\n", sysnum);
+	dprintf("agent LWP is stopped or asleep in syscall %d\n", sysnum);
 	(void) Pstop(P, 0);
 	stop = Psysexit(P, sysnum, TRUE);
 
@@ -146,11 +148,16 @@ Pcreate_agent(struct ps_prochandle *P)
 	P->agentctlfd = fd;
 
 	/*
-	 * If the agent is currently asleep in a system call, attempt
-	 * to abort the system call so it's ready to serve.
+	 * If the agent is currently asleep in a system call or stopped on
+	 * system call entry, attempt to abort the system call so it's ready to
+	 * serve.
 	 */
-	if (P->status.pr_lwp.pr_flags & PR_ASLEEP) {
-		dprintf("Pcreate_agent: aborting agent syscall\n");
+	if ((P->status.pr_lwp.pr_flags & PR_ASLEEP) ||
+	    ((P->status.pr_lwp.pr_flags & PR_STOPPED) &&
+	    P->status.pr_lwp.pr_why == PR_SYSENTRY)) {
+		dprintf("Pcreate_agent: aborting agent syscall; lwp is %s\n",
+		    (P->status.pr_lwp.pr_flags & PR_ASLEEP) ?
+		    "asleep" : "stopped");
 		Pabort_agent(P);
 	}
 
@@ -352,6 +359,16 @@ Psyscall(struct ps_prochandle *P,
 #ifdef _LP64
 	if (model == PR_MODEL_LP64) {
 		sp = P->status.pr_lwp.pr_reg[R_SP] + STACK_BIAS;
+#if defined(__amd64)
+		/*
+		 * To offset the expense of computerised subtraction, the AMD64
+		 * ABI allows a process the use of a 128-byte area beyond the
+		 * location pointed to by %rsp.  We must advance the agent's
+		 * stack pointer by at least the size of this region or else it
+		 * may corrupt this temporary storage.
+		 */
+		sp -= STACK_RESERVE64;
+#endif
 		sp = PSTACK_ALIGN64(sp);
 	} else {
 #endif

@@ -24,6 +24,7 @@
  *	  All Rights Reserved
  *
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
  */
 
 #ifndef	_CONV_H
@@ -276,7 +277,7 @@ typedef union {
 } Conv_bnd_obj_buf_t;
 
 /* conv_phdr_flags() */
-#define	CONV_PHDR_FLAGS_BUFSIZE		57
+#define	CONV_PHDR_FLAGS_BUFSIZE		88
 typedef union {
 	Conv_inv_buf_t			inv_buf;
 	char				buf[CONV_PHDR_FLAGS_BUFSIZE];
@@ -837,6 +838,10 @@ extern	const char	*conv_cnote_syscall(Word, Conv_fmt_flags_t,
 			    Conv_inv_buf_t *);
 extern	const char	*conv_cnote_sysset(uint32_t *, int,
 			    Conv_fmt_flags_t, Conv_cnote_sysset_buf_t *);
+extern	const char	*conv_cnote_fileflags(uint32_t, Conv_fmt_flags_t,
+			    char *, size_t);
+extern	const char	*conv_cnote_filemode(uint32_t, Conv_fmt_flags_t,
+			    char *, size_t);
 extern	const char	*conv_cnote_type(Word, Conv_fmt_flags_t,
 			    Conv_inv_buf_t *);
 extern	const char	*conv_def_tag(Symref, Conv_inv_buf_t *);

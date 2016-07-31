@@ -22,6 +22,7 @@
 /*
  * Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 #ifndef	_SYS_SUNDDI_H
@@ -328,7 +329,7 @@ typedef enum {
     DDI_DEVSTATE_UP = 32
 } ddi_devstate_t;
 
-#ifdef	_KERNEL
+#if defined(_KERNEL) || defined(_FAKE_KERNEL)
 
 /*
  * Common property definitions
@@ -460,6 +461,8 @@ extern char *strncat(char *, const char *, size_t);
 extern size_t strlcat(char *, const char *, size_t);
 extern size_t strlcpy(char *, const char *, size_t);
 extern size_t strspn(const char *, const char *);
+extern size_t strcspn(const char *, const char *);
+extern char *strsep(char **, const char *);
 extern int bcmp(const void *, const void *, size_t) __PURE;
 extern int stoi(char **);
 extern void numtos(ulong_t, char *);
@@ -501,6 +504,9 @@ extern size_t kiconv(kiconv_t, char **, size_t *, char **, size_t *, int *);
 extern int kiconv_close(kiconv_t);
 extern size_t kiconvstr(const char *, const char *, char *, size_t *, char *,
 	size_t *, int, int *);
+
+#endif /* _KERNEL || _FAKE_KERNEL */
+#ifdef	_KERNEL
 
 /*
  * ddi_map_regs

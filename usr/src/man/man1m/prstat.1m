@@ -1,23 +1,23 @@
 '\" te
+.\" Copyright (c) 2013 Gary Mills
 .\" Copyright (c) 2006, 2009 Sun Microsystems, Inc. All Rights Reserved.
 .\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License. You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.
 .\"  See the License for the specific language governing permissions and limitations under the License. When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with
 .\" the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH PRSTAT 1M "Jun 25, 2009"
+.TH PRSTAT 1M "Nov 14, 2014"
 .SH NAME
 prstat \- report active process statistics
 .SH SYNOPSIS
 .LP
 .nf
-\fBprstat\fR [\fB-acHJLmRrtTv\fR] [\fB-d\fR u | d] [\fB-C\fR \fIpsrsetlist\fR] [\fB-h\fR \fIlgrplist\fR]
+\fBprstat\fR [\fB-acHJLmRrtTvWZ\fR] [\fB-d\fR u | d] [\fB-C\fR \fIpsrsetlist\fR] [\fB-h\fR \fIlgrplist\fR]
      [\fB-j\fR \fIprojlist\fR] [\fB-k\fR \fItasklist\fR] [\fB-n\fR \fIntop\fR[,\fInbottom\fR]]
      [\fB-p\fR \fIpidlist\fR] [\fB-P\fR \fIcpulist\fR] [\fB-s\fR \fIkey\fR | \fB-S\fR \fIkey\fR ]
-     [\fB-u\fR \fIeuidlist\fR] [\fB-U\fR \fIuidlist\fR] [\fB-z\fR \fIzoneidlist\fR] [\fB-Z\fR]
+     [\fB-u\fR \fIeuidlist\fR] [\fB-U\fR \fIuidlist\fR] [\fB-z\fR \fIzoneidlist\fR]
      [\fIinterval\fR [\fIcount\fR]]
 .fi
 
 .SH DESCRIPTION
-.sp
 .LP
 The \fBprstat\fR utility iteratively examines all active processes on the
 system and reports statistics based on the selected output mode and sort order.
@@ -34,7 +34,6 @@ separated by commas or enclosed in quotes and separated by commas or spaces.
 If you do not specify an option, \fBprstat\fR examines all processes and
 reports statistics sorted by \fBCPU\fR usage.
 .SH OPTIONS
-.sp
 .LP
 The following options are supported:
 .sp
@@ -56,6 +55,7 @@ displays separate reports about processes and users at the same time.
 .sp .6
 .RS 4n
 Print new reports below previous reports instead of overprinting them.
+Long names are not truncated in this mode.
 .RE
 
 .sp
@@ -128,6 +128,8 @@ project \fBID\fR. See \fBproject\fR(4).
 .RS 4n
 Report information about processes and projects. In this mode \fBprstat\fR
 displays separate reports about processes and projects at the same time.
+A trailing asterisk marks a long name that has been truncated
+to fit the column.
 .RE
 
 .sp
@@ -173,10 +175,10 @@ waiting for user locks and waiting for \fBCPU\fR (latency time).
 .RS 4n
 Restrict number of output lines. The \fIntop\fR argument determines how many
 lines of process or \fBlwp\fR statistics are reported, and the \fInbottom\fR
-argument determines how many lines of user, task, or projects statistics are
-reported if the \fB-a\fR, \fB-t\fR, \fB-T\fR, or \fB-J\fR options are
-specified. By default, \fBprstat\fR displays as many lines of output that fit
-in a window or terminal. When you specify the \fB-c\fR option or direct the
+argument determines how many lines of user, task, project or zone statistics
+are reported if the \fB-a\fR, \fB-t\fR, \fB-T\fR, \fB-J\fR or \fB-Z\fR options
+are specified. By default, \fBprstat\fR displays as many lines of output that
+fit in a window or terminal. When you specify the \fB-c\fR option or direct the
 output to a file, the default values for \fBntop\fR and \fBnbottom\fR are
 \fB15\fR and \fB5\fR.
 .RE
@@ -364,6 +366,19 @@ with the \fB-\fR sign.
 .sp
 .ne 2
 .na
+\fB\fB-W\fR\fR
+.ad
+.sp .6
+.RS 4n
+Truncate long names even when \fBprstat\fR would normally print them
+in full.
+A trailing asterisk marks a long name that has been truncated
+to fit the column.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-z\fR \fIzoneidlist\fR\fR
 .ad
 .sp .6
@@ -382,10 +397,11 @@ can be specified as either a zone name or a numerical zone ID. See
 .RS 4n
 Report information about processes and zones. In this mode, \fBprstat\fR
 displays separate reports about processes and zones at the same time.
+A trailing asterisk marks a long name that has been truncated
+to fit the column.
 .RE
 
 .SH OUTPUT
-.sp
 .LP
 The following list defines the column headings and the meanings of a
 \fBprstat\fR report:
@@ -407,6 +423,8 @@ The process \fBID\fR of the process.
 .sp .6
 .RS 4n
 The real user (login) name or real user \fBID\fR.
+A trailing asterisk marks a long name that has been truncated
+to fit the column.
 .RE
 
 .sp
@@ -746,7 +764,6 @@ The home \fIlgroup\fR of the process or lwp.
 .RE
 
 .SH OPERANDS
-.sp
 .LP
 The following operands are supported:
 .sp
@@ -821,7 +838,6 @@ example% prstat -S rss -n 5 -vc -u root,john
 .sp
 
 .SH EXIT STATUS
-.sp
 .LP
 The following exit values are returned:
 .sp
@@ -845,14 +861,12 @@ An error occurred.
 .RE
 
 .SH SEE ALSO
-.sp
 .LP
 \fBdate\fR(1), \fBlgrpinfo\fR(1), \fBplgrp\fR(1), \fBproc\fR(1), \fBps\fR(1),
 \fBtime\fR(2), \fBpsrinfo\fR(1M), \fBpsrset\fR(1M), \fBsar\fR(1M),
 \fBpset_getloadavg\fR(3C), \fBproc\fR(4), \fBproject\fR(4),
 \fBattributes\fR(5), \fBresource_controls\fR(5), \fBzones\fR(5)
 .SH NOTES
-.sp
 .LP
 The snapshot of system usage displayed by \fBprstat\fR is true only for a
 split-second, and it may not be accurate by the time it is displayed. When the

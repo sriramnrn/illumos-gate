@@ -20,7 +20,10 @@
  */
 
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  */
 
 /*
@@ -228,7 +231,7 @@ static boolean_t
 zfs_is_mountable(zfs_handle_t *zhp, char *buf, size_t buflen,
     zprop_source_t *source)
 {
-	char sourceloc[ZFS_MAXNAMELEN];
+	char sourceloc[MAXNAMELEN];
 	zprop_source_t sourcetype;
 
 	if (!zfs_prop_valid_for_type(ZFS_PROP_MOUNTPOINT, zhp->zfs_type))
@@ -466,7 +469,8 @@ zfs_is_shared_proto(zfs_handle_t *zhp, char **where, zfs_share_proto_t proto)
 	if (!zfs_is_mounted(zhp, &mountpoint))
 		return (SHARED_NOT_SHARED);
 
-	if (rc = is_shared(zhp->zfs_hdl, mountpoint, proto)) {
+	if ((rc = is_shared(zhp->zfs_hdl, mountpoint, proto))
+	    != SHARED_NOT_SHARED) {
 		if (where != NULL)
 			*where = mountpoint;
 		else
@@ -715,14 +719,6 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 	if (!zfs_is_mountable(zhp, mountpoint, sizeof (mountpoint), NULL))
 		return (0);
 
-	if ((ret = zfs_init_libshare(hdl, SA_INIT_SHARE_API)) != SA_OK) {
-		(void) zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
-		    dgettext(TEXT_DOMAIN, "cannot share '%s': %s"),
-		    zfs_get_name(zhp), _sa_errorstr != NULL ?
-		    _sa_errorstr(ret) : "");
-		return (-1);
-	}
-
 	for (curr_proto = proto; *curr_proto != PROTO_END; curr_proto++) {
 		/*
 		 * Return success if there are no share options.
@@ -732,6 +728,15 @@ zfs_share_proto(zfs_handle_t *zhp, zfs_share_proto_t *proto)
 		    ZFS_MAXPROPLEN, B_FALSE) != 0 ||
 		    strcmp(shareopts, "off") == 0)
 			continue;
+
+		ret = zfs_init_libshare(hdl, SA_INIT_SHARE_API);
+		if (ret != SA_OK) {
+			(void) zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
+			    dgettext(TEXT_DOMAIN, "cannot share '%s': %s"),
+			    zfs_get_name(zhp), _sa_errorstr != NULL ?
+			    _sa_errorstr(ret) : "");
+			return (-1);
+		}
 
 		/*
 		 * If the 'zoned' property is set, then zfs_is_mountable()
@@ -829,7 +834,7 @@ unshare_one(libzfs_handle_t *hdl, const char *name, const char *mountpoint,
 	/* make sure libshare initialized */
 	if ((err = zfs_init_libshare(hdl, SA_INIT_SHARE_API)) != SA_OK) {
 		free(mntpt);	/* don't need the copy anymore */
-		return (zfs_error_fmt(hdl, EZFS_SHARENFSFAILED,
+		return (zfs_error_fmt(hdl, EZFS_UNSHARENFSFAILED,
 		    dgettext(TEXT_DOMAIN, "cannot unshare '%s': %s"),
 		    name, _sa_errorstr(err)));
 	}
@@ -1009,6 +1014,17 @@ mount_cb(zfs_handle_t *zhp, void *data)
 	}
 
 	if (zfs_prop_get_int(zhp, ZFS_PROP_CANMOUNT) == ZFS_CANMOUNT_NOAUTO) {
+		zfs_close(zhp);
+		return (0);
+	}
+
+	/*
+	 * If this filesystem is inconsistent and has a receive resume
+	 * token, we can not mount it.
+	 */
+	if (zfs_prop_get_int(zhp, ZFS_PROP_INCONSISTENT) &&
+	    zfs_prop_get(zhp, ZFS_PROP_RECEIVE_RESUME_TOKEN,
+	    NULL, 0, NULL, NULL, 0, B_TRUE) == 0) {
 		zfs_close(zhp);
 		return (0);
 	}

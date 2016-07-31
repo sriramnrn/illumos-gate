@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1984, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -2191,6 +2192,9 @@ again:
 			rw_enter(&ip->i_contents, RW_WRITER);
 			goto update_inode;
 		}
+
+		if (error == 0 && vap->va_size)
+			vnevent_truncate(vp, ct);
 	}
 
 	if (ulp) {
@@ -3367,7 +3371,7 @@ ufs_rename(
 	struct vnode *tvp = NULL;	/* target vnode, if it exists */
 	struct vnode *realvp;
 	struct ufsvfs *ufsvfsp;
-	struct ulockfs *ulp;
+	struct ulockfs *ulp = NULL;
 	struct ufs_slot slot;
 	timestruc_t now;
 	int error;
@@ -3385,26 +3389,24 @@ ufs_rename(
 	if (VOP_REALVP(tdvp, &realvp, ct) == 0)
 		tdvp = realvp;
 
+	/* Must do this before taking locks in case of DNLC miss */
 	terr = ufs_eventlookup(tdvp, tnm, cr, &tvp);
 	serr = ufs_eventlookup(sdvp, snm, cr, &svp);
 
 	if ((serr == 0) && ((terr == 0) || (terr == ENOENT))) {
 		if (tvp != NULL)
-			vnevent_rename_dest(tvp, tdvp, tnm, ct);
+			vnevent_pre_rename_dest(tvp, tdvp, tnm, ct);
 
 		/*
 		 * Notify the target directory of the rename event
 		 * if source and target directories are not the same.
 		 */
 		if (sdvp != tdvp)
-			vnevent_rename_dest_dir(tdvp, ct);
+			vnevent_pre_rename_dest_dir(tdvp, svp, tnm, ct);
 
 		if (svp != NULL)
-			vnevent_rename_src(svp, sdvp, snm, ct);
+			vnevent_pre_rename_src(svp, sdvp, snm, ct);
 	}
-
-	if (tvp != NULL)
-		VN_RELE(tvp);
 
 	if (svp != NULL)
 		VN_RELE(svp);
@@ -3412,7 +3414,7 @@ ufs_rename(
 retry_rename:
 	error = ufs_lockfs_begin(ufsvfsp, &ulp, ULOCKFS_RENAME_MASK);
 	if (error)
-		goto out;
+		goto unlock;
 
 	if (ulp)
 		TRANS_BEGIN_CSYNC(ufsvfsp, issync, TOP_RENAME,
@@ -3708,6 +3710,9 @@ retry_firstlock:
 		goto errout;
 	}
 
+	if (error == 0 && tvp != NULL)
+		vnevent_rename_dest(tvp, tdvp, tnm, ct);
+
 	/*
 	 * Unlink the source.
 	 * Remove the source entry.  ufs_dirremove() checks that the entry
@@ -3719,6 +3724,16 @@ retry_firstlock:
 	    DR_RENAME, cr)) == ENOENT)
 		error = 0;
 
+	if (error == 0) {
+		vnevent_rename_src(ITOV(sip), sdvp, snm, ct);
+		/*
+		 * Notify the target directory of the rename event
+		 * if source and target directories are not the same.
+		 */
+		if (sdvp != tdvp)
+			vnevent_rename_dest_dir(tdvp, ct);
+	}
+
 errout:
 	if (slot.fbp)
 		fbrelse(slot.fbp, S_OTHER);
@@ -3728,15 +3743,17 @@ errout:
 		rw_exit(&sdp->i_rwlock);
 	}
 
-	VN_RELE(ITOV(sip));
-
 unlock:
+	if (tvp != NULL)
+		VN_RELE(tvp);
+	if (sip != NULL)
+		VN_RELE(ITOV(sip));
+
 	if (ulp) {
 		TRANS_END_CSYNC(ufsvfsp, error, issync, TOP_RENAME, trans_size);
 		ufs_lockfs_end(ulp);
 	}
 
-out:
 	return (error);
 }
 
@@ -4460,6 +4477,9 @@ ufs_space(struct vnode *vp, int cmd, struct flock64 *bfp, int flag,
 			if (error)
 				return (error);
 			error = ufs_freesp(vp, bfp, flag, cr);
+
+			if (error == 0 && bfp->l_start == 0)
+				vnevent_truncate(vp, ct);
 		} else if (cmd == F_ALLOCSP) {
 			error = ufs_lockfs_begin(ufsvfsp, &ulp,
 			    ULOCKFS_FALLOCATE_MASK);
@@ -5646,7 +5666,7 @@ retry_map:
 	 * deadlock between ufs_read/ufs_map/pagefault when a quiesce is
 	 * pending.
 	 */
-	while (!AS_LOCK_TRYENTER(as, &as->a_lock, RW_WRITER)) {
+	while (!AS_LOCK_TRYENTER(as, RW_WRITER)) {
 		ufs_map_alock_retry_cnt++;
 		delay(RETRY_LOCK_DELAY);
 	}
@@ -5662,7 +5682,7 @@ retry_map:
 		 * as->a_lock and wait for ulp->ul_fs_lock status to change.
 		 */
 		ufs_map_lockfs_retry_cnt++;
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		as_rangeunlock(as);
 		if (error == EIO)
 			goto out;
@@ -5969,11 +5989,11 @@ ufs_pageio(struct vnode *vp, page_t *pp, u_offset_t io_off, size_t io_len,
 			}
 			return (vmpss ? EIO : EINVAL);
 		}
-		atomic_add_long(&ulp->ul_vnops_cnt, 1);
+		atomic_inc_ulong(&ulp->ul_vnops_cnt);
 		if (pp == NULL)
 			mutex_exit(&ulp->ul_lock);
 		if (ufs_quiesce_pend) {
-			if (!atomic_add_long_nv(&ulp->ul_vnops_cnt, -1))
+			if (!atomic_dec_ulong_nv(&ulp->ul_vnops_cnt))
 				cv_broadcast(&ulp->ul_cv);
 			return (vmpss ? EIO : EINVAL);
 		}
@@ -5992,7 +6012,7 @@ ufs_pageio(struct vnode *vp, page_t *pp, u_offset_t io_off, size_t io_len,
 		if (!vmpss) {
 			rw_enter(&ip->i_contents, RW_READER);
 		} else if (!rw_tryenter(&ip->i_contents, RW_READER)) {
-			if (!atomic_add_long_nv(&ulp->ul_vnops_cnt, -1))
+			if (!atomic_dec_ulong_nv(&ulp->ul_vnops_cnt))
 				cv_broadcast(&ulp->ul_cv);
 			return (EDEADLK);
 		}
@@ -6005,7 +6025,7 @@ ufs_pageio(struct vnode *vp, page_t *pp, u_offset_t io_off, size_t io_len,
 	if (vmpss && btopr(io_off + io_len) > btopr(ip->i_size)) {
 		if (dolock)
 			rw_exit(&ip->i_contents);
-		if (!atomic_add_long_nv(&ulp->ul_vnops_cnt, -1))
+		if (!atomic_dec_ulong_nv(&ulp->ul_vnops_cnt))
 			cv_broadcast(&ulp->ul_cv);
 		return (EFAULT);
 	}
@@ -6018,7 +6038,7 @@ ufs_pageio(struct vnode *vp, page_t *pp, u_offset_t io_off, size_t io_len,
 		}
 		if (dolock)
 			rw_exit(&ip->i_contents);
-		if (!atomic_add_long_nv(&ulp->ul_vnops_cnt, -1))
+		if (!atomic_dec_ulong_nv(&ulp->ul_vnops_cnt))
 			cv_broadcast(&ulp->ul_cv);
 		return (err);
 	}
@@ -6125,7 +6145,7 @@ ufs_pageio(struct vnode *vp, page_t *pp, u_offset_t io_off, size_t io_len,
 
 	if (dolock)
 		rw_exit(&ip->i_contents);
-	if (vmpss && !atomic_add_long_nv(&ulp->ul_vnops_cnt, -1))
+	if (vmpss && !atomic_dec_ulong_nv(&ulp->ul_vnops_cnt))
 		cv_broadcast(&ulp->ul_cv);
 	return (err);
 }

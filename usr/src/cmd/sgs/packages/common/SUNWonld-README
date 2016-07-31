@@ -1631,3 +1631,30 @@ Bugid   Risk Synopsis
 ================================================================================
 
 308     ld may misalign sections only preceded by empty sections
+1301	ld crashes with '-z ignore' due to a null data descriptor
+1626	libld may accidentally return success while failing
+2413	%ymm* need to be preserved on way through PLT
+3210	ld should tolerate SHT_PROGBITS for .eh_frame sections on amd64
+3228	Want -zassert-deflib for ld
+3230	ld.so.1 should check default paths for DT_DEPAUDIT
+3260	linker is insufficiently careful with strtok
+3261	linker should ignore unknown hardware capabilities
+3265	link-editor builds bogus .eh_frame_hdr on ia32
+3453	GNU comdat redirection does exactly the wrong thing
+3439	discarded sections shouldn't end up on output lists
+3436	relocatable objects also need sloppy relocation
+3451	archive libraries with no symbols shouldn't require a string table
+3616	SHF_GROUP sections should not be discarded via other COMDAT mechanisms
+3709	need sloppy relocation for GNU .debug_macro
+3722	link-editor is over restrictive of R_AMD64_32 addends
+3926	multiple extern map file definitions corrupt symbol table entry
+3999	libld extended section handling is broken
+4003	dldump() can't deal with extended sections
+4227	ld --library-path is translated to -l-path, not -L
+4270	ld(1) argument error reporting is still pretty bad
+4383	libelf can't write extended sections when ELF_F_LAYOUT
+4959	completely discarded merged string sections will corrupt output objects
+4996	rtld _init race leads to incorrect symbol values
+5688	ELF tools need to be more careful with dwarf data
+6098	ld(1) should not require symbols which identify group sections be global
+6252	ld should merge function/data-sections in the same manner as GNU ld

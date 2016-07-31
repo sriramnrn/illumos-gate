@@ -1007,7 +1007,7 @@ rootnex_map_fault(dev_info_t *dip, dev_info_t *rdip, struct hat *hat,
 			 * the hat of the system MMU.  At alternative
 			 * would be to panic .. this might well be better ..
 			 */
-			ASSERT(AS_READ_HELD(seg->s_as, &seg->s_as->a_lock));
+			ASSERT(AS_READ_HELD(seg->s_as));
 			hat = seg->s_as->a_hat;
 			cmn_err(CE_NOTE, "rootnex_map_fault: nil hat");
 		}
@@ -1811,7 +1811,7 @@ rootnex_coredma_allochdl(dev_info_t *dip, dev_info_t *rdip,
 	 * granularity may or may not be a power of two. If it isn't, we can't
 	 * use a simple mask.
 	 */
-	if (attr->dma_attr_granular & (attr->dma_attr_granular - 1)) {
+	if (!ISP2(attr->dma_attr_granular)) {
 		dma->dp_granularity_power_2 = B_FALSE;
 	} else {
 		dma->dp_granularity_power_2 = B_TRUE;
@@ -3869,7 +3869,7 @@ rootnex_setup_cookie(ddi_dma_obj_t *dmar_object, rootnex_dma_t *dma,
 #endif /* __amd64 */
 
 		/* figure out if the copybuf size is a power of 2 */
-		if (dma->dp_copybuf_size & (dma->dp_copybuf_size - 1)) {
+		if (!ISP2(dma->dp_copybuf_size)) {
 			copybuf_sz_power_2 = B_FALSE;
 		} else {
 			copybuf_sz_power_2 = B_TRUE;

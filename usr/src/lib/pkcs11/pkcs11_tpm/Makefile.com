@@ -66,22 +66,28 @@ ROOTLIBDIR64=$(ROOT)/usr/lib/security/$(MACH64)
 
 LIBS=$(DYNLIB) $(DYNLIB64)
 
-TSSROOT=
+TSSROOT=$(ADJUNCT_PROTO)
 TSPILIBDIR=$(TSSROOT)/usr/lib
 TSPIINCDIR=$(TSSROOT)/usr/include
 TSSLIB=-L$(TSPILIBDIR)
 TSSLIB64=-L$(TSPILIBDIR)/$(MACH64)
 TSSINC=-I$(TSPIINCDIR)
 
-LDLIBS += $(TSSLIB) -L/lib -lc -luuid -lmd -ltspi -lcrypto
+LDLIBS += $(TSSLIB) -L$(ADJUNCT_PROTO)/lib -lc -luuid -lmd -ltspi -lcrypto
 CPPFLAGS += -xCC -D_POSIX_PTHREAD_SEMANTICS $(TSSINC)
 CPPFLAGS64 += $(CPPFLAGS)
 C99MODE=        $(C99_ENABLE)
+
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 LINTSRC= $(OBJECTS:%.o=$(SRCDIR)/%.c)
 
 $(LINTLIB):=	SRCS	=	$(SRCDIR)/$(LINTSRC)
 LINTSRC= $(SRCS)
+
+CLOBBERFILES += C.ln
 
 .KEEP_STATE:
 

@@ -22,6 +22,9 @@
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright 2016 Joyent, Inc.
+ */
 
 #ifndef _THR_UBERDATA_H
 #define	_THR_UBERDATA_H
@@ -488,6 +491,29 @@ typedef struct {
 #endif	/* _SYSCALL32 */
 
 /*
+ * As part of per-thread caching libumem (ptcumem), we add a small amount to the
+ * thread's uberdata to facilitate it. The tm_roots are the roots of linked
+ * lists which is used by libumem to chain together allocations. tm_size is used
+ * to track the total amount of data stored across those linked lists. For more
+ * information, see libumem's big theory statement.
+ */
+#define	NTMEMBASE	16
+
+typedef struct {
+	size_t		tm_size;
+	void		*tm_roots[NTMEMBASE];
+} tumem_t;
+
+#ifdef _SYSCALL32
+typedef struct {
+	uint32_t	tm_size;
+	caddr32_t	tm_roots[NTMEMBASE];
+} tumem32_t;
+#endif
+
+typedef void (*tmem_func_t)(void *, int);
+
+/*
  * Maximum number of read locks allowed for one thread on one rwlock.
  * This could be as large as INT_MAX, but the SUSV3 test suite would
  * take an inordinately long time to complete.  This is big enough.
@@ -653,6 +679,8 @@ typedef struct ulwp {
 #if defined(sparc)
 	void		*ul_unwind_ret;	/* used only by _ex_clnup_handler() */
 #endif
+	tumem_t		ul_tmem;	/* used only by umem */
+	uint_t		ul_ptinherit;	/* pthreads sched inherit value */
 } ulwp_t;
 
 #define	ul_cursig	ul_cp.s.cursig		/* deferred signal number */
@@ -832,16 +860,25 @@ typedef struct {
  * atexit() data structures.
  * See port/gen/atexit.c for details.
  */
-typedef void (*_exithdlr_func_t) (void);
+typedef void (*_exithdlr_func_t) (void*);
 
 typedef struct _exthdlr {
 	struct _exthdlr 	*next;	/* next in handler list */
 	_exithdlr_func_t	hdlr;	/* handler itself */
+	void			*arg;	/* argument to handler */
+	void			*dso;	/* DSO associated with handler */
 } _exthdlr_t;
 
 typedef struct {
 	mutex_t		exitfns_lock;
 	_exthdlr_t	*head;
+	/*
+	 * exit_frame_monitor is part of a private contract between libc and
+	 * the Sun C++ runtime.
+	 *
+	 * It should be NULL until exit() is called, and thereafter hold the
+	 * frame pointer of the function implementing our exit processing.
+	 */
 	void		*exit_frame_monitor;
 	char		exit_pad[64 -	/* pad out to 64 bytes */
 		(sizeof (mutex_t) + sizeof (_exthdlr_t *) + sizeof (void *))];
@@ -857,6 +894,28 @@ typedef struct {
 } atexit_root32_t;
 #endif	/* _SYSCALL32 */
 
+/*
+ * at_quick_exit() and quick_exit() data structures. The ISO/IEC C11 odd
+ * siblings of atexit()
+ */
+typedef void (*_quick_exithdlr_func_t)(void);
+
+typedef struct _qexthdlr {
+	struct _qexthdlr 	*next;	/* next in handler list */
+	_quick_exithdlr_func_t	hdlr;	/* handler itself */
+} _qexthdlr_t;
+
+typedef struct {
+	mutex_t		exitfns_lock;
+	_qexthdlr_t	*head;
+} quickexit_root_t;
+
+#ifdef _SYSCALL32
+typedef struct {
+	mutex_t		exitfns_lock;
+	caddr32_t	head;
+} quickexit_root32_t;
+#endif /* _SYSCALL32 */
 
 /*
  * This is data that is global to all link maps (uberdata, aka super-global).
@@ -874,6 +933,7 @@ typedef struct uberdata {
 	siguaction_t	siguaction[NSIG];
 	bucket_t	bucket[NBUCKETS];
 	atexit_root_t	atexit_root;
+	quickexit_root_t quickexit_root;
 	tsd_metadata_t	tsd_metadata;
 	tls_metadata_t	tls_metadata;
 	/*
@@ -1074,6 +1134,7 @@ typedef struct ulwp32 {
 #if defined(sparc)
 	caddr32_t	ul_unwind_ret;	/* used only by _ex_clnup_handler() */
 #endif
+	tumem32_t	ul_tmem;	/* used only by umem */
 } ulwp32_t;
 
 #define	REPLACEMENT_SIZE32	((size_t)&((ulwp32_t *)NULL)->ul_sigmask)
@@ -1089,6 +1150,7 @@ typedef struct uberdata32 {
 	siguaction32_t	siguaction[NSIG];
 	bucket32_t	bucket[NBUCKETS];
 	atexit_root32_t	atexit_root;
+	quickexit_root32_t quickexit_root;
 	tsd_metadata32_t tsd_metadata;
 	tls_metadata32_t tls_metadata;
 	char		primary_map;
@@ -1192,10 +1254,13 @@ extern	void	getgregs(ulwp_t *, gregset_t);
 extern	void	setgregs(ulwp_t *, gregset_t);
 extern	void	thr_panic(const char *);
 #pragma rarely_called(thr_panic)
+extern	void	mutex_panic(mutex_t *, const char *);
+#pragma rarely_called(mutex_panic)
 extern	ulwp_t	*find_lwp(thread_t);
 extern	void	finish_init(void);
 extern	void	update_sched(ulwp_t *);
 extern	void	queue_alloc(void);
+extern	void	tmem_exit(void);
 extern	void	tsd_exit(void);
 extern	void	tsd_free(ulwp_t *);
 extern	void	tls_setup(void);

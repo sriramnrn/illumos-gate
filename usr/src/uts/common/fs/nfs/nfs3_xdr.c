@@ -26,6 +26,10 @@
 /* Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T */
 /* All Rights Reserved */
 
+/*
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ */
+
 #include <sys/param.h>
 #include <sys/types.h>
 #include <sys/systm.h>
@@ -591,7 +595,8 @@ xdr_fattr3_to_vattr(XDR *xdrs, fattr3_res *objp)
 		 * Common case
 		 */
 		vap->va_type = IXDR_GET_ENUM(ptr, enum vtype);
-		if (vap->va_type < NF3REG || vap->va_type > NF3FIFO)
+		if ((ftype3)vap->va_type < NF3REG ||
+		    (ftype3)vap->va_type > NF3FIFO)
 			vap->va_type = VBAD;
 		else
 			vap->va_type = nf3_to_vt[vap->va_type];
@@ -745,7 +750,8 @@ xdr_fattr3_to_vattr(XDR *xdrs, fattr3_res *objp)
 		/*
 		 * Fixup as needed
 		 */
-		if (vap->va_type < NF3REG || vap->va_type > NF3FIFO)
+		if ((ftype3)vap->va_type < NF3REG ||
+		    (ftype3)vap->va_type > NF3FIFO)
 			vap->va_type = VBAD;
 		else
 			vap->va_type = nf3_to_vt[vap->va_type];
@@ -1322,12 +1328,36 @@ xdr_READ3res(XDR *xdrs, READ3res *objp)
 	if (xdrs->x_op == XDR_ENCODE) {
 
 		mp = resokp->data.mp;
-		if (mp != NULL && xdrs->x_ops == &xdrmblk_ops) {
-			if (xdrmblk_putmblk(xdrs, mp, resokp->count) == TRUE) {
-				resokp->data.mp = NULL;
-				return (TRUE);
+		if (mp != NULL) {
+			if (xdrs->x_ops == &xdrmblk_ops) {
+				if (xdrmblk_putmblk(xdrs, mp, resokp->count)) {
+					resokp->data.mp = NULL;
+					return (TRUE);
+				} else {
+					return (FALSE);
+				}
+			} else if (mp->b_cont != NULL) {
+				/*
+				 * We have read results in an mblk chain, but
+				 * the encoding operations don't handle mblks
+				 * (they'll operate on data.data_val rather
+				 * than data.mp).  Because data_val can only
+				 * point at a single data buffer, we need to
+				 * pullup the read results into a single data
+				 * block and reset data_val to point to it.
+				 *
+				 * This happens with RPC GSS where the wrapping
+				 * function does XDR serialization into a
+				 * temporary buffer prior to applying GSS.
+				 * Because we're not in a performance sensitive
+				 * path, the pullupmsg() here shouldn't hurt us
+				 * too badly.
+				 */
+				if (pullupmsg(mp, -1) == 0)
+					return (FALSE);
+				resokp->data.data_val = (caddr_t)mp->b_rptr;
 			}
-		} else if (mp == NULL) {
+		} else {
 			if (xdr_u_int(xdrs, &resokp->count) == FALSE) {
 				return (FALSE);
 			}

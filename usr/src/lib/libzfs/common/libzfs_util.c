@@ -21,7 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  */
 
 /*
@@ -38,11 +40,13 @@
 #include <unistd.h>
 #include <ctype.h>
 #include <math.h>
+#include <sys/filio.h>
 #include <sys/mnttab.h>
 #include <sys/mntent.h>
 #include <sys/types.h>
 
 #include <libzfs.h>
+#include <libzfs_core.h>
 
 #include "libzfs_impl.h"
 #include "zfs_prop.h"
@@ -622,13 +626,21 @@ libzfs_init(void)
 		return (NULL);
 	}
 
-	if ((hdl->libzfs_mnttab = fopen(MNTTAB, "r")) == NULL) {
+	if ((hdl->libzfs_mnttab = fopen(MNTTAB, "rF")) == NULL) {
 		(void) close(hdl->libzfs_fd);
 		free(hdl);
 		return (NULL);
 	}
 
-	hdl->libzfs_sharetab = fopen("/etc/dfs/sharetab", "r");
+	hdl->libzfs_sharetab = fopen("/etc/dfs/sharetab", "rF");
+
+	if (libzfs_core_init() != 0) {
+		(void) close(hdl->libzfs_fd);
+		(void) fclose(hdl->libzfs_mnttab);
+		(void) fclose(hdl->libzfs_sharetab);
+		free(hdl);
+		return (NULL);
+	}
 
 	zfs_prop_init();
 	zpool_prop_init();
@@ -647,12 +659,11 @@ libzfs_fini(libzfs_handle_t *hdl)
 	if (hdl->libzfs_sharetab)
 		(void) fclose(hdl->libzfs_sharetab);
 	zfs_uninit_libshare(hdl);
-	if (hdl->libzfs_log_str)
-		(void) free(hdl->libzfs_log_str);
 	zpool_free_handles(hdl);
 	libzfs_fru_clear(hdl, B_TRUE);
 	namespace_clear(hdl);
 	libzfs_mnttab_fini(hdl);
+	libzfs_core_fini();
 	free(hdl);
 }
 
@@ -729,8 +740,9 @@ zcmd_alloc_dst_nvlist(libzfs_handle_t *hdl, zfs_cmd_t *zc, size_t len)
 	if (len == 0)
 		len = 16 * 1024;
 	zc->zc_nvlist_dst_size = len;
-	if ((zc->zc_nvlist_dst = (uint64_t)(uintptr_t)
-	    zfs_alloc(hdl, zc->zc_nvlist_dst_size)) == NULL)
+	zc->zc_nvlist_dst =
+	    (uint64_t)(uintptr_t)zfs_alloc(hdl, zc->zc_nvlist_dst_size);
+	if (zc->zc_nvlist_dst == 0)
 		return (-1);
 
 	return (0);
@@ -745,9 +757,9 @@ int
 zcmd_expand_dst_nvlist(libzfs_handle_t *hdl, zfs_cmd_t *zc)
 {
 	free((void *)(uintptr_t)zc->zc_nvlist_dst);
-	if ((zc->zc_nvlist_dst = (uint64_t)(uintptr_t)
-	    zfs_alloc(hdl, zc->zc_nvlist_dst_size))
-	    == NULL)
+	zc->zc_nvlist_dst =
+	    (uint64_t)(uintptr_t)zfs_alloc(hdl, zc->zc_nvlist_dst_size);
+	if (zc->zc_nvlist_dst == 0)
 		return (-1);
 
 	return (0);
@@ -762,6 +774,9 @@ zcmd_free_nvlists(zfs_cmd_t *zc)
 	free((void *)(uintptr_t)zc->zc_nvlist_conf);
 	free((void *)(uintptr_t)zc->zc_nvlist_src);
 	free((void *)(uintptr_t)zc->zc_nvlist_dst);
+	zc->zc_nvlist_conf = NULL;
+	zc->zc_nvlist_src = NULL;
+	zc->zc_nvlist_dst = NULL;
 }
 
 static int
@@ -814,17 +829,7 @@ zcmd_read_dst_nvlist(libzfs_handle_t *hdl, zfs_cmd_t *zc, nvlist_t **nvlp)
 int
 zfs_ioctl(libzfs_handle_t *hdl, int request, zfs_cmd_t *zc)
 {
-	int error;
-
-	zc->zc_history = (uint64_t)(uintptr_t)hdl->libzfs_log_str;
-	error = ioctl(hdl->libzfs_fd, request, zc);
-	if (hdl->libzfs_log_str) {
-		free(hdl->libzfs_log_str);
-		hdl->libzfs_log_str = NULL;
-	}
-	zc->zc_history = 0;
-
-	return (error);
+	return (ioctl(hdl->libzfs_fd, request, zc));
 }
 
 /*
@@ -963,7 +968,7 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
     const char *source, const char *recvd_value)
 {
 	int i;
-	const char *str;
+	const char *str = NULL;
 	char buf[128];
 
 	/*
@@ -1015,6 +1020,10 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
 			case ZPROP_SRC_RECEIVED:
 				str = "received";
 				break;
+
+			default:
+				str = NULL;
+				assert(!"unhandled zprop_source_t");
 			}
 			break;
 
@@ -1224,6 +1233,16 @@ zprop_parse_value(libzfs_handle_t *hdl, nvpair_t *elem, int prop,
 			zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 			    "use 'none' to disable quota/refquota"));
 			goto error;
+		}
+
+		/*
+		 * Special handling for "*_limit=none". In this case it's not
+		 * 0 but UINT64_MAX.
+		 */
+		if ((type & ZFS_TYPE_DATASET) && isnone &&
+		    (prop == ZFS_PROP_FILESYSTEM_LIMIT ||
+		    prop == ZFS_PROP_SNAPSHOT_LIMIT)) {
+			*ivalp = UINT64_MAX;
 		}
 		break;
 
@@ -1489,4 +1508,51 @@ zprop_iter(zprop_func func, void *cb, boolean_t show_all, boolean_t ordered,
     zfs_type_t type)
 {
 	return (zprop_iter_common(func, cb, show_all, ordered, type));
+}
+
+/*
+ * zfs_get_hole_count retrieves the number of holes (blocks which are
+ * zero-filled) in the specified file using the _FIO_COUNT_FILLED ioctl. It
+ * also optionally fetches the block size when bs is non-NULL. With hole count
+ * and block size the full space consumed by the holes of a file can be
+ * calculated.
+ *
+ * On success, zero is returned, the count argument is set to the
+ * number of holes, and the bs argument is set to the block size (if it is
+ * not NULL). On error, a non-zero errno is returned and the values in count
+ * and bs are undefined.
+ */
+int
+zfs_get_hole_count(const char *path, uint64_t *count, uint64_t *bs)
+{
+	int fd, err;
+	struct stat64 ss;
+	uint64_t fill;
+
+	fd = open(path, O_RDONLY | O_LARGEFILE);
+	if (fd == -1)
+		return (errno);
+
+	if (ioctl(fd, _FIO_COUNT_FILLED, &fill) == -1) {
+		err = errno;
+		(void) close(fd);
+		return (err);
+	}
+
+	if (fstat64(fd, &ss) == -1) {
+		err = errno;
+		(void) close(fd);
+		return (err);
+	}
+
+	*count = (ss.st_size + ss.st_blksize - 1) / ss.st_blksize - fill;
+	VERIFY3S(*count, >=, 0);
+	if (bs != NULL) {
+		*bs = ss.st_blksize;
+	}
+
+	if (close(fd) == -1) {
+		return (errno);
+	}
+	return (0);
 }

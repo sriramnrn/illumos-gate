@@ -25,6 +25,7 @@
 
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, Joyent, Inc. All rights reserved.
  */
 
 /*
@@ -919,7 +920,7 @@ vmem_canalloc(vmem_t *vmp, size_t size)
 	int flist = 0;
 	ASSERT(MUTEX_HELD(&vmp->vm_lock));
 
-	if ((size & (size - 1)) == 0)
+	if (ISP2(size))
 		flist = lowbit(P2ALIGN(vmp->vm_freemap, size));
 	else if ((hb = highbit(size)) < VMEM_FREELISTS)
 		flist = lowbit(P2ALIGN(vmp->vm_freemap, 1UL << hb));
@@ -958,8 +959,7 @@ vmem_xalloc(vmem_t *vmp, size_t size, size_t align_arg, size_t phase,
 		    (void *)vmp, size, align_arg, phase, nocross,
 		    minaddr, maxaddr, vmflag);
 
-	if (phase >= align || (align & (align - 1)) != 0 ||
-	    (nocross & (nocross - 1)) != 0)
+	if (phase >= align || !ISP2(align) || !ISP2(nocross))
 		panic("vmem_xalloc(%p, %lu, %lu, %lu, %lu, %p, %p, %x): "
 		    "parameters inconsistent or invalid",
 		    (void *)vmp, size, align_arg, phase, nocross,
@@ -993,7 +993,7 @@ do_alloc:
 		 *
 		 * (4)	We're doing a best-fit or first-fit allocation.
 		 */
-		if ((size & (size - 1)) == 0) {
+		if (ISP2(size)) {
 			flist = lowbit(P2ALIGN(vmp->vm_freemap, size));
 		} else {
 			hb = highbit(size);
@@ -1064,6 +1064,21 @@ do_alloc:
 			}
 			aneeded = MAX(size + aphase, vmp->vm_min_import);
 			asize = P2ROUNDUP(aneeded, aquantum);
+
+			if (asize < size) {
+				/*
+				 * The rounding induced overflow; return NULL
+				 * if we are permitted to fail the allocation
+				 * (and explicitly panic if we aren't).
+				 */
+				if ((vmflag & VM_NOSLEEP) &&
+				    !(vmflag & VM_PANIC)) {
+					mutex_exit(&vmp->vm_lock);
+					return (NULL);
+				}
+
+				panic("vmem_xalloc(): size overflow");
+			}
 
 			/*
 			 * Determine how many segment structures we'll consume.
@@ -1274,7 +1289,7 @@ vmem_alloc(vmem_t *vmp, size_t size, int vmflag)
 	mutex_enter(&vmp->vm_lock);
 
 	if (vmp->vm_nsegfree >= VMEM_MINFREE || vmem_populate(vmp, vmflag)) {
-		if ((size & (size - 1)) == 0)
+		if (ISP2(size))
 			flist = lowbit(P2ALIGN(vmp->vm_freemap, size));
 		else if ((hb = highbit(size)) < VMEM_FREELISTS)
 			flist = lowbit(P2ALIGN(vmp->vm_freemap, 1UL << hb));
@@ -1437,7 +1452,7 @@ vmem_create_common(const char *name, void *base, size_t size, size_t quantum,
 	vmem_t *vmp, *cur, **vmpp;
 	vmem_seg_t *vsp;
 	vmem_freelist_t *vfp;
-	uint32_t id = atomic_add_32_nv(&vmem_id, 1);
+	uint32_t id = atomic_inc_32_nv(&vmem_id);
 
 	if (vmem_vmem_arena != NULL) {
 		vmp = vmem_alloc(vmem_vmem_arena, sizeof (vmem_t),
@@ -1539,7 +1554,7 @@ vmem_create_common(const char *name, void *base, size_t size, size_t quantum,
 
 	if (vmp->vm_cflags & VMC_POPULATOR) {
 		ASSERT(vmem_populators < VMEM_INITIAL);
-		vmem_populator[atomic_add_32_nv(&vmem_populators, 1) - 1] = vmp;
+		vmem_populator[atomic_inc_32_nv(&vmem_populators) - 1] = vmp;
 		mutex_enter(&vmp->vm_lock);
 		(void) vmem_populate(vmp, vmflag | VM_PANIC);
 		mutex_exit(&vmp->vm_lock);

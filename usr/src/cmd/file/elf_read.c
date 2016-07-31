@@ -30,8 +30,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 /*
  * ELF files can exceed 2GB in size. A standard 32-bit program
  * like 'file' cannot read past 2GB, and will be unable to see
@@ -421,7 +419,8 @@ process_shdr(Elf_Info *EI)
 	int 		i, j, idx;
 	FILE_ELF_OFF_T	cap_off;
 	FILE_ELF_SIZE_T	csize;
-	char		*section_name;
+	char		*strtab;
+	size_t		strtab_sz;
 	Elf_Cap 	Chdr;
 	Elf_Shdr	*shdr = &EI_Shdr;
 
@@ -437,16 +436,18 @@ process_shdr(Elf_Info *EI)
 	if (get_shdr(EI, EI_Ehdr_shstrndx) == ELF_READ_FAIL)
 		return (ELF_READ_FAIL);
 
-	if ((section_name = malloc(shdr->sh_size)) == NULL)
+	if ((strtab = malloc(shdr->sh_size)) == NULL)
 		return (ELF_READ_FAIL);
 
-	if (pread64(EI->elffd, section_name, shdr->sh_size, shdr->sh_offset)
+	if (pread64(EI->elffd, strtab, shdr->sh_size, shdr->sh_offset)
 	    != shdr->sh_size)
 		return (ELF_READ_FAIL);
 
+	strtab_sz = shdr->sh_size;
+
 	/* read all the sections and process them */
 	for (idx = 1, i = 0; i < EI_Ehdr_shnum; idx++, i++) {
-		char *str;
+		char *shnam;
 
 		if (get_shdr(EI, i) == ELF_READ_FAIL)
 			return (ELF_READ_FAIL);
@@ -458,6 +459,8 @@ process_shdr(Elf_Info *EI)
 
 		cap_off = shdr->sh_offset;
 		if (shdr->sh_type == SHT_SUNW_cap) {
+			char capstr[128];
+
 			if (shdr->sh_size == 0 || shdr->sh_entsize == 0) {
 				(void) fprintf(stderr, ELF_ERR_ELFCAP1,
 				    File, EI->file);
@@ -477,14 +480,28 @@ process_shdr(Elf_Info *EI)
 					return (ELF_READ_FAIL);
 				}
 
-				if (Chdr.c_tag != CA_SUNW_NULL) {
-					(void) elfcap_tag_to_str(
-					    ELFCAP_STYLE_UC, Chdr.c_tag,
-					    Chdr.c_un.c_val, EI->cap_str,
-					    sizeof (EI->cap_str),
-					    ELFCAP_FMT_SNGSPACE, mac);
-				}
 				cap_off += csize;
+
+				/*
+				 * Each capatibility group is terminated with
+				 * CA_SUNW_NULL.  Groups other than the first
+				 * represent symbol capabilities, and aren't
+				 * interesting here.
+				 */
+				if (Chdr.c_tag == CA_SUNW_NULL)
+					break;
+
+				(void) elfcap_tag_to_str(ELFCAP_STYLE_UC,
+				    Chdr.c_tag, Chdr.c_un.c_val, capstr,
+				    sizeof (capstr), ELFCAP_FMT_SNGSPACE,
+				    mac);
+
+				if ((*EI->cap_str != '\0') && (*capstr != '\0'))
+					(void) strlcat(EI->cap_str, " ",
+					    sizeof (EI->cap_str));
+
+				(void) strlcat(EI->cap_str, capstr,
+				    sizeof (EI->cap_str));
 			}
 		}
 
@@ -524,16 +541,19 @@ process_shdr(Elf_Info *EI)
 			continue;
 		}
 
-		str = &section_name[shdr->sh_name];
+		if (shdr->sh_name >= strtab_sz)
+			shnam = NULL;
+		else
+			shnam = &strtab[shdr->sh_name];
 
 		if (!(EI->stripped & E_DBGINF) &&
 		    ((shdr->sh_type == SHT_SUNW_DEBUG) ||
 		    (shdr->sh_type == SHT_SUNW_DEBUGSTR) ||
-		    (is_in_list(str)))) {
+		    (shnam != NULL && is_in_list(shnam)))) {
 			EI->stripped |= E_DBGINF;
 		}
 	}
-	free(section_name);
+	free(strtab);
 
 	return (ELF_READ_OKAY);
 }

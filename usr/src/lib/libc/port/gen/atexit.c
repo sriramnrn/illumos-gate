@@ -22,6 +22,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2016 Joyent, Inc.
  */
 
 /*	Copyright (c) 1988 AT&T	*/
@@ -52,7 +54,7 @@
  * See "thr_uberdata.h" for the definitions of structures used here.
  */
 
-static int in_range(_exithdlr_func_t, Lc_addr_range_t[], uint_t count);
+static int in_range(void *, Lc_addr_range_t[], uint_t count);
 
 extern	caddr_t	_getfp(void);
 
@@ -80,20 +82,23 @@ void
 atexit_locks()
 {
 	(void) mutex_lock(&__uberdata.atexit_root.exitfns_lock);
+	(void) mutex_lock(&__uberdata.quickexit_root.exitfns_lock);
 }
 
 void
 atexit_unlocks()
 {
+	(void) mutex_unlock(&__uberdata.quickexit_root.exitfns_lock);
 	(void) mutex_unlock(&__uberdata.atexit_root.exitfns_lock);
 }
 
+
 /*
- * atexit() is called before the primordial thread is fully set up.
+ * This is called via atexit() before the primordial thread is fully set up.
  * Be careful about dereferencing self->ul_uberdata->atexit_root.
  */
 int
-atexit(void (*func)(void))
+__cxa_atexit(void (*hdlr)(void *), void *arg, void *dso)
 {
 	ulwp_t *self;
 	atexit_root_t *arp;
@@ -108,34 +113,69 @@ atexit(void (*func)(void))
 		arp = &self->ul_uberdata->atexit_root;
 		(void) mutex_lock(&arp->exitfns_lock);
 	}
-	p->hdlr = func;
+	p->hdlr = hdlr;
+	p->arg = arg;
+	p->dso = dso;
 	p->next = arp->head;
 	arp->head = p;
+
 	if (self != NULL)
 		(void) mutex_unlock(&arp->exitfns_lock);
 	return (0);
+}
+
+int
+atexit(void (*func)(void))
+{
+	return (__cxa_atexit((_exithdlr_func_t)func, NULL, NULL));
+}
+
+/*
+ * Note that we may be entered recursively, as we'll call __cxa_finalize(0) at
+ * exit, one of our handlers is ld.so.1`atexit_fini, and libraries may call
+ * __cxa_finalize(__dso_handle) from their _fini.
+ */
+void
+__cxa_finalize(void *dso)
+{
+	atexit_root_t *arp = &curthread->ul_uberdata->atexit_root;
+	_exthdlr_t *p, *o;
+	int cancel_state;
+
+	/* disable cancellation while running atexit handlers */
+	(void) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
+	(void) mutex_lock(&arp->exitfns_lock);
+
+	o = NULL;
+	p = arp->head;
+	while (p != NULL) {
+		if ((dso == NULL) || (p->dso == dso)) {
+			if (o != NULL)
+				o->next = p->next;
+			else
+				arp->head = p->next;
+
+			p->hdlr(p->arg);
+			lfree(p, sizeof (_exthdlr_t));
+			o = NULL;
+			p = arp->head;
+		} else {
+			o = p;
+			p = p->next;
+		}
+	}
+
+	(void) mutex_unlock(&arp->exitfns_lock);
+	(void) pthread_setcancelstate(cancel_state, NULL);
 }
 
 void
 _exithandle(void)
 {
 	atexit_root_t *arp = &curthread->ul_uberdata->atexit_root;
-	_exthdlr_t *p;
-	int cancel_state;
 
-	/* disable cancellation while running atexit handlers */
-	(void) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
-	(void) mutex_lock(&arp->exitfns_lock);
 	arp->exit_frame_monitor = _getfp() + STACK_BIAS;
-	p = arp->head;
-	while (p != NULL) {
-		arp->head = p->next;
-		p->hdlr();
-		lfree(p, sizeof (_exthdlr_t));
-		p = arp->head;
-	}
-	(void) mutex_unlock(&arp->exitfns_lock);
-	(void) pthread_setcancelstate(cancel_state, NULL);
+	__cxa_finalize(NULL);
 }
 
 /*
@@ -169,7 +209,7 @@ _preexec_sig_unload(Lc_addr_range_t range[], uint_t count)
 again:
 		handler = sap->sa_handler;
 		if (handler != SIG_DFL && handler != SIG_IGN &&
-		    in_range(handler, range, count)) {
+		    in_range((void *)handler, range, count)) {
 			rwlp = &udp->siguaction[sig].sig_lock;
 			lrw_wrlock(rwlp);
 			if (handler != sap->sa_handler) {
@@ -213,11 +253,11 @@ _preexec_atfork_unload(Lc_addr_range_t range[], uint_t count)
 			start_again = 0;
 
 			if (((func = atfp->prepare) != NULL &&
-			    in_range(func, range, count)) ||
+			    in_range((void *)func, range, count)) ||
 			    ((func = atfp->parent) != NULL &&
-			    in_range(func, range, count)) ||
+			    in_range((void *)func, range, count)) ||
 			    ((func = atfp->child) != NULL &&
-			    in_range(func, range, count))) {
+			    in_range((void *)func, range, count))) {
 				if (self->ul_fork) {
 					/*
 					 * dlclose() called from a fork handler.
@@ -268,7 +308,7 @@ _preexec_tsd_unload(Lc_addr_range_t range[], uint_t count)
 	for (key = 1; key < tsdm->tsdm_nused; key++) {
 		if ((func = tsdm->tsdm_destro[key]) != NULL &&
 		    func != TSD_UNALLOCATED &&
-		    in_range((_exithdlr_func_t)func, range, count))
+		    in_range((void *)func, range, count))
 			tsdm->tsdm_destro[key] = NULL;
 	}
 	lmutex_unlock(&tsdm->tsdm_lock);
@@ -296,13 +336,24 @@ _preexec_exit_handlers(Lc_addr_range_t range[], uint_t count)
 	o = NULL;
 	p = arp->head;
 	while (p != NULL) {
-		if (in_range(p->hdlr, range, count)) {
+		/*
+		 * We call even CXA handlers of functions present in the
+		 * library being unloaded.  The specification isn't
+		 * particularly clear on this, and this seems the most sane.
+		 * This is the behaviour of FreeBSD 9.1 (GNU libc leaves the
+		 * handler on the exit list, and crashes at exit time).
+		 *
+		 * This won't cause handlers to be called twice, because
+		 * anything called from a __cxa_finalize call from the
+		 * language runtime will have been removed from the list.
+		 */
+		if (in_range((void *)p->hdlr, range, count)) {
 			/* We need to execute this one */
 			if (o != NULL)
 				o->next = p->next;
 			else
 				arp->head = p->next;
-			p->hdlr();
+			p->hdlr(p->arg);
 			lfree(p, sizeof (_exthdlr_t));
 			o = NULL;
 			p = arp->head;
@@ -322,16 +373,65 @@ _preexec_exit_handlers(Lc_addr_range_t range[], uint_t count)
 }
 
 static int
-in_range(_exithdlr_func_t addr, Lc_addr_range_t ranges[], uint_t count)
+in_range(void *addr, Lc_addr_range_t ranges[], uint_t count)
 {
 	uint_t idx;
 
 	for (idx = 0; idx < count; idx++) {
-		if ((void *)addr >= ranges[idx].lb &&
-		    (void *)addr < ranges[idx].ub) {
+		if (addr >= ranges[idx].lb &&
+		    addr < ranges[idx].ub) {
 			return (1);
 		}
 	}
 
 	return (0);
+}
+
+int
+at_quick_exit(void (*func)(void))
+{
+	ulwp_t *self;
+	quickexit_root_t *arp;
+	_qexthdlr_t *p;
+
+	if ((p = lmalloc(sizeof (_qexthdlr_t))) == NULL)
+		return (-1);
+
+	if ((self = __curthread()) == NULL) {
+		arp = &__uberdata.quickexit_root;
+	} else {
+		arp = &self->ul_uberdata->quickexit_root;
+		(void) mutex_lock(&arp->exitfns_lock);
+	}
+	p->hdlr = func;
+	p->next = arp->head;
+	arp->head = p;
+
+	if (self != NULL)
+		(void) mutex_unlock(&arp->exitfns_lock);
+	return (0);
+
+}
+
+void
+quick_exit(int status)
+{
+	quickexit_root_t *qrp = &curthread->ul_uberdata->quickexit_root;
+	_qexthdlr_t *p;
+	int cancel_state;
+
+	(void) pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &cancel_state);
+	(void) mutex_lock(&qrp->exitfns_lock);
+
+	p = qrp->head;
+	while (p != NULL) {
+		qrp->head = p->next;
+		p->hdlr();
+		lfree(p, sizeof (_qexthdlr_t));
+		p = qrp->head;
+	}
+
+	(void) mutex_unlock(&qrp->exitfns_lock);
+	(void) pthread_setcancelstate(cancel_state, NULL);
+	_Exit(status);
 }

@@ -21,6 +21,7 @@
 #
 # uts/intel/config/Makefile
 # Copyright 2010 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -114,16 +115,17 @@ $(BOOTDEVICEDB)/%: $(BOOTDEVICEDB) $(SRCDIR)/%
 	$(INS.file)
 
 $(SRCDIR)/priv_names: $(PRIVS_DEF) $(PRIVS_AWK)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pnamesfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) -v pnamesfile=$@
 
-clean clobber lint:
+clean lint:
+clobber: clobber.targ
 
 # 
 #	No lints, so keep the clobber and clean targets reasonable. 
 # 
 CLEANLINTFILES	= Nothing_to_remove
 CLEANFILES	= Nothing_to_remove
-CLOBBERFILES	= Nothing_to_remove
+CLOBBERFILES	= $(SRCDIR)/priv_names
 
 #
 #	Include common targets.

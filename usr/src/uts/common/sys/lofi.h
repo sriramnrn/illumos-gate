@@ -20,8 +20,11 @@
  */
 /*
  * Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+ *
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2016 Andrey Sokolov
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  */
-
 
 #ifndef	_SYS_LOFI_H
 #define	_SYS_LOFI_H
@@ -29,12 +32,15 @@
 #include <sys/types.h>
 #include <sys/time.h>
 #include <sys/taskq.h>
-#include <sys/vtoc.h>
 #include <sys/dkio.h>
 #include <sys/vnode.h>
 #include <sys/list.h>
 #include <sys/crypto/api.h>
 #include <sys/zone.h>
+#ifdef _KERNEL
+#include <sys/cmlb.h>
+#include <sys/open.h>
+#endif	/* _KERNEL */
 
 #ifdef	__cplusplus
 extern "C" {
@@ -49,6 +55,8 @@ extern "C" {
 #define	LOFI_DRIVER_NAME	"lofi"
 #define	LOFI_CTL_NODE		"ctl"
 #define	LOFI_CTL_NAME		LOFI_DRIVER_NAME LOFI_CTL_NODE
+#define	LOFI_BLOCK_NODE		"disk"
+#define	LOFI_CHAR_NODE		LOFI_BLOCK_NODE ",raw"
 #define	LOFI_BLOCK_NAME		LOFI_DRIVER_NAME
 #define	LOFI_CHAR_NAME		"r" LOFI_DRIVER_NAME
 
@@ -56,6 +64,20 @@ extern "C" {
 #define	COMPRESSED	1
 #define	UNCOMPRESSED	0
 #define	MAXALGLEN	36
+
+#define	LOFI_CMLB_SHIFT		CMLBUNIT_FORCE_P0_SHIFT
+#define	LOFI_PART_MASK		((1 << LOFI_CMLB_SHIFT) - 1)
+#define	LOFI_PART_MAX		(1 << LOFI_CMLB_SHIFT)
+#define	LOFI_PART(x)		((x) & LOFI_PART_MASK)
+
+/*
+ * The cmlb is using its own range of minor numbers for partitions, for
+ * unlabeled lofi devices, we need to use another range.
+ */
+/* unlabeled lofi device id to minor number. */
+#define	LOFI_ID2MINOR(x)	((x) << LOFI_CMLB_SHIFT)
+/* lofi id from minor number. */
+#define	LOFI_MINOR2ID(x)	((x) >> LOFI_CMLB_SHIFT)
 
 /*
  *
@@ -125,10 +147,13 @@ typedef enum	iv_method {
 } iv_method_t;
 
 struct lofi_ioctl {
-	uint32_t 	li_minor;
+	uint32_t	li_id;			/* lofi ID */
 	boolean_t	li_force;
 	boolean_t	li_cleanup;
+	boolean_t	li_readonly;
+	boolean_t	li_labeled;
 	char	li_filename[MAXPATHLEN];
+	char	li_devpath[MAXPATHLEN];
 
 	/* the following fields are required for compression support */
 	char	li_algorithm[MAXALGLEN];
@@ -160,6 +185,17 @@ struct lofi_ioctl {
  */
 #define	S_ISLOFIABLE(mode) \
 	(S_ISREG(mode) || S_ISBLK(mode) || S_ISCHR(mode))
+
+/*
+ * The basis for CRYOFF is derived from usr/src/uts/common/sys/fs/ufs_fs.h.
+ * Crypto metadata, if it exists, is located at the end of the boot block
+ * (BBOFF + BBSIZE, which is SBOFF).  The super block and everything after
+ * is offset by the size of the crypto metadata which is handled by
+ * lsp->ls_crypto_offset.
+ */
+#define	CRYOFF	((off_t)8192)
+
+#define	LOFI_CRYPTO_MAGIC	{ 'C', 'F', 'L', 'O', 'F', 'I' }
 
 #if defined(_KERNEL)
 
@@ -193,7 +229,6 @@ struct compbuf {
  * Need exactly 6 bytes to identify encrypted lofi image
  */
 extern const char lofi_crypto_magic[6];
-#define	LOFI_CRYPTO_MAGIC	{ 'C', 'F', 'L', 'O', 'F', 'I' }
 #define	LOFI_CRYPTO_VERSION	((uint16_t)0)
 #define	LOFI_CRYPTO_DATA_SECTOR	((uint32_t)16)		/* for version 0 */
 
@@ -217,21 +252,26 @@ struct lofi_state {
 	kcondvar_t	ls_vp_cv;	/* signal changes to ls_vp */
 	uint32_t	ls_vp_iocount;	/* # pending I/O requests */
 	boolean_t	ls_vp_closereq;	/* force close requested */
+	boolean_t	ls_vp_ready;	/* is vp ready for use? */
 	u_offset_t	ls_vp_size;
-	uint32_t	ls_blk_open;
-	uint32_t	ls_chr_open;
-	uint32_t	ls_lyr_open_count;
+	uint32_t	ls_open_lyr[LOFI_PART_MAX];	/* open count */
+	uint64_t	ls_open_reg[OTYPCNT];		/* bitmask */
+	uint64_t	ls_open_excl;			/* bitmask */
 	int		ls_openflag;
 	boolean_t	ls_cleanup;	/* cleanup on close */
+	boolean_t	ls_readonly;
 	taskq_t		*ls_taskq;
 	kstat_t		*ls_kstat;
 	kmutex_t	ls_kstat_lock;
 	struct dk_geom	ls_dkg;
-	struct vtoc	ls_vtoc;
-	struct dk_cinfo	ls_ci;
 	zone_ref_t	ls_zone;
 	list_node_t	ls_list;	/* all lofis */
+	dev_info_t	*ls_dip;
 	dev_t		ls_dev;		/* this node's dev_t */
+
+	cmlb_handle_t	ls_cmlbhandle;
+	uint32_t	ls_lbshift;	/* logical block shift */
+	uint32_t	ls_pbshift;	/* physical block shift */
 
 	/* the following fields are required for compression support */
 	int		ls_comp_algorithm_index; /* idx into compress_table */
@@ -266,7 +306,6 @@ struct lofi_state {
 	iv_method_t		ls_iv_type;	/* for iv derivation */
 	kmutex_t		ls_crypto_lock;
 	crypto_ctx_template_t	ls_ctx_tmpl;
-
 };
 
 #endif	/* _KERNEL */

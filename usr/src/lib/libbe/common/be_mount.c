@@ -21,9 +21,9 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-/*
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 EveryCity Ltd.
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -31,6 +31,7 @@
  */
 #include <assert.h>
 #include <errno.h>
+#include <libgen.h>
 #include <libintl.h>
 #include <libnvpair.h>
 #include <libzfs.h>
@@ -191,7 +192,6 @@ be_unmount(nvlist_t *be_attrs)
 	if (be_name[0] == '/') {
 		if ((ds = be_get_ds_from_dir(be_name)) != NULL) {
 			if ((be_name_mnt = strrchr(ds, '/')) != NULL) {
-				free(be_name);
 				be_name = be_name_mnt + 1;
 			}
 		} else {
@@ -326,14 +326,29 @@ _be_mount(char *be_name, char **altroot, int flags)
 		tmp_altroot = *altroot;
 	}
 
+	md.altroot = tmp_altroot;
+	md.shared_fs = flags & BE_MOUNT_FLAG_SHARED_FS;
+	md.shared_rw = flags & BE_MOUNT_FLAG_SHARED_RW;
+
 	/* Mount the BE's root file system */
-	if ((ret = be_mount_root(zhp, tmp_altroot)) != BE_SUCCESS) {
-		be_print_err(gettext("be_mount: failed to "
-		    "mount BE root file system\n"));
-		if (gen_tmp_altroot)
-			free(tmp_altroot);
-		ZFS_CLOSE(zhp);
-		return (ret);
+	if (getzoneid() == GLOBAL_ZONEID) {
+		if ((ret = be_mount_root(zhp, tmp_altroot)) != BE_SUCCESS) {
+			be_print_err(gettext("be_mount: failed to "
+			    "mount BE root file system\n"));
+			if (gen_tmp_altroot)
+				free(tmp_altroot);
+			ZFS_CLOSE(zhp);
+			return (ret);
+		}
+	} else {
+		/* Legacy mount the zone root dataset */
+		if ((ret = be_mount_zone_root(zhp, &md)) != BE_SUCCESS) {
+			be_print_err(gettext("be_mount: failed to "
+			    "mount BE zone root file system\n"));
+			free(md.altroot);
+			ZFS_CLOSE(zhp);
+			return (ret);
+		}
 	}
 
 	/* Iterate through BE's children filesystems */
@@ -346,10 +361,6 @@ _be_mount(char *be_name, char **altroot, int flags)
 		ZFS_CLOSE(zhp);
 		return (err);
 	}
-
-	md.altroot = tmp_altroot;
-	md.shared_fs = flags & BE_MOUNT_FLAG_SHARED_FS;
-	md.shared_rw = flags & BE_MOUNT_FLAG_SHARED_RW;
 
 	/*
 	 * Mount shared file systems if mount flag says so.
@@ -370,12 +381,8 @@ _be_mount(char *be_name, char **altroot, int flags)
 	if (getzoneid() == GLOBAL_ZONEID &&
 	    !(flags & BE_MOUNT_FLAG_NO_ZONES) &&
 	    be_get_uuid(bt.obe_root_ds, &uu) == BE_SUCCESS) {
-		if ((ret = be_mount_zones(zhp, &md)) != BE_SUCCESS) {
-			(void) _be_unmount(bt.obe_name, 0);
-			if (gen_tmp_altroot)
-				free(tmp_altroot);
-			ZFS_CLOSE(zhp);
-			return (ret);
+		if (be_mount_zones(zhp, &md) != BE_SUCCESS) {
+			ret = BE_ERR_NO_MOUNTED_ZONE;
 		}
 	}
 
@@ -385,10 +392,14 @@ _be_mount(char *be_name, char **altroot, int flags)
 	 * If a NULL altroot was passed in, pass the generated altroot
 	 * back to the caller in altroot.
 	 */
-	if (gen_tmp_altroot)
-		*altroot = tmp_altroot;
+	if (gen_tmp_altroot) {
+		if (ret == BE_SUCCESS || ret == BE_ERR_NO_MOUNTED_ZONE)
+			*altroot = tmp_altroot;
+		else
+			free(tmp_altroot);
+	}
 
-	return (BE_SUCCESS);
+	return (ret);
 }
 
 /*
@@ -528,9 +539,16 @@ _be_unmount(char *be_name, int flags)
 	}
 
 	/* Unmount this BE's root filesystem */
-	if ((ret = be_unmount_root(zhp, &ud)) != BE_SUCCESS) {
-		ZFS_CLOSE(zhp);
-		return (ret);
+	if (getzoneid() == GLOBAL_ZONEID) {
+		if ((ret = be_unmount_root(zhp, &ud)) != BE_SUCCESS) {
+			ZFS_CLOSE(zhp);
+			return (ret);
+		}
+	} else {
+		if ((ret = be_unmount_zone_root(zhp, &ud)) != BE_SUCCESS) {
+			ZFS_CLOSE(zhp);
+			return (ret);
+		}
 	}
 
 	ZFS_CLOSE(zhp);
@@ -553,6 +571,7 @@ _be_unmount(char *be_name, int flags)
 int
 be_mount_zone_root(zfs_handle_t *zhp, be_mount_data_t *md)
 {
+	struct stat buf;
 	char	mountpoint[MAXPATHLEN];
 	int	err = 0;
 
@@ -574,6 +593,16 @@ be_mount_zone_root(zfs_handle_t *zhp, be_mount_data_t *md)
 		be_print_err(gettext("be_mount_zone_root: "
 		    "zone root dataset mountpoint is not 'legacy'\n"));
 		return (BE_ERR_ZONE_ROOT_NOT_LEGACY);
+	}
+
+	/* Create the mountpoint if it doesn't exist */
+	if (lstat(md->altroot, &buf) != 0) {
+		if (mkdirp(md->altroot, 0755) != 0) {
+			err = errno;
+			be_print_err(gettext("be_mount_zone_root: failed "
+			    "to create mountpoint %s\n"), md->altroot);
+			return (errno_to_be_err(err));
+		}
 	}
 
 	/*
@@ -1117,7 +1146,7 @@ be_mount_callback(zfs_handle_t *zhp, void *data)
 {
 	zprop_source_t	sourcetype;
 	const char	*fs_name = zfs_get_name(zhp);
-	char		source[ZFS_MAXNAMELEN];
+	char		source[ZFS_MAX_DATASET_NAME_LEN];
 	char		*altroot = data;
 	char		zhp_mountpoint[MAXPATHLEN];
 	char		mountpoint[MAXPATHLEN];
@@ -1267,7 +1296,7 @@ be_unmount_callback(zfs_handle_t *zhp, void *data)
 	be_unmount_data_t	*ud = data;
 	zprop_source_t	sourcetype;
 	const char	*fs_name = zfs_get_name(zhp);
-	char		source[ZFS_MAXNAMELEN];
+	char		source[ZFS_MAX_DATASET_NAME_LEN];
 	char		mountpoint[MAXPATHLEN];
 	char		*zhp_mountpoint;
 	int		ret = 0;
@@ -1682,10 +1711,7 @@ loopback_mount_shared_fs(zfs_handle_t *zhp, be_mount_data_t *md)
 /*
  * Function:	loopback_mount_zonepath
  * Description:	This function loopback mounts a zonepath into the altroot
- *		area of the BE being mounted.  Since these are shared file
- *		systems, they are expected to be already mounted for the
- *		current BE, and this function just loopback mounts them into
- *		the BE mountpoint.
+ *		area of the BE being mounted.
  * Parameters:
  *		zonepath - pointer to zone path in the current BE
  *		md - be_mount_data_t pointer
@@ -2009,7 +2035,7 @@ static int
 fix_mountpoint_callback(zfs_handle_t *zhp, void *data)
 {
 	zprop_source_t	sourcetype;
-	char		source[ZFS_MAXNAMELEN];
+	char		source[ZFS_MAX_DATASET_NAME_LEN];
 	char		mountpoint[MAXPATHLEN];
 	char		*zhp_mountpoint = NULL;
 	char		*altroot = data;

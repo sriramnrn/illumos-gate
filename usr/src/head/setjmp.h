@@ -22,16 +22,15 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved  	*/
 
-
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 #ifndef _SETJMP_H
 #define	_SETJMP_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"	/* SVr4.0 1.9.2.9 */
 
 #include <iso/setjmp_iso.h>
 
@@ -48,8 +47,6 @@ using std::longjmp;
 extern "C" {
 #endif
 
-#if defined(__STDC__)
-
 #if !defined(_STRICT_STDC) || defined(__XOPEN_OR_POSIX) || \
 	defined(__EXTENSIONS__)
 /* non-ANSI standard compilation */
@@ -60,24 +57,10 @@ typedef long sigjmp_buf[_SIGJBLEN];
 typedef int sigjmp_buf[_SIGJBLEN];
 #endif
 
-extern int sigsetjmp(sigjmp_buf, int);
+extern int sigsetjmp(sigjmp_buf, int) __RETURNS_TWICE;
 #pragma unknown_control_flow(sigsetjmp)
 extern void siglongjmp(sigjmp_buf, int) __NORETURN;
 #endif
-
-#else /* __STDC__ */
-
-#if defined(_LP64) || defined(_I32LPx)
-typedef long sigjmp_buf[_SIGJBLEN];
-#else
-typedef int sigjmp_buf[_SIGJBLEN];
-#endif
-
-extern int sigsetjmp();
-#pragma unknown_control_flow(sigsetjmp)
-extern void siglongjmp();
-
-#endif  /* __STDC__ */
 
 #ifdef	__cplusplus
 }

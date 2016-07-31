@@ -497,7 +497,7 @@ contract_abandon(contract_t *ct, proc_t *p, int explicit)
 	contract_t *parent = &p->p_ct_process->conp_contract;
 	int inherit = 0;
 
-	ASSERT(p == curproc);
+	VERIFY(p == curproc);
 
 	mutex_enter(&ct->ct_lock);
 
@@ -547,7 +547,7 @@ contract_abandon(contract_t *ct, proc_t *p, int explicit)
 
 	if (inherit) {
 		ct->ct_state = CTS_INHERITED;
-		ASSERT(ct->ct_regent == parent);
+		VERIFY(ct->ct_regent == parent);
 		contract_process_take(parent, ct);
 
 		/*
@@ -1837,10 +1837,8 @@ cte_rele(ct_kevent_t *e)
 	contract_rele(e->cte_contract);
 
 	mutex_destroy(&e->cte_lock);
-	if (e->cte_data)
-		nvlist_free(e->cte_data);
-	if (e->cte_gdata)
-		nvlist_free(e->cte_gdata);
+	nvlist_free(e->cte_data);
+	nvlist_free(e->cte_gdata);
 	kmem_free(e, sizeof (ct_kevent_t));
 }
 
@@ -2063,8 +2061,8 @@ cte_copy(ct_equeue_t *q, ct_equeue_t *newq)
 {
 	ct_kevent_t *e, *first = NULL;
 
-	ASSERT(q->ctq_listno == CTEL_CONTRACT);
-	ASSERT(newq->ctq_listno == CTEL_PBUNDLE);
+	VERIFY(q->ctq_listno == CTEL_CONTRACT);
+	VERIFY(newq->ctq_listno == CTEL_PBUNDLE);
 
 	mutex_enter(&q->ctq_lock);
 	mutex_enter(&newq->ctq_lock);
@@ -2077,8 +2075,16 @@ cte_copy(ct_equeue_t *q, ct_equeue_t *newq)
 		if ((e->cte_flags & (CTE_INFO | CTE_ACK)) == 0) {
 			if (first == NULL)
 				first = e;
-			list_insert_tail(&newq->ctq_events, e);
-			cte_hold(e);
+			/*
+			 * It is possible for adoption to race with an owner's
+			 * cte_publish_all(); we must only enqueue events that
+			 * have not already been enqueued.
+			 */
+			if (!list_link_active((list_node_t *)
+			    ((uintptr_t)e + newq->ctq_events.list_offset))) {
+				list_insert_tail(&newq->ctq_events, e);
+				cte_hold(e);
+			}
 		}
 	}
 
@@ -2117,7 +2123,7 @@ cte_trim(ct_equeue_t *q, contract_t *ct)
 	int flags, stopper;
 	int start = 1;
 
-	ASSERT(MUTEX_HELD(&q->ctq_lock));
+	VERIFY(MUTEX_HELD(&q->ctq_lock));
 
 	for (e = list_head(&q->ctq_events); e != NULL; e = next) {
 		next = list_next(&q->ctq_events, e);
@@ -2227,11 +2233,22 @@ cte_queue_drain(ct_equeue_t *q, int ack)
  * cte_publish_all.
  */
 static void
-cte_publish(ct_equeue_t *q, ct_kevent_t *e, timespec_t *tsp)
+cte_publish(ct_equeue_t *q, ct_kevent_t *e, timespec_t *tsp, boolean_t mayexist)
 {
 	ASSERT(MUTEX_HELD(&q->ctq_lock));
 
 	q->ctq_atime = *tsp;
+
+	/*
+	 * If this event may already exist on this queue, check to see if it
+	 * is already there and return if so.
+	 */
+	if (mayexist && list_link_active((list_node_t *)((uintptr_t)e +
+	    q->ctq_events.list_offset))) {
+		mutex_exit(&q->ctq_lock);
+		cte_rele(e);
+		return;
+	}
 
 	/*
 	 * Don't publish if the event is informative and there aren't
@@ -2247,6 +2264,8 @@ cte_publish(ct_equeue_t *q, ct_kevent_t *e, timespec_t *tsp)
 	/*
 	 * Enqueue event
 	 */
+	VERIFY(!list_link_active((list_node_t *)
+	    ((uintptr_t)e + q->ctq_events.list_offset)));
 	list_insert_tail(&q->ctq_events, e);
 
 	/*
@@ -2281,7 +2300,7 @@ cte_publish_all(contract_t *ct, ct_kevent_t *e, nvlist_t *data, nvlist_t *gdata)
 	e->cte_data = data;
 	e->cte_gdata = gdata;
 	e->cte_refs = 3;
-	evid = e->cte_id = atomic_add_64_nv(&ct->ct_type->ct_type_evid, 1);
+	evid = e->cte_id = atomic_inc_64_nv(&ct->ct_type->ct_type_evid);
 	contract_hold(ct);
 
 	/*
@@ -2318,14 +2337,14 @@ cte_publish_all(contract_t *ct, ct_kevent_t *e, nvlist_t *data, nvlist_t *gdata)
 			ct->ct_evcnt++;
 	}
 	mutex_exit(&ct->ct_lock);
-	cte_publish(&ct->ct_events, e, &ts);
+	cte_publish(&ct->ct_events, e, &ts, B_FALSE);
 
 	/*
 	 * CTEL_BUNDLE - Next deliver to the contract type's bundle
 	 * queue.
 	 */
 	mutex_enter(&ct->ct_type->ct_type_events.ctq_lock);
-	cte_publish(&ct->ct_type->ct_type_events, e, &ts);
+	cte_publish(&ct->ct_type->ct_type_events, e, &ts, B_FALSE);
 
 	/*
 	 * CTEL_PBUNDLE - Finally, if the contract has an owner,
@@ -2342,7 +2361,14 @@ cte_publish_all(contract_t *ct, ct_kevent_t *e, nvlist_t *data, nvlist_t *gdata)
 		q = ct->ct_owner->p_ct_equeue[ct->ct_type->ct_type_index];
 		mutex_enter(&q->ctq_lock);
 		mutex_exit(&ct->ct_lock);
-		cte_publish(q, e, &ts);
+
+		/*
+		 * It is possible for this code to race with adoption; we
+		 * publish the event indicating that the event may already
+		 * be enqueued because adoption beat us to it (in which case
+		 * cte_pubish() does nothing).
+		 */
+		cte_publish(q, e, &ts, B_TRUE);
 	} else {
 		mutex_exit(&ct->ct_lock);
 		cte_rele(e);

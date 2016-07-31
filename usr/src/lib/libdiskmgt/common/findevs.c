@@ -22,6 +22,7 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <fcntl.h>
@@ -997,6 +998,7 @@ create_disk(char *deviceid, char *kernel_name, struct search_args *args)
 
 	diskp->cd_rom = 0;
 	diskp->rpm = 0;
+	diskp->solid_state = -1;
 	type = di_minor_nodetype(args->minor);
 
 	prod_id = get_str_prop(PROD_ID_PROP, args->node);
@@ -1022,7 +1024,7 @@ create_disk(char *deviceid, char *kernel_name, struct search_args *args)
 			return (NULL);
 		}
 	} else {
-		vendor_id = get_str_prop(VENDOR_ID_PROP, args->node);
+		vendor_id = get_str_prop(VENDOR_ID_USB_PROP, args->node);
 		if (vendor_id != NULL) {
 			if ((diskp->vendor_id = strdup(vendor_id)) == NULL) {
 				cache_free_disk(diskp);

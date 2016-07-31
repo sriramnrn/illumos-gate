@@ -20,10 +20,11 @@
  */
 /*
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/sunddi.h>
-#ifndef _KERNEL
+#if !defined(_KERNEL) && !defined(_FAKE_KERNEL)
 #include <string.h>
 #include <strings.h>
 #include <stddef.h>
@@ -96,7 +97,8 @@ smb_doorhdr_opname(uint32_t op)
 		{ SMB_DR_QUOTA_SET,		"quota_set" },
 		{ SMB_DR_DFS_GET_REFERRALS,	"dfs_get_referrals" },
 		{ SMB_DR_SHR_HOSTACCESS,	"share_hostaccess" },
-		{ SMB_DR_SHR_EXEC,		"share_exec" }
+		{ SMB_DR_SHR_EXEC,		"share_exec" },
+		{ SMB_DR_NOTIFY_DC_CHANGED,	"notify_dc_changed" }
 	};
 	int	i;
 
@@ -447,6 +449,9 @@ smb_gmttoken_snapname_xdr(XDR *xdrs, smb_gmttoken_snapname_t *objp)
 	if (!xdr_string(xdrs, &objp->gts_gmttoken, SMB_VSS_GMT_SIZE)) {
 		return (FALSE);
 	}
+	if (!xdr_uint64_t(xdrs, &objp->gts_toktime)) {
+		return (FALSE);
+	}
 	return (TRUE);
 }
 
@@ -733,4 +738,27 @@ smb_shr_execinfo_xdr(XDR *xdrs, smb_shr_execinfo_t *objp)
 		return (FALSE);
 
 	return (TRUE);
+}
+
+/*
+ * The smbsrv ioctl callers include a CRC of the XDR encoded data,
+ * and kmod ioctl handler checks it.  Both use this function.  This
+ * is not really XDR related, but this is as good a place as any.
+ */
+#define	SMB_CRC_POLYNOMIAL	0xD8B5D8B5
+uint32_t
+smb_crc_gen(uint8_t *buf, size_t len)
+{
+	uint32_t crc = SMB_CRC_POLYNOMIAL;
+	uint8_t *p;
+	int i;
+
+	for (p = buf, i = 0; i < len; ++i, ++p) {
+		crc = (crc ^ (uint32_t)*p) + (crc << 12);
+
+		if (crc == 0 || crc == 0xFFFFFFFF)
+			crc = SMB_CRC_POLYNOMIAL;
+	}
+
+	return (crc);
 }

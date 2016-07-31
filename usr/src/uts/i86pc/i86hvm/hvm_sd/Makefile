@@ -38,7 +38,7 @@ UTSBASE	= ../../..
 #	Define the module and object file sets.
 #
 # Normally when compiling sd there are .conf file definitions and
-# definitions for warlock, but we don't both with those here.
+# definitions for warlock, but we don't bother with those here.
 #
 MODULE		= hvm_sd
 OBJECTS		= $(HVM_SD_OBJS:%=$(OBJS_DIR)/%)
@@ -70,6 +70,17 @@ LINTTAGS	+= -erroff=E_STATIC_UNUSED
 LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
 LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 
+CERRWARN	+= -_gcc=-Wno-unused-function
+CERRWARN	+= -_gcc=-Wno-unused-label
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-type-limits
+CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= -_gcc=-Wno-unused-value
+
+#
+#	Depends on scsi and cmlb
+#
+LDFLAGS		+= -dy -N misc/scsi -N misc/cmlb
 
 #
 #	Default build targets.

@@ -98,6 +98,7 @@ UNIX_DIR	= .
 CLEANFILES	+=		\
 	$(UNIX_O) $(MODSTUBS_O)	\
 	$(OBJS_DIR)/vers.c $(OBJS_DIR)/vers.o \
+	$(OBJS_DIR)/dtracestubs.s \
 	$(DTRACESTUBS_O) $(DTRACESTUBS)
 
 CLEANFILES	+=		\
@@ -112,6 +113,10 @@ CLEANFILES	+=		\
 	$(OBJS_DIR)/fb_swtch_src.o \
 	$(OBJS_DIR)/fb_swtch_src \
 	$(OBJS_DIR)/fb_swtch.s
+
+CLEANFILES	+= \
+	$(ZLIB_OBJS:%.o=$(OBJS_DIR)/%.o) \
+	$(ZLIB_OBJS:%.o=$(OBJS_DIR)/%.ln)
 
 CLOBBERFILES	= $(CLEANFILES) $(UNIX_BIN) $(MULTIBOOT)
 CLEANLINTFILES	+= $(LINT_LIB) $(DBOOT_LINT_LIB) $(DBOOT_LINTS)
@@ -133,6 +138,17 @@ LINTTAGS	+= -erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
 LINTTAGS	+= -erroff=E_STATIC_UNUSED
 LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
 LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
+
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= -_gcc=-Wno-char-subscripts
+CERRWARN	+= -_gcc=-Wno-unused-variable
+CERRWARN	+= -_gcc=-Wno-unused-function
+CERRWARN	+= -_gcc=-Wno-unused-label
+CERRWARN	+= -_gcc=-Wno-type-limits
+CERRWARN	+= -_gcc=-Wno-clobbered
+CERRWARN	+= -_gcc=-Wno-empty-body
+CERRWARN	+= -_gcc=-Wno-unused-value
 
 # Ensure that lint sees 'struct cpu' containing a fully declared
 # embedded 'struct machcpu'

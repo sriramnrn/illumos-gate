@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Gary Mills
  */
 
 /*
@@ -309,6 +311,7 @@ static mode_t		flags;
 static int		err = 0;	/* Contains return code */
 static int		colorflg;
 static int		file_typeflg;
+static int		noflist = 0;
 
 static uid_t		lastuid	= (uid_t)-1;
 static gid_t		lastgid = (gid_t)-1;
@@ -412,7 +415,7 @@ main(int argc, char *argv[])
 	int		option_index = 0;
 	struct lbuf	*ep;
 	struct lbuf	lb;
-	struct ditem	*myinfo;
+	struct ditem	*myinfo = NULL;
 
 	(void) setlocale(LC_ALL, "");
 #if !defined(TEXT_DOMAIN)	/* Should be defined by cc -D */
@@ -998,6 +1001,15 @@ main(int argc, char *argv[])
 #endif
 	}
 
+	/*
+	 * When certain options (-f, or -U and -1, and not -l, etc.) are
+	 * specified, don't cache each dirent as it's read.  This 'noflist'
+	 * option is set when there's no need to cache those dirents; instead,
+	 * print them out as they're read.
+	 */
+	if ((Uflg || fflg) && !Cflg && !lflg && !iflg && statreq == 0)
+		noflist = 1;
+
 	if (num_cols < 20 || num_cols > 1000)
 		/* assume it is an error */
 		num_cols = 80;
@@ -1018,6 +1030,9 @@ main(int argc, char *argv[])
 					 */
 		argv[optind] = dotp;
 	}
+
+	if (colorflg)
+		ls_color_init();
 
 	for (i = 0; i < (amino ? amino : 1); i++) {
 
@@ -1082,12 +1097,9 @@ main(int argc, char *argv[])
 		qsort(flist, (unsigned)nargs, sizeof (struct lbuf *),
 		    (int (*)(const void *, const void *))compar);
 	for (i = 0; i < nargs; i++) {
-		if (flist[i]->ltype == 'd' && dflg == 0 || fflg)
+		if ((flist[i]->ltype == 'd' && dflg == 0) || fflg)
 			break;
 	}
-
-	if (colorflg)
-		ls_color_init();
 
 	pem(&flist[0], &flist[i], 0);
 	for (; i < nargs; i++) {
@@ -1156,7 +1168,7 @@ pdirectory(char *name, int title, int lp, int cdetect, struct ditem *myinfo)
 
 	nfiles = lp;
 	rddir(name, myinfo);
-	if (nomocore)
+	if (nomocore || noflist)
 		return;
 	if (fflg == 0 && Uflg == 0)
 		qsort(&flist[lp], (unsigned)(nfiles - lp),
@@ -1199,13 +1211,11 @@ static void
 pem(struct lbuf **slp, struct lbuf **lp, int tot_flag)
 {
 	long row, nrows, i;
-	int col, ncols;
+	int col, ncols = 1;
 	struct lbuf **ep;
 
 	if (Cflg || mflg) {
-		if (colwidth > num_cols) {
-			ncols = 1;
-		} else {
+		if (colwidth <= num_cols) {
 			ncols = num_cols / colwidth;
 		}
 	}
@@ -1250,18 +1260,26 @@ pentry(struct lbuf *ap)
 	char *cp;
 	char *str;
 
+	if (noflist) {
+		(void) printf("%s\n", (ap->lflags & ISARG) ? ap->ln.namep :
+		    ap->ln.lname);
+		return;
+	}
+
 	p = ap;
 	column();
-	if (iflg)
+	if (iflg) {
 		if (mflg && !lflg)
 			curcol += printf("%llu ", (long long)p->lnum);
 		else
 			curcol += printf("%10llu ", (long long)p->lnum);
-	if (sflg)
+	}
+	if (sflg) {
 		curcol += printf((mflg && !lflg) ? "%lld " :
 		    (p->lblocks < 10000) ? "%4lld " : "%lld ",
 		    (p->ltype != 'b' && p->ltype != 'c') ?
 		    p->lblocks : 0LL);
+	}
 	if (lflg) {
 		(void) putchar(p->ltype);
 		curcol++;
@@ -1272,18 +1290,20 @@ pentry(struct lbuf *ap)
 		curcol++;
 
 		curcol += printf("%3lu ", (ulong_t)p->lnl);
-		if (oflg)
+		if (oflg) {
 			if (!nflg) {
 				cp = getname(p->luid);
 				curcol += printf("%-8s ", cp);
 			} else
 				curcol += printf("%-8lu ", (ulong_t)p->luid);
-		if (gflg)
+		}
+		if (gflg) {
 			if (!nflg) {
 				cp = getgroup(p->lgid);
 				curcol += printf("%-8s ", cp);
 			} else
 				curcol += printf("%-8lu ", (ulong_t)p->lgid);
+		}
 		if (p->ltype == 'b' || p->ltype == 'c') {
 			curcol += printf("%3u, %2u",
 			    (uint_t)major((dev_t)p->lsize),
@@ -1545,8 +1565,8 @@ rddir(char *dir, struct ditem *myinfo)
 			if (aflg == 0 && dentry->d_name[0] == '.' &&
 			    (Aflg == 0 ||
 			    dentry->d_name[1] == '\0' ||
-			    dentry->d_name[1] == '.' &&
-			    dentry->d_name[2] == '\0'))
+			    (dentry->d_name[1] == '.' &&
+			    dentry->d_name[2] == '\0')))
 				/*
 				 * check for directory items '.', '..',
 				 *  and items without valid inode-number;
@@ -1572,6 +1592,15 @@ rddir(char *dir, struct ditem *myinfo)
 				for (j = 0; dentry->d_name[j] != '\0'; j++)
 					ep->ln.lname[j] = dentry->d_name[j];
 				ep->ln.lname[j] = '\0';
+
+				/*
+				 * Since this entry doesn't need to be sorted
+				 * or further processed, print it right away.
+				 */
+				if (noflist) {
+					pem(&ep, &ep + 1, 0);
+					nfiles--;
+				}
 			}
 		}
 		if (errno) {
@@ -1784,22 +1813,22 @@ gstat(char *file, int argfl, struct ditem *myparent)
 		rep = flist[nfiles++];
 	}
 
-	/* Initialize */
+	/* Clear the lbuf */
+	(void) memset((void *) rep, 0, sizeof (struct lbuf));
 
-	rep->lflags = (mode_t)0;
-	rep->flinkto = NULL;
-	rep->cycle = 0;
+	/*
+	 * When noflist is set, none of the extra information about the dirent
+	 * will be printed, so omit remaining initialization of this lbuf
+	 * as well as the  stat(2) call.
+	 */
+	if (!argfl && noflist)
+		return (rep);
+
+	/* Initialize non-zero members */
+
 	rep->lat.tv_sec = time(NULL);
-	rep->lat.tv_nsec = 0;
 	rep->lct.tv_sec = time(NULL);
-	rep->lct.tv_nsec = 0;
 	rep->lmt.tv_sec = time(NULL);
-	rep->lmt.tv_nsec = 0;
-	rep->aclp = NULL;
-	rep->exttr = NULL;
-	rep->extm = NULL;
-	rep->color = NULL;
-	rep->link_color = NULL;
 
 	if (argfl || statreq) {
 		int doacl;

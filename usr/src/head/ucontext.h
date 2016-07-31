@@ -23,6 +23,8 @@
 
 
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ *
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -30,11 +32,20 @@
 #ifndef _UCONTEXT_H
 #define	_UCONTEXT_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/ucontext.h>
-
+/*
+ * The file sys/regset.h defines indices in the gregset_t array,
+ * such as EIP on i386.  Those defines were historically exposed
+ * via sys/ucontext.h, sys/signal.h, etc. which caused surprises
+ * due to those defines unexpectedly polluting the namespace.
+ * On the other hand, several existing applications assume that
+ * the regset names are defined after an include <ucontext.h>.
+ * To solve both problems at once: <ucontext.h> (this file)
+ * DOES include sys/regset.h for you but <sys/ucontext.h>
+ * does NOT include sys/regset.h anymore.
+ */
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
+#include <sys/regset.h>
 #include <sys/siginfo.h>
 #endif
 
@@ -50,14 +61,13 @@ extern "C" {
 #endif
 #endif
 
-#if defined(__STDC__)
-
-extern int getcontext(ucontext_t *);
+extern int getcontext(ucontext_t *) __RETURNS_TWICE;
 #pragma unknown_control_flow(getcontext)
 extern int setcontext(const ucontext_t *) __NORETURN;
 extern int swapcontext(ucontext_t *_RESTRICT_KYWD,
 		const ucontext_t *_RESTRICT_KYWD);
 extern void makecontext(ucontext_t *, void(*)(), int, ...);
+
 #if !defined(_XPG4_2) || defined(__EXTENSIONS__)
 extern int walkcontext(const ucontext_t *, int (*)(uintptr_t, int, void *),
     void *);
@@ -72,29 +82,7 @@ extern int stack_inbounds(void *);
 extern int stack_violation(int, const siginfo_t *, const ucontext_t *);
 
 extern void *_stack_grow(void *);
-#endif
-#else
-
-extern int getcontext();
-#pragma unknown_control_flow(getcontext)
-extern int setcontext();
-extern int swapcontext();
-extern void makecontext();
-#if !defined(_XPG4_2) || defined(__EXTENSIONS__)
-extern int walkcontext();
-extern int printstack();
-extern int addrtosymstr();
-extern int getustack();
-extern int setustack();
-
-extern int stack_getbounds();
-extern int stack_setbounds();
-extern int stack_inbounds();
-extern int stack_violation();
-
-extern void *_stack_grow();
-#endif
-#endif
+#endif	/* !_XPG4_2 || __EXTENSIONS__ */
 
 #ifdef	__cplusplus
 }

@@ -25,6 +25,10 @@
  */
 
 /*
+ * Copyright (c) 2015, Joyent, Inc. All rights reserved.
+ */
+
+/*
  * Dump an elf file.
  */
 #include	<stddef.h>
@@ -206,7 +210,7 @@ string(Cache *refsec, Word ndx, Cache *strsec, const char *file, Word name)
 	const char	*strs;
 	Word		strn;
 
-	if (strsec->c_data == NULL)
+	if ((strsec->c_data == NULL) || (strsec->c_data->d_buf == NULL))
 		return (NULL);
 
 	strs = (char *)strsec->c_data->d_buf;
@@ -308,15 +312,27 @@ stringtbl(Cache *cache, int symtab, Word ndx, Word shnum, const char *file,
 {
 	Shdr	*shdr = cache[ndx].c_shdr;
 
-	if (symtab) {
+	/*
+	 * If symtab is non-zero, the ndx we are called with represents a
+	 * shdr which links to a symbol table (which then links to a string
+	 * table)
+	 */
+	if (symtab != 0) {
 		/*
-		 * Validate the symbol table section.
+		 * Validate the symbol table linkage.
 		 */
 		if ((shdr->sh_link == 0) || (shdr->sh_link >= shnum)) {
 			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSHLINK),
 			    file, cache[ndx].c_name, EC_WORD(shdr->sh_link));
 			return (0);
 		}
+
+		/*
+		 * Establish the symbol table index.
+		 */
+		ndx = shdr->sh_link;
+		shdr = cache[ndx].c_shdr;
+
 		if ((shdr->sh_entsize == 0) || (shdr->sh_size == 0)) {
 			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
 			    file, cache[ndx].c_name);
@@ -334,12 +350,6 @@ stringtbl(Cache *cache, int symtab, Word ndx, Word shnum, const char *file,
 		}
 
 		/*
-		 * Establish the string table index.
-		 */
-		ndx = shdr->sh_link;
-		shdr = cache[ndx].c_shdr;
-
-		/*
 		 * Return symbol table information.
 		 */
 		if (symnum)
@@ -349,7 +359,7 @@ stringtbl(Cache *cache, int symtab, Word ndx, Word shnum, const char *file,
 	}
 
 	/*
-	 * Validate the associated string table section.
+	 * Validate the string table linkage.
 	 */
 	if ((shdr->sh_link == 0) || (shdr->sh_link >= shnum)) {
 		(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSHLINK),
@@ -403,7 +413,7 @@ symlookup(const char *name, Cache *cache, Word shnum, Sym **sym,
 		    file, symtab->c_name);
 		return (0);
 	}
-	if (symtab->c_data == NULL)
+	if ((symtab->c_data == NULL) || (symtab->c_data->d_buf == NULL))
 		return (0);
 
 	/* LINTED */
@@ -521,6 +531,7 @@ getphdr(Word phnum, Word *type_arr, Word type_cnt, const char *file, Elf *elf)
  * entry:
  *	cache - Cache of all section headers
  *	shndx - Index of .eh_frame or .eh_frame_hdr section to be displayed
+ *	shnum - Total number of sections which exist
  *	uphdr - NULL, or unwind program header associated with
  *		the .eh_frame_hdr section.
  *	ehdr - ELF header for file
@@ -532,7 +543,7 @@ getphdr(Word phnum, Word *type_arr, Word type_cnt, const char *file, Elf *elf)
  *	flags - Command line option flags
  */
 static void
-unwind_eh_frame(Cache *cache, Word shndx, Phdr *uphdr, Ehdr *ehdr,
+unwind_eh_frame(Cache *cache, Word shndx, Word shnum, Phdr *uphdr, Ehdr *ehdr,
     gnu_eh_state_t *eh_state, uchar_t osabi, const char *file, uint_t flags)
 {
 #if	defined(_ELF64)
@@ -550,8 +561,23 @@ unwind_eh_frame(Cache *cache, Word shndx, Phdr *uphdr, Ehdr *ehdr,
 	Conv_dwarf_ehe_buf_t	dwarf_ehe_buf;
 	uint64_t		ndx, frame_ptr, fde_cnt, tabndx;
 	uint_t			vers, frame_ptr_enc, fde_cnt_enc, table_enc;
-	uint64_t		initloc, initloc0;
+	uint64_t		initloc, initloc0 = 0;
+	uint64_t		gotaddr = 0;
+	int			cnt;
 
+	for (cnt = 1; cnt < shnum; cnt++) {
+		if (strncmp(cache[cnt].c_name, MSG_ORIG(MSG_ELF_GOT),
+		    MSG_ELF_GOT_SIZE) == 0) {
+			gotaddr = cache[cnt].c_shdr->sh_addr;
+			break;
+		}
+	}
+
+	if ((data == NULL) || (datasize == 0)) {
+		(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+		    file, _cache ->c_name);
+		return;
+	}
 
 	/*
 	 * Is this a .eh_frame_hdr?
@@ -577,8 +603,20 @@ unwind_eh_frame(Cache *cache, Word shndx, Phdr *uphdr, Ehdr *ehdr,
 
 		dbg_print(0, MSG_ORIG(MSG_UNW_FRMVERS), vers);
 
-		frame_ptr = dwarf_ehe_extract(data, &ndx, frame_ptr_enc,
-		    ehdr->e_ident, shdr->sh_addr, ndx);
+		switch (dwarf_ehe_extract(data, datasize, &ndx,
+		    &frame_ptr, frame_ptr_enc, ehdr->e_ident, B_TRUE,
+		    shdr->sh_addr, ndx, gotaddr)) {
+		case DW_OVERFLOW:
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_DWOVRFLW),
+			    file, _cache->c_name);
+			return;
+		case DW_BAD_ENCODING:
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_DWBADENC),
+			    file, _cache->c_name, frame_ptr_enc);
+			return;
+		case DW_SUCCESS:
+			break;
+		}
 		if (eh_state->hdr_cnt == 1) {
 			eh_state->hdr_ndx = shndx;
 			eh_state->frame_ptr = frame_ptr;
@@ -588,8 +626,20 @@ unwind_eh_frame(Cache *cache, Word shndx, Phdr *uphdr, Ehdr *ehdr,
 		    conv_dwarf_ehe(frame_ptr_enc, &dwarf_ehe_buf),
 		    EC_XWORD(frame_ptr));
 
-		fde_cnt = dwarf_ehe_extract(data, &ndx, fde_cnt_enc,
-		    ehdr->e_ident, shdr->sh_addr, ndx);
+		switch (dwarf_ehe_extract(data, datasize, &ndx, &fde_cnt,
+		    fde_cnt_enc, ehdr->e_ident, B_TRUE, shdr->sh_addr, ndx,
+		    gotaddr)) {
+		case DW_OVERFLOW:
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_DWOVRFLW),
+			    file, _cache->c_name);
+			return;
+		case DW_BAD_ENCODING:
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_DWBADENC),
+			    file, _cache->c_name, fde_cnt_enc);
+			return;
+		case DW_SUCCESS:
+			break;
+		}
 
 		dbg_print(0, MSG_ORIG(MSG_UNW_FDCNENC),
 		    conv_dwarf_ehe(fde_cnt_enc, &dwarf_ehe_buf),
@@ -600,18 +650,48 @@ unwind_eh_frame(Cache *cache, Word shndx, Phdr *uphdr, Ehdr *ehdr,
 		dbg_print(0, MSG_ORIG(MSG_UNW_BINSRTAB2));
 
 		for (tabndx = 0; tabndx < fde_cnt; tabndx++) {
-			initloc = dwarf_ehe_extract(data, &ndx, table_enc,
-			    ehdr->e_ident, shdr->sh_addr, ndx);
-			/*LINTED:E_VAR_USED_BEFORE_SET*/
+			uint64_t table;
+
+			switch (dwarf_ehe_extract(data, datasize, &ndx,
+			    &initloc, table_enc, ehdr->e_ident, B_TRUE,
+			    shdr->sh_addr, ndx, gotaddr)) {
+			case DW_OVERFLOW:
+				(void) fprintf(stderr,
+				    MSG_INTL(MSG_ERR_DWOVRFLW), file,
+				    _cache->c_name);
+				return;
+			case DW_BAD_ENCODING:
+				(void) fprintf(stderr,
+				    MSG_INTL(MSG_ERR_DWBADENC), file,
+				    _cache->c_name, table_enc);
+				return;
+			case DW_SUCCESS:
+				break;
+			}
 			if ((tabndx != 0) && (initloc0 > initloc))
 				(void) fprintf(stderr,
 				    MSG_INTL(MSG_ERR_BADSORT), file,
 				    _cache->c_name, EC_WORD(tabndx));
+			switch (dwarf_ehe_extract(data, datasize, &ndx, &table,
+			    table_enc, ehdr->e_ident, B_TRUE, shdr->sh_addr,
+			    ndx, gotaddr)) {
+			case DW_OVERFLOW:
+				(void) fprintf(stderr,
+				    MSG_INTL(MSG_ERR_DWOVRFLW), file,
+				    _cache->c_name);
+				return;
+			case DW_BAD_ENCODING:
+				(void) fprintf(stderr,
+				    MSG_INTL(MSG_ERR_DWBADENC), file,
+				    _cache->c_name, table_enc);
+				return;
+			case DW_SUCCESS:
+				break;
+			}
+
 			dbg_print(0, MSG_ORIG(MSG_UNW_BINSRTABENT),
 			    EC_XWORD(initloc),
-			    EC_XWORD(dwarf_ehe_extract(data, &ndx,
-			    table_enc, ehdr->e_ident, shdr->sh_addr,
-			    ndx)));
+			    EC_XWORD(table));
 			initloc0 = initloc;
 		}
 	} else {		/* Display the .eh_frame section */
@@ -627,8 +707,8 @@ unwind_eh_frame(Cache *cache, Word shndx, Phdr *uphdr, Ehdr *ehdr,
 			    file, EC_WORD(shndx), _cache->c_name,
 			    conv_ehdr_type(osabi, ehdr->e_type, 0, &inv_buf));
 		}
-		dump_eh_frame(data, datasize, shdr->sh_addr,
-		    ehdr->e_machine, ehdr->e_ident);
+		dump_eh_frame(file, _cache->c_name, data, datasize,
+		    shdr->sh_addr, ehdr->e_machine, ehdr->e_ident, gotaddr);
 	}
 
 	/*
@@ -726,7 +806,7 @@ unwind_exception_ranges(Cache *_cache, const char *file, int do_swap)
 	exception_range_entry	scratch, *ent, *cur_ent = &scratch;
 	char			index[MAXNDXSIZE];
 	Word			i, nelts;
-	Addr			addr, addr0, offset = 0;
+	Addr			addr, addr0 = 0, offset = 0;
 	Addr			exc_addr = _cache->c_shdr->sh_addr;
 
 	dbg_print(0, MSG_INTL(MSG_EXR_TITLE));
@@ -753,7 +833,6 @@ unwind_exception_ranges(Cache *_cache, const char *file, int do_swap)
 		 * that addresses grow monotonically.
 		 */
 		addr = SRELPTR(ret_addr);
-		/*LINTED:E_VAR_USED_BEFORE_SET*/
 		if ((i != 0) && (addr0 > addr))
 			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSORT),
 			    file, _cache->c_name, EC_WORD(i));
@@ -865,7 +944,7 @@ unwind(Cache *cache, Word shnum, Word phnum, Ehdr *ehdr, uchar_t osabi,
 		if (!match(MATCH_F_ALL, _cache->c_name, cnt, shdr->sh_type))
 			continue;
 
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		dbg_print(0, MSG_ORIG(MSG_STR_EMPTY));
@@ -875,8 +954,8 @@ unwind(Cache *cache, Word shnum, Word phnum, Ehdr *ehdr, uchar_t osabi,
 			unwind_exception_ranges(_cache, file,
 			    _elf_sys_encoding() != ehdr->e_ident[EI_DATA]);
 		else
-			unwind_eh_frame(cache, cnt, uphdr, ehdr, &eh_state,
-			    osabi, file, flags);
+			unwind_eh_frame(cache, cnt, shnum, uphdr, ehdr,
+			    &eh_state, osabi, file, flags);
 	}
 }
 
@@ -923,7 +1002,8 @@ init_symtbl_state(SYMTBL_STATE *state, Cache *cache, Word shnum, Word secndx,
 		    file, state->secname);
 		return (0);
 	}
-	if (state->seccache->c_data == NULL)
+	if ((state->seccache->c_data == NULL) ||
+	    (state->seccache->c_data->d_buf == NULL))
 		return (0);
 
 	/* LINTED */
@@ -976,7 +1056,7 @@ symbols_getxindex(SYMTBL_STATE *state)
 		    ((symn = (uint_t)(shdr->sh_size / shdr->sh_entsize)) == 0))
 			continue;
 
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		state->shxndx.data = _cache->c_data->d_buf;
@@ -1702,7 +1782,7 @@ interp(const char *file, Cache *cache, Word shnum, Word phnum, Elf *elf)
 
 	Word	cnt;
 	Shdr	*ishdr = NULL;
-	Cache	*icache;
+	Cache	*icache = NULL;
 	Off	iphdr_off = 0;
 	Xword	iphdr_fsz;
 
@@ -1748,7 +1828,11 @@ interp(const char *file, Cache *cache, Word shnum, Word phnum, Elf *elf)
 	 * Print the interpreter string based on the offset defined in the
 	 * program header, as this is the offset used by the kernel.
 	 */
-	if (ishdr && icache->c_data) {
+	if ((ishdr != NULL) &&
+	    (icache != NULL) &&
+	    (icache->c_data != NULL) &&
+	    (icache->c_data->d_buf != NULL) &&
+	    (icache->c_data->d_size > 0)) {
 		dbg_print(0, MSG_ORIG(MSG_STR_EMPTY));
 		dbg_print(0, MSG_INTL(MSG_ELF_SCN_INTERP), icache->c_name);
 		dbg_print(0, MSG_ORIG(MSG_FMT_INDENT),
@@ -1797,7 +1881,7 @@ syminfo(Cache *cache, Word shnum, Ehdr *ehdr, uchar_t osabi, const char *file)
 		    file, infocache->c_name);
 		return;
 	}
-	if (infocache->c_data == NULL)
+	if ((infocache->c_data == NULL) || (infocache->c_data->d_buf == NULL))
 		return;
 
 	infonum = (Word)(infoshdr->sh_size / infoshdr->sh_entsize);
@@ -1836,6 +1920,13 @@ syminfo(Cache *cache, Word shnum, Ehdr *ehdr, uchar_t osabi, const char *file)
 			    file, dyncache->c_name);
 		}
 		if (dyns != NULL) {
+			if ((dyncache->c_shdr->sh_entsize == 0) ||
+			    (dyncache->c_shdr->sh_size == 0)) {
+				(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+				    file, dyncache->c_name);
+				return;
+			}
+
 			dynnum = dyncache->c_shdr->sh_size /
 			    dyncache->c_shdr->sh_entsize;
 
@@ -2215,7 +2306,6 @@ versions(Cache *cache, Word shnum, const char *file, uint_t flags,
 
 
 	/* Gather information about the version sections */
-	bzero(versym, sizeof (*versym));
 	versym->max_verndx = 1;
 	for (cnt = 1; cnt < shnum; cnt++) {
 		Cache		*_cache = &cache[cnt];
@@ -2236,8 +2326,10 @@ versions(Cache *cache, Word shnum, const char *file, uint_t flags,
 			 * which ld produced this object, and how to interpret
 			 * the version values.
 			 */
-			if ((shdr->sh_entsize == 0) || (shdr->sh_size == 0) ||
-			    (_cache->c_data == NULL))
+			if ((shdr->sh_entsize == 0) ||
+			    (shdr->sh_size == 0) ||
+			    (_cache->c_data == NULL) ||
+			    (_cache->c_data->d_buf == NULL))
 				continue;
 			numdyn = shdr->sh_size / shdr->sh_entsize;
 			dyn = (Dyn *)_cache->c_data->d_buf;
@@ -2566,7 +2658,7 @@ reloc(Cache *cache, Word shnum, Ehdr *ehdr, const char *file)
 			    file, relname);
 			continue;
 		}
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		rels = _cache->c_data->d_buf;
@@ -2992,7 +3084,7 @@ dynamic(Cache *cache, Word shnum, Ehdr *ehdr, uchar_t osabi, const char *file)
 			    file, _cache->c_name);
 			continue;
 		}
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		numdyn = shdr->sh_size / shdr->sh_entsize;
@@ -3370,7 +3462,7 @@ move(Cache *cache, Word shnum, const char *file, uint_t flags)
 			    file, _cache->c_name);
 			continue;
 		}
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		move = (Move *)_cache->c_data->d_buf;
@@ -3672,6 +3764,9 @@ note_entry(Cache *cache, Word *data, size_t size, Ehdr *ehdr, const char *file)
 				    do_swap, pnstate.pn_type, pnstate.pn_desc,
 				    pnstate.pn_descsz);
 				switch (corenote_ret) {
+				case CORENOTE_R_OK_DUMP:
+					hexdump = 1;
+					break;
 				case CORENOTE_R_OK:
 					hexdump = 0;
 					break;
@@ -3689,6 +3784,13 @@ note_entry(Cache *cache, Word *data, size_t size, Ehdr *ehdr, const char *file)
 					    conv_ehdr_mach(ehdr->e_machine,
 					    0, &inv_buf));
 					break;
+				case CORENOTE_R_BADTYPE:
+					(void) fprintf(stderr,
+					    MSG_INTL(MSG_NOTE_BADCORETYPE),
+					    file,
+					    EC_WORD(pnstate.pn_type));
+					break;
+
 				}
 			}
 
@@ -3743,7 +3845,7 @@ note(Cache *cache, Word shnum, Ehdr *ehdr, const char *file)
 			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADALIGN),
 			    file, _cache->c_name);
 
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		dbg_print(0, MSG_ORIG(MSG_STR_EMPTY));
@@ -3781,7 +3883,9 @@ has_linux_abi_note(Cache *cache, Word shnum, const char *file)
 		 */
 		if ((shdr->sh_type != SHT_NOTE) ||
 		    (strcmp(MSG_ORIG(MSG_STR_NOTEABITAG),
-		    _cache->c_name) != 0) || (_cache->c_data == NULL))
+		    _cache->c_name) != 0) ||
+		    (_cache->c_data == NULL) ||
+		    (_cache->c_data->d_buf == NULL))
 			continue;
 
 		pnstate.pns_file = file;
@@ -3876,11 +3980,11 @@ hash(Cache *cache, Word shnum, const char *file, uint_t flags)
 {
 	static int	count[MAXCOUNT];
 	Word		cnt;
-	ulong_t		ndx, bkts;
+	Word		ndx, bkts, nchain;
 	char		number[MAXNDXSIZE];
 
 	for (cnt = 1; cnt < shnum; cnt++) {
-		uint_t		*hash, *chain;
+		Word		*hash, *chain;
 		Cache		*_cache = &cache[cnt];
 		Shdr		*sshdr, *hshdr = _cache->c_shdr;
 		char		*ssecname, *hsecname = _cache->c_name;
@@ -3891,20 +3995,35 @@ hash(Cache *cache, Word shnum, const char *file, uint_t flags)
 			continue;
 
 		/*
-		 * Determine the hash table data and size.
+		 * Check the hash table data and size.
 		 */
 		if ((hshdr->sh_entsize == 0) || (hshdr->sh_size == 0)) {
 			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
 			    file, hsecname);
 			continue;
 		}
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) ||
+		    (_cache->c_data->d_buf == NULL)) {
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+			    file, hsecname);
 			continue;
+		}
 
-		hash = (uint_t *)_cache->c_data->d_buf;
-		bkts = *hash;
-		chain = hash + 2 + bkts;
-		hash += 2;
+		hash = (Word *)_cache->c_data->d_buf;
+		bkts = *hash++;
+		nchain = *hash++;
+		chain = hash + bkts;
+
+		/*
+		 * The section holds the sizes in addition to the buckets and
+		 * chains.
+		 */
+		if (_cache->c_data->d_size <
+		    (bkts + nchain + 2) * sizeof (uint_t)) {
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+			    file, hsecname);
+			continue;
+		}
 
 		/*
 		 * Get the data buffer for the associated symbol table.
@@ -3918,7 +4037,7 @@ hash(Cache *cache, Word shnum, const char *file, uint_t flags)
 		_cache = &cache[hshdr->sh_link];
 		ssecname = _cache->c_name;
 
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		if ((syms = (Sym *)_cache->c_data->d_buf) == NULL) {
@@ -3928,8 +4047,24 @@ hash(Cache *cache, Word shnum, const char *file, uint_t flags)
 		}
 
 		sshdr = _cache->c_shdr;
+
+		if ((sshdr->sh_entsize == 0) || (sshdr->sh_size == 0)) {
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+			    file, ssecname);
+			continue;
+		}
+
 		/* LINTED */
 		symn = (Word)(sshdr->sh_size / sshdr->sh_entsize);
+
+		/*
+		 * Check that there is a chain for each symbol.
+		 */
+		if (symn > nchain) {
+			(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+			    file, ssecname);
+			continue;
+		}
 
 		/*
 		 * Get the associated string table section.
@@ -3956,6 +4091,20 @@ hash(Cache *cache, Word shnum, const char *file, uint_t flags)
 				continue;
 			}
 
+			/*
+			 * Each hash bucket must contain to a valid chain index.
+			 * Because the symbol table is checked to be the same
+			 * length as the chain array, this also implicitly
+			 * checks those bounds.
+			 */
+			if (*hash > nchain) {
+				(void) fprintf(stderr,
+				    MSG_INTL(MSG_ERR_BADCHAINIDX), file,
+				    ssecname, EC_WORD(*hash), EC_WORD(ndx),
+				    EC_WORD(nchain));
+				continue;
+			}
+
 			hash_entry(_cache, &cache[sshdr->sh_link], hsecname,
 			    ndx, *hash, symn, syms, file, bkts, flags, 0);
 
@@ -3966,6 +4115,13 @@ hash(Cache *cache, Word shnum, const char *file, uint_t flags)
 			_ndx = chain[*hash];
 			_cnt = 1;
 			while (_ndx) {
+				if (_ndx > nchain) {
+					(void) fprintf(stderr,
+					    MSG_INTL(MSG_ERR_BADCHAINIDX), file,
+					    ssecname, EC_WORD(_ndx),
+					    EC_WORD(ndx), EC_WORD(nchain));
+					break;
+				}
 				hash_entry(_cache, &cache[sshdr->sh_link],
 				    hsecname, ndx, _ndx, symn, syms, file,
 				    bkts, flags, 1);
@@ -4162,7 +4318,7 @@ got(Cache *cache, Word shnum, Ehdr *ehdr, const char *file)
 	if ((gentsize = gotshdr->sh_entsize) == 0)
 		gentsize = sizeof (Xword);
 
-	if (gotcache->c_data == NULL)
+	if ((gotcache->c_data == NULL) || (gotcache->c_data->d_buf == NULL))
 		return;
 
 	/* LINTED */
@@ -4225,7 +4381,7 @@ got(Cache *cache, Word shnum, Ehdr *ehdr, const char *file)
 			    file, _cache->c_name);
 			continue;
 		}
-		if (_cache->c_data == NULL)
+		if ((_cache->c_data == NULL) || (_cache->c_data->d_buf == NULL))
 			continue;
 
 		rels = _cache->c_data->d_buf;
@@ -4275,6 +4431,13 @@ got(Cache *cache, Word shnum, Ehdr *ehdr, const char *file)
 			 */
 			if ((offset < gotbgn) || (offset >= gotend))
 				continue;
+
+			if ((gotshdr->sh_entsize == 0) ||
+			    (gotshdr->sh_size == 0)) {
+				(void) fprintf(stderr, MSG_INTL(MSG_ERR_BADSZ),
+				    file, gotcache->c_name);
+				continue;
+			}
 
 			/* LINTED */
 			gotndx = (Word)((offset - gotbgn) /
@@ -4669,6 +4832,7 @@ shdr_cache(const char *file, Elf *elf, Ehdr *ehdr, size_t shstrndx,
 		 * final bytes.
 		 */
 		if ((_cache->c_shdr->sh_type == SHT_STRTAB) &&
+		    (_cache->c_data != NULL) &&
 		    (_cache->c_data->d_buf != NULL) &&
 		    (_cache->c_data->d_size > 0)) {
 			const char *s = _cache->c_data->d_buf;
@@ -4729,7 +4893,7 @@ regular(const char *file, int fd, Elf *elf, uint_t flags,
 	size_t		ndx, shstrndx, shnum, phnum;
 	Shdr		*shdr;
 	Cache		*cache;
-	VERSYM_STATE	versym;
+	VERSYM_STATE	versym = { 0 };
 	int		ret = 0;
 	int		addr_align;
 
@@ -4908,6 +5072,8 @@ regular(const char *file, int fd, Elf *elf, uint_t flags,
 		if (create_cache(file, fd, elf, ehdr, &cache, shstrndx,
 		    &shnum, &flags) == 0)
 			return (ret);
+		break;
+	case CACHE_OK:
 		break;
 	case CACHE_FAIL:
 		return (ret);

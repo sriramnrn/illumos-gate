@@ -21,13 +21,13 @@
 #
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2012 OmniTI Computer Consulting, Inc.  All rights reserved.
 #
 
 include ../Makefile.lib
 
 SUBDIRS	=	$(MACH)
+$(BUILD64)SUBDIRS += $(MACH64)
 
 # Library header.
 HDRS =		wanbootutil.h
@@ -93,6 +93,8 @@ common/key_xdr.c:	common/key_xdr.x
 
 common/key_xdr.h:	common/key_xdr.x
 		cd common; $(RPCGEN) -h -o key_xdr.h key_xdr.x; cd ..
+
+CLOBBERFILES += common/key_xdr.c common/key_xdr.h
 
 include $(SRC)/Makefile.msg.targ
 include $(SRC)/lib/Makefile.targ

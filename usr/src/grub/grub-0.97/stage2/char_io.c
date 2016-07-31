@@ -20,8 +20,8 @@
 /*
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <shared.h>
 #include <term.h>
@@ -68,6 +68,22 @@ struct term_entry term_table[] =
       serial_setcolorstate,
       0,
       0,
+      0,
+      0
+    },
+    {
+      "composite",
+      TERM_NEED_INIT,
+      24,
+      composite_putchar,
+      composite_checkkey,
+      composite_getkey,
+      serial_getxy,
+      composite_gotoxy,
+      composite_cls,
+      composite_setcolorstate,
+      console_setcolor,
+      console_setcursor,
       0,
       0
     },
@@ -132,16 +148,16 @@ print_error (void)
 }
 
 char *
-convert_to_ascii (char *buf, int c,...)
+convert_to_ascii (char *buf, int c, unsigned long long num)
 {
-  unsigned long num = *((&c) + 1), mult = 10;
+  unsigned long mult = 10;
   char *ptr = buf;
 
 #ifndef STAGE1_5
   if (c == 'x' || c == 'X')
     mult = 16;
 
-  if ((num & 0x80000000uL) && c == 'd')
+  if ((num & 0x8000000000000000uLL) && c == 'd')
     {
       num = (~num) + 1;
       *(ptr++) = '-';
@@ -183,35 +199,56 @@ grub_putstr (const char *str)
 static void
 grub_vprintf (const char *format, int *dataptr)
 {
-  char c, str[16];
+  char c, str[21];
+  int lflag;
+  unsigned long long val;
 
   while ((c = *(format++)) != 0)
     {
+      lflag = 0;
       if (c != '%')
 	grub_putchar (c);
       else
-	switch (c = *(format++))
-	  {
-#ifndef STAGE1_5
-	  case 'd':
-	  case 'x':
-	  case 'X':
-#endif
-	  case 'u':
-	    *convert_to_ascii (str, c, *((unsigned long *) dataptr++)) = 0;
-	    grub_putstr (str);
-	    break;
+	while ((c = *(format++)) != 0) {
+	  switch (c)
+	    {
+	    case 'l':
+	      lflag++;
+	      continue;
 
 #ifndef STAGE1_5
-	  case 'c':
-	    grub_putchar ((*(dataptr++)) & 0xff);
-	    break;
-
-	  case 's':
-	    grub_putstr ((char *) *(dataptr++));
-	    break;
+	    case 'd':
+	    case 'x':
+	    case 'X':
 #endif
+	    case 'u':
+	      if (lflag == 2) {
+	        val = *(unsigned long long *)dataptr;
+		dataptr += 2;
+	      } else {
+		if (c == 'd')
+		  val = (long long)*(long *)dataptr++;
+		else
+		  val = *(unsigned long *)dataptr++;
+	      }
+	      *convert_to_ascii (str, c, val) = 0;
+	      grub_putstr (str);
+	      break;
+
+#ifndef STAGE1_5
+	    case 'c':
+	      grub_putchar ((*(dataptr++)) & 0xff);
+	      break;
+
+	    case 's':
+	      grub_putstr ((char *) *(dataptr++));
+	      break;
+#endif
+	    default:
+	      grub_putchar (c);
 	  }
+	  break;
+	}
     }
 }
 
@@ -890,48 +927,67 @@ grub_vsprintf (char *buffer, const char *format, int *dataptr)
   char c, *ptr, str[16];
   char *bp = buffer;
   int len = 0;
+  int lflag;
+  unsigned long long val;
 
   while ((c = *format++) != 0)
     {
+      lflag = 0;
       if (c != '%') {
 	if (buffer)
 	  *bp++ = c; /* putchar(c); */
         len++;
       } else {
-	switch (c = *(format++))
-	  {
-	  case 'd': case 'u': case 'x':
-	    *convert_to_ascii (str, c, *((unsigned long *) dataptr++)) = 0;
+	while (c = *(format++)) {
+	  switch (c)
+	    {
+	    case 'l':
+	      lflag++;
+	      continue;
 
-	    ptr = str;
+	    case 'd': case 'u': case 'x':
+	      if (lflag == 2) {
+	        val = *(unsigned long long *)dataptr;
+		dataptr += 2;
+	      } else {
+		if (c == 'd')
+		  val = (long long)*(long *)dataptr++;
+		else
+		  val = *(unsigned long *)dataptr++;
+	      }
+	      *convert_to_ascii (str, c, val) = 0;
 
-	    while (*ptr) {
-	      if (buffer)
-	        *bp++ = *(ptr++); /* putchar(*(ptr++)); */
-              else
-	        ptr++;
-              len++;
-            }
-	    break;
+	      ptr = str;
 
-	  case 'c':
-            if (buffer)
-              *bp++ = (*(dataptr++))&0xff;
-            else
-              dataptr++;
-            len++;
-	    /* putchar((*(dataptr++))&0xff); */
-	    break;
+	      while (*ptr) {
+	        if (buffer)
+	          *bp++ = *(ptr++); /* putchar(*(ptr++)); */
+                else
+	          ptr++;
+                len++;
+              }
+	      break;
 
-	  case 's':
-	    ptr = (char *) (*(dataptr++));
-
-	    while ((c = *ptr++) != 0) {
+	    case 'c':
               if (buffer)
-	        *bp++ = c; /* putchar(c); */
+                *bp++ = (*(dataptr++))&0xff;
+              else
+                dataptr++;
               len++;
-            }
+	      /* putchar((*(dataptr++))&0xff); */
+	      break;
+
+	    case 's':
+	      ptr = (char *) (*(dataptr++));
+
+	      while ((c = *ptr++) != 0) {
+                if (buffer)
+	          *bp++ = c; /* putchar(c); */
+                len++;
+              }
 	    break;
+	    }
+	  break;
 	  }
        }
     }
@@ -1047,10 +1103,10 @@ grub_strncat (char *s1, const char *s2, int n)
 
   while (i < n && (s1[i++] = *(s2++)) != 0);
 
-  s1[n - 1] = 0;
-
-  if (i >= n)
+  if (i >= n) {
+    s1[n - 1] = 0;
     return 0;
+  }
 
   s1[i] = 0;
 

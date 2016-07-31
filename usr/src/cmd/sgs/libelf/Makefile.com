@@ -19,12 +19,12 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 
 LIBRARY=	libelf.a
 VERS=		.1
-M4=		m4
 
 MACHOBJS=
 COMOBJS=	ar.o		begin.o		cntl.o		cook.o \
@@ -50,6 +50,8 @@ OBJECTS=	$(BLTOBJS)  $(MACHOBJS)  $(COMOBJS)  $(CLASSOBJS) $(MISCOBJS)
 
 include $(SRC)/lib/Makefile.lib
 
+# Use the value of M4 set in Makefile.master via Makefile.lib
+
 DEMOFILES=	Makefile	00README	acom.c		dcom.c \
 		pcom.c		tpcom.c		dispsyms.c
 DEMOFILESRCDIR=	../demo
@@ -62,13 +64,14 @@ WARLOCKFILES=	$(OBJECTS:%.o=wlocks/%.ll)
 
 MAPFILES =	../common/mapfile-vers
 
-CLOBBERFILES +=
-
 DYNFLAGS +=	$(VERSREF)
 LDLIBS +=	$(CONVLIBDIR) $(CONV_LIB) -lc
 
 LINTFLAGS +=	-u -erroff=E_BAD_PTR_CAST_ALIGN
 LINTFLAGS64 +=	-u -erroff=E_CAST_INT_TO_SMALL_INT
+
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 BUILD.AR=	$(RM) $@ ; \
 		$(AR) q $@ `$(LORDER) $(OBJECTS:%=$(DIR)/%)| $(TSORT)`

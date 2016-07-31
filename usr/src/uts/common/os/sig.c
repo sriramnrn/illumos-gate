@@ -22,6 +22,7 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2014, Joyent, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -59,6 +60,7 @@
 #include <sys/cyclic.h>
 #include <sys/dtrace.h>
 #include <sys/sdt.h>
+#include <sys/signalfd.h>
 
 const k_sigset_t nullsmask = {0, 0, 0};
 
@@ -76,7 +78,7 @@ const k_sigset_t ignoredefault =
 	|sigmask(SIGWINCH)|sigmask(SIGURG)|sigmask(SIGWAITING)),
 	(sigmask(SIGLWP)|sigmask(SIGCANCEL)|sigmask(SIGFREEZE)
 	|sigmask(SIGTHAW)|sigmask(SIGXRES)|sigmask(SIGJVM1)
-	|sigmask(SIGJVM2)), 0};
+	|sigmask(SIGJVM2)|sigmask(SIGINFO)), 0};
 
 const k_sigset_t stopdefault =
 	{(sigmask(SIGSTOP)|sigmask(SIGTSTP)|sigmask(SIGTTOU)|sigmask(SIGTTIN)),
@@ -92,6 +94,12 @@ const k_sigset_t holdvfork =
 
 static	int	isjobstop(int);
 static	void	post_sigcld(proc_t *, sigqueue_t *);
+
+
+/*
+ * signalfd helper function which is set when the signalfd driver loads.
+ */
+void (*sigfd_exit_helper)();
 
 /*
  * Internal variables for counting number of user thread stop requests posted.
@@ -306,6 +314,11 @@ sigtoproc(proc_t *p, kthread_t *t, int sig)
 		(void) eat_signal(t, sig);
 		thread_unlock(t);
 		DTRACE_PROC2(signal__send, kthread_t *, t, int, sig);
+		if (p->p_sigfd != NULL && ((sigfd_proc_state_t *)
+		    (p->p_sigfd))->sigfd_pollwake_cb != NULL)
+			(*((sigfd_proc_state_t *)(p->p_sigfd))->
+			    sigfd_pollwake_cb)(p, sig);
+
 	} else if ((tt = p->p_tlist) != NULL) {
 		/*
 		 * Make sure that some lwp that already exists
@@ -344,6 +357,10 @@ sigtoproc(proc_t *p, kthread_t *t, int sig)
 		}
 
 		DTRACE_PROC2(signal__send, kthread_t *, tt, int, sig);
+		if (p->p_sigfd != NULL && ((sigfd_proc_state_t *)
+		    (p->p_sigfd))->sigfd_pollwake_cb != NULL)
+			(*((sigfd_proc_state_t *)(p->p_sigfd))->
+			    sigfd_pollwake_cb)(p, sig);
 	}
 }
 
@@ -2227,7 +2244,6 @@ sigcheck(proc_t *p, kthread_t *t)
 #endif
 }
 
-/* ONC_PLUS EXTRACT START */
 void
 sigintr(k_sigset_t *smask, int intable)
 {
@@ -2304,7 +2320,6 @@ sigintr(k_sigset_t *smask, int intable)
 	lwp->lwp_nostop++;
 
 }
-/* ONC_PLUS EXTRACT END */
 
 void
 sigunintr(k_sigset_t *smask)
@@ -2373,13 +2388,9 @@ sigwillqueue(int sig, int code)
 	return (0);
 }
 
-#ifndef	UCHAR_MAX
-#define	UCHAR_MAX	255
-#endif
-
 /*
- * The entire pool (with maxcount entries) is pre-allocated at
- * the first sigqueue/signotify call.
+ * The pre-allocated pool (with _SIGQUEUE_PREALLOC entries) is
+ * allocated at the first sigqueue/signotify call.
  */
 sigqhdr_t *
 sigqhdralloc(size_t size, uint_t maxcount)
@@ -2388,16 +2399,22 @@ sigqhdralloc(size_t size, uint_t maxcount)
 	sigqueue_t *sq, *next;
 	sigqhdr_t *sqh;
 
-	i = (maxcount * size) + sizeof (sigqhdr_t);
-	ASSERT(maxcount <= UCHAR_MAX && i <= USHRT_MAX);
+	/*
+	 * Before the introduction of process.max-sigqueue-size
+	 * _SC_SIGQUEUE_MAX had this static value.
+	 */
+#define	_SIGQUEUE_PREALLOC	32
+
+	i = (_SIGQUEUE_PREALLOC * size) + sizeof (sigqhdr_t);
+	ASSERT(maxcount <= INT_MAX);
 	sqh = kmem_alloc(i, KM_SLEEP);
-	sqh->sqb_count = (uchar_t)maxcount;
-	sqh->sqb_maxcount = (uchar_t)maxcount;
-	sqh->sqb_size = (ushort_t)i;
+	sqh->sqb_count = maxcount;
+	sqh->sqb_maxcount = maxcount;
+	sqh->sqb_size = i;
 	sqh->sqb_pexited = 0;
 	sqh->sqb_sent = 0;
 	sqh->sqb_free = sq = (sigqueue_t *)(sqh + 1);
-	for (i = maxcount - 1; i != 0; i--) {
+	for (i = _SIGQUEUE_PREALLOC - 1; i != 0; i--) {
 		next = (sigqueue_t *)((uintptr_t)sq + size);
 		sq->sq_next = next;
 		sq = next;
@@ -2411,8 +2428,9 @@ sigqhdralloc(size_t size, uint_t maxcount)
 static void sigqrel(sigqueue_t *);
 
 /*
- * allocate a sigqueue/signotify structure from the per process
- * pre-allocated pool.
+ * Allocate a sigqueue/signotify structure from the per process
+ * pre-allocated pool or allocate a new sigqueue/signotify structure
+ * if the pre-allocated pool is exhausted.
  */
 sigqueue_t *
 sigqalloc(sigqhdr_t *sqh)
@@ -2425,12 +2443,20 @@ sigqalloc(sigqhdr_t *sqh)
 		mutex_enter(&sqh->sqb_lock);
 		if (sqh->sqb_count > 0) {
 			sqh->sqb_count--;
-			sq = sqh->sqb_free;
-			sqh->sqb_free = sq->sq_next;
+			if (sqh->sqb_free == NULL) {
+				/*
+				 * The pre-allocated pool is exhausted.
+				 */
+				sq = kmem_alloc(sizeof (sigqueue_t), KM_SLEEP);
+				sq->sq_func = NULL;
+			} else {
+				sq = sqh->sqb_free;
+				sq->sq_func = sigqrel;
+				sqh->sqb_free = sq->sq_next;
+			}
 			mutex_exit(&sqh->sqb_lock);
 			bzero(&sq->sq_info, sizeof (k_siginfo_t));
 			sq->sq_backptr = sqh;
-			sq->sq_func = sigqrel;
 			sq->sq_next = NULL;
 			sq->sq_external = 0;
 		} else {

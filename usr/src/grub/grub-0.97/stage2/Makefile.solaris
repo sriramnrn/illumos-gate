@@ -1,8 +1,9 @@
 #
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
+# Copyright 2015, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2016 Nexenta Systems, Inc.
 #
 include ../../Makefile.grub
 include ../Makefile.solaris.defs
@@ -17,25 +18,24 @@ include ../Makefile.solaris.defs
 INCLUDES	= -I. -I.. -I../stage1 -I../netboot
 LIBS		=
 
-FSYS_CFLAGS	= -DFSYS_EXT2FS=1 -DFSYS_FAT=1 -DFSYS_FFS=1 -DFSYS_UFS=1 \
-		  -DFSYS_ZFS=1 \
-		  -DFSYS_UFS2=1 -DFSYS_REISERFS=1 -DFSYS_ISO9660=1 \
+FSYS_CFLAGS	= -DFSYS_UFS=1 -DFSYS_FAT=1 \
+		  -DFSYS_ZFS=1 -DFSYS_ISO9660=1 \
 		  -DUSE_MD5_PASSWORDS=1
 $(STAGE2_NETBOOT)TFTP_CFLAGS	= -DFSYS_TFTP=1
 $(OPTION_FS)FSYS_CFLAGS	+= -DFSYS_MINIX=1 -DFSYS_JFS=1 -DFSYS_XFS=1 \
-		  -DSYS_VSTAFS=1
-
+		  -DSYS_VSTAFS=1 -DFSYS_FFS=1 -DFSYS_REISERFS=1 \
+		  -DFSYS_EXT2FS=1 -DFSYS_UFS2=1
 GRAPHICS_CFLAGS	= -DSUPPORT_GRAPHICS=1
 # HERCULES_CFLAGS	= -DSUPPORT_HERCULES=1
 NETBOOT_CFLAGS	= -DSUPPORT_NETBOOT=1
 SERIAL_CFLAGS	= -DSUPPORT_SERIAL=1
 GRUB_CFLAGS	= -O2 -I../lib -DGRUB_UTIL=1 \
-		  -DFSYS_EXT2FS=1 -DFSYS_FAT=1 -DFSYS_FFS=1 -DFSYS_ISO9660=1 \
-		  -DFSYS_ZFS=1 \
-		  -DFSYS_REISERFS=1 -DFSYS_UFS=1 -DFSYS_UFS2=1 \
+		  -DFSYS_ISO9660=1 -DFSYS_ZFS=1 -DFSYS_FAT=1 \
+		  -DFSYS_UFS=1 \
 		  -DUSE_MD5_PASSWORDS=1 -DSUPPORT_SERIAL=1
 $(OPTION_FS)GRUB_CFLAGS	+= -DFSYS_MINIX=1 -DFSYS_JFS=1 -DFSYS_XFS=1 \
-		  -DSYS_VSTAFS=1
+		  -DSYS_VSTAFS=1 -DFSYS_FFS=1 -DFSYS_REISERFS=1 \
+		  -DFSYS_EXT2FS=1 -DFSYS_UFS2=1
 # GRUB_CFLAGS	+= -DSUPPORT_HERCULES=1
 STAGE1_5_CFLAGS	= $(STAGE2_CFLAGS) -DNO_DECOMPRESSION=1 -DSTAGE1_5=1
 STAGE2_CFLAGS	= -Os -fno-builtin -nostdinc \
@@ -66,6 +66,7 @@ LIBGRUB_OBJS	= libgrub_a-boot.o		\
 		  libgrub_a-cmdline.o		\
 		  libgrub_a-common.o		\
 		  libgrub_a-disk_io.o		\
+		  libgrub_a-expand.o		\
 		  libgrub_a-fsys_ext2fs.o	\
 		  libgrub_a-fsys_fat.o		\
 		  libgrub_a-fsys_ffs.o		\
@@ -75,6 +76,7 @@ LIBGRUB_OBJS	= libgrub_a-boot.o		\
 		  libgrub_a-fsys_reiserfs.o	\
 		  libgrub_a-zfs_sha256.o	\
 		  libgrub_a-zfs_lzjb.o		\
+		  libgrub_a-zfs_lz4.o		\
 		  libgrub_a-zfs_fletcher.o	\
 		  libgrub_a-fsys_zfs.o		\
 		  libgrub_a-fsys_ufs.o		\
@@ -84,6 +86,7 @@ LIBGRUB_OBJS	= libgrub_a-boot.o		\
 		  libgrub_a-graphics.o		\
 		  libgrub_a-gunzip.o		\
 		  libgrub_a-md5.o		\
+		  libgrub_a-moddiv.o		\
 		  libgrub_a-serial.o		\
 		  libgrub_a-stage2.o		\
 		  libgrub_a-terminfo.o		\
@@ -130,7 +133,7 @@ PROGRAMS	= $(DISKLESS_EXEC)		\
 		  $(NBLOADER_EXEC)		\
 		  $(PRE_STAGE2_EXEC)		\
 		  $(PXELOADER_EXEC)		\
- 		  $(REISERFS_STAGE1_5_EXEC)	\
+		  $(REISERFS_STAGE1_5_EXEC)	\
 		  $(START_EXEC)			\
 		  $(START_ELTORITO_EXEC)	\
 		  $(UFS2_STAGE1_5_EXEC)		\
@@ -155,6 +158,7 @@ DISKLESS_OBJS		= diskless_exec-bios.o		\
 			  diskless_exec-common.o	\
 			  diskless_exec-console.o	\
 			  diskless_exec-disk_io.o	\
+			  diskless_exec-expand.o	\
 			  diskless_exec-fsys_ext2fs.o	\
 			  diskless_exec-fsys_fat.o	\
 			  diskless_exec-fsys_ffs.o	\
@@ -164,6 +168,7 @@ DISKLESS_OBJS		= diskless_exec-bios.o		\
 			  diskless_exec-fsys_reiserfs.o	\
 			  diskless_exec-zfs_sha256.o	\
 			  diskless_exec-zfs_lzjb.o	\
+			  diskless_exec-zfs_lz4.o	\
 			  diskless_exec-zfs_fletcher.o	\
 			  diskless_exec-fsys_zfs.o	\
 			  diskless_exec-fsys_ufs.o	\
@@ -174,6 +179,7 @@ DISKLESS_OBJS		= diskless_exec-bios.o		\
 			  diskless_exec-gunzip.o	\
 			  diskless_exec-hercules.o	\
 			  diskless_exec-md5.o		\
+			  diskless_exec-moddiv.o	\
 			  diskless_exec-serial.o	\
 			  diskless_exec-smp-imps.o	\
 			  diskless_exec-stage2.o	\
@@ -197,14 +203,15 @@ $(DISKLESS_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE2_CFLAGS) \
 E2FS_STAGE1_5_DATA	= e2fs_stage1_5
 E2FS_STAGE1_5_EXEC	= e2fs_stage1_5.exec
 
-E2FS_STAGE1_5_ASMOBJS	= e2fs_stage1_5_exec-asm.o \
-			  e2fs_stage1_5_exec-start.o
+E2FS_STAGE1_5_ASMOBJS	= e2fs_stage1_5_exec-start.o \
+			  e2fs_stage1_5_exec-asm.o
 
 E2FS_STAGE1_5_OBJS	= e2fs_stage1_5_exec-bios.o \
 			  e2fs_stage1_5_exec-char_io.o \
 			  e2fs_stage1_5_exec-common.o \
 			  e2fs_stage1_5_exec-disk_io.o \
 			  e2fs_stage1_5_exec-fsys_ext2fs.o \
+			  e2fs_stage1_5_exec-moddiv.o \
 			  e2fs_stage1_5_exec-stage1_5.o
 
 $(E2FS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -221,14 +228,15 @@ $(E2FS_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 FAT_STAGE1_5_DATA	= fat_stage1_5
 FAT_STAGE1_5_EXEC	= fat_stage1_5.exec
 
-FAT_STAGE1_5_ASMOBJS	= fat_stage1_5_exec-asm.o \
-			  fat_stage1_5_exec-start.o
+FAT_STAGE1_5_ASMOBJS	= fat_stage1_5_exec-start.o \
+			  fat_stage1_5_exec-asm.o
 
 FAT_STAGE1_5_OBJS	= fat_stage1_5_exec-bios.o \
 			  fat_stage1_5_exec-char_io.o \
 			  fat_stage1_5_exec-common.o \
 			  fat_stage1_5_exec-disk_io.o \
 			  fat_stage1_5_exec-fsys_fat.o \
+			  fat_stage1_5_exec-moddiv.o \
 			  fat_stage1_5_exec-stage1_5.o
 
 $(FAT_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -245,14 +253,15 @@ $(FAT_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 FFS_STAGE1_5_DATA	= ffs_stage1_5
 FFS_STAGE1_5_EXEC	= ffs_stage1_5.exec
 
-FFS_STAGE1_5_ASMOBJS	= ffs_stage1_5_exec-asm.o \
-			  ffs_stage1_5_exec-start.o
+FFS_STAGE1_5_ASMOBJS	= ffs_stage1_5_exec-start.o \
+			  ffs_stage1_5_exec-asm.o
 
 FFS_STAGE1_5_OBJS	= ffs_stage1_5_exec-bios.o \
 			  ffs_stage1_5_exec-char_io.o \
 			  ffs_stage1_5_exec-common.o \
 			  ffs_stage1_5_exec-disk_io.o \
 			  ffs_stage1_5_exec-fsys_ffs.o \
+			  ffs_stage1_5_exec-moddiv.o \
 			  ffs_stage1_5_exec-stage1_5.o
 
 $(FFS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -269,14 +278,15 @@ $(FFS_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 ISO9660_STAGE1_5_DATA	= iso9660_stage1_5
 ISO9660_STAGE1_5_EXEC	= iso9660_stage1_5.exec
 
-ISO9660_STAGE1_5_ASMOBJS = iso9660_stage1_5_exec-asm.o \
-			   iso9660_stage1_5_exec-start_eltorito.o
+ISO9660_STAGE1_5_ASMOBJS = iso9660_stage1_5_exec-start_eltorito.o \
+			   iso9660_stage1_5_exec-asm.o
 
 ISO9660_STAGE1_5_OBJS	= iso9660_stage1_5_exec-bios.o \
 			  iso9660_stage1_5_exec-char_io.o \
 			  iso9660_stage1_5_exec-common.o \
 			  iso9660_stage1_5_exec-disk_io.o \
 			  iso9660_stage1_5_exec-fsys_iso9660.o \
+			  iso9660_stage1_5_exec-moddiv.o \
 			  iso9660_stage1_5_exec-stage1_5.o
 
 $(ISO9660_STAGE1_5_EXEC) := LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -294,14 +304,15 @@ $(ISO9660_STAGE1_5_OBJS) := CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 JFS_STAGE1_5_DATA	= jfs_stage1_5
 JFS_STAGE1_5_EXEC	= jfs_stage1_5.exec
 
-JFS_STAGE1_5_ASMOBJS	= jfs_stage1_5_exec-asm.o \
-			  jfs_stage1_5_exec-start.o
+JFS_STAGE1_5_ASMOBJS	= jfs_stage1_5_exec-start.o \
+			  jfs_stage1_5_exec-asm.o
 
 JFS_STAGE1_5_OBJS	= jfs_stage1_5_exec-bios.o \
 			  jfs_stage1_5_exec-char_io.o \
 			  jfs_stage1_5_exec-common.o \
 			  jfs_stage1_5_exec-disk_io.o \
 			  jfs_stage1_5_exec-fsys_jfs.o \
+			  jfs_stage1_5_exec-moddiv.o \
 			  jfs_stage1_5_exec-stage1_5.o
 
 $(JFS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -318,14 +329,15 @@ $(JFS_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 MINIX_STAGE1_5_DATA	= minix_stage1_5
 MINIX_STAGE1_5_EXEC	= minix_stage1_5.exec
 
-MINIX_STAGE1_5_ASMOBJS	= minix_stage1_5_exec-asm.o \
-			  minix_stage1_5_exec-start.o
+MINIX_STAGE1_5_ASMOBJS	= minix_stage1_5_exec-start.o \
+			  minix_stage1_5_exec-asm.o
 
 MINIX_STAGE1_5_OBJS	= minix_stage1_5_exec-bios.o \
 			  minix_stage1_5_exec-char_io.o \
 			  minix_stage1_5_exec-common.o \
 			  minix_stage1_5_exec-disk_io.o \
 			  minix_stage1_5_exec-fsys_minix.o \
+			  minix_stage1_5_exec-moddiv.o \
 			  minix_stage1_5_exec-stage1_5.o
 
 $(MINIX_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -366,6 +378,7 @@ PRE_STAGE2_OBJS		= pre_stage2_exec-bios.o \
 			  pre_stage2_exec-common.o \
 			  pre_stage2_exec-console.o \
 			  pre_stage2_exec-disk_io.o \
+			  pre_stage2_exec-expand.o \
 			  pre_stage2_exec-fsys_ext2fs.o \
 			  pre_stage2_exec-fsys_fat.o \
 			  pre_stage2_exec-fsys_ffs.o \
@@ -375,6 +388,7 @@ PRE_STAGE2_OBJS		= pre_stage2_exec-bios.o \
 			  pre_stage2_exec-fsys_reiserfs.o \
 			  pre_stage2_exec-zfs_sha256.o \
 			  pre_stage2_exec-zfs_lzjb.o \
+			  pre_stage2_exec-zfs_lz4.o \
 			  pre_stage2_exec-zfs_fletcher.o \
 			  pre_stage2_exec-fsys_zfs.o \
 			  pre_stage2_exec-fsys_ufs.o \
@@ -385,6 +399,7 @@ PRE_STAGE2_OBJS		= pre_stage2_exec-bios.o \
 			  pre_stage2_exec-gunzip.o \
 			  pre_stage2_exec-hercules.o \
 			  pre_stage2_exec-md5.o \
+			  pre_stage2_exec-moddiv.o \
 			  pre_stage2_exec-serial.o \
 			  pre_stage2_exec-smp-imps.o \
 			  pre_stage2_exec-stage2.o \
@@ -421,14 +436,15 @@ $(PXELOADER_ASMOBJS)	:= CCASFLAGS = $(BASE_CCASFLAGS) $(STAGE2_CFLAGS)
 REISERFS_STAGE1_5_DATA  = reiserfs_stage1_5
 REISERFS_STAGE1_5_EXEC  = reiserfs_stage1_5.exec
 
-REISERFS_STAGE1_5_ASMOBJS = reiserfs_stage1_5_exec-asm.o \
-			    reiserfs_stage1_5_exec-start.o
+REISERFS_STAGE1_5_ASMOBJS = reiserfs_stage1_5_exec-start.o \
+			    reiserfs_stage1_5_exec-asm.o
 
 REISERFS_STAGE1_5_OBJS  = reiserfs_stage1_5_exec-bios.o \
 			  reiserfs_stage1_5_exec-char_io.o \
 			  reiserfs_stage1_5_exec-common.o \
 			  reiserfs_stage1_5_exec-disk_io.o \
 			  reiserfs_stage1_5_exec-fsys_reiserfs.o \
+			  reiserfs_stage1_5_exec-moddiv.o \
 			  reiserfs_stage1_5_exec-stage1_5.o
  
 $(REISERFS_STAGE1_5_EXEC) := LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -476,14 +492,15 @@ $(START_ELTORITO_ASMOBJS) := CCASFLAGS = $(BASE_CCASFLAGS) $(STAGE2_CFLAGS)
 UFS2_STAGE1_5_DATA	= ufs2_stage1_5
 UFS2_STAGE1_5_EXEC	= ufs2_stage1_5.exec
 
-UFS2_STAGE1_5_ASMOBJS	= ufs2_stage1_5_exec-asm.o \
-			  ufs2_stage1_5_exec-start.o
+UFS2_STAGE1_5_ASMOBJS	= ufs2_stage1_5_exec-start.o \
+			  ufs2_stage1_5_exec-asm.o
 
 UFS2_STAGE1_5_OBJS	= ufs2_stage1_5_exec-bios.o \
 			  ufs2_stage1_5_exec-char_io.o \
 			  ufs2_stage1_5_exec-common.o \
 			  ufs2_stage1_5_exec-disk_io.o \
 			  ufs2_stage1_5_exec-fsys_ufs2.o \
+			  ufs2_stage1_5_exec-moddiv.o \
 			  ufs2_stage1_5_exec-stage1_5.o
 
 $(UFS2_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -500,14 +517,15 @@ $(UFS2_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 UFS_STAGE1_5_DATA	= ufs_stage1_5
 UFS_STAGE1_5_EXEC	= ufs_stage1_5.exec
 
-UFS_STAGE1_5_ASMOBJS	= ufs_stage1_5_exec-asm.o \
-			  ufs_stage1_5_exec-start.o
+UFS_STAGE1_5_ASMOBJS	= ufs_stage1_5_exec-start.o \
+			  ufs_stage1_5_exec-asm.o
 
 UFS_STAGE1_5_OBJS	= ufs_stage1_5_exec-bios.o \
 			  ufs_stage1_5_exec-char_io.o \
 			  ufs_stage1_5_exec-common.o \
 			  ufs_stage1_5_exec-disk_io.o \
 			  ufs_stage1_5_exec-fsys_ufs.o \
+			  ufs_stage1_5_exec-moddiv.o \
 			  ufs_stage1_5_exec-stage1_5.o
 
 $(UFS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -524,8 +542,8 @@ $(UFS_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 ZFS_STAGE1_5_DATA	= zfs_stage1_5
 ZFS_STAGE1_5_EXEC	= zfs_stage1_5.exec
 
-ZFS_STAGE1_5_ASMOBJS	= zfs_stage1_5_exec-asm.o \
-			  zfs_stage1_5_exec-start.o
+ZFS_STAGE1_5_ASMOBJS	= zfs_stage1_5_exec-start.o \
+			  zfs_stage1_5_exec-asm.o
 
 ZFS_STAGE1_5_OBJS	= zfs_stage1_5_exec-bios.o \
 			  zfs_stage1_5_exec-char_io.o \
@@ -533,8 +551,10 @@ ZFS_STAGE1_5_OBJS	= zfs_stage1_5_exec-bios.o \
 			  zfs_stage1_5_exec-disk_io.o \
 			  zfs_stage1_5_exec-zfs_sha256.o \
 			  zfs_stage1_5_exec-zfs_lzjb.o \
+			  zfs_stage1_5_exec-zfs_lz4.o \
 			  zfs_stage1_5_exec-zfs_fletcher.o \
 			  zfs_stage1_5_exec-fsys_zfs.o \
+			  zfs_stage1_5_exec-moddiv.o \
 			  zfs_stage1_5_exec-stage1_5.o
 
 $(ZFS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -551,14 +571,15 @@ $(ZFS_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 VSTAFS_STAGE1_5_DATA	= vstafs_stage1_5
 VSTAFS_STAGE1_5_EXEC	= vstafs_stage1_5.exec
 
-VSTAFS_STAGE1_5_ASMOBJS	= vstafs_stage1_5_exec-asm.o \
-			  vstafs_stage1_5_exec-start.o
+VSTAFS_STAGE1_5_ASMOBJS	= vstafs_stage1_5_exec-start.o \
+			  vstafs_stage1_5_exec-asm.o
 
 VSTAFS_STAGE1_5_OBJS	= vstafs_stage1_5_exec-bios.o \
 			  vstafs_stage1_5_exec-char_io.o \
 			  vstafs_stage1_5_exec-common.o \
 			  vstafs_stage1_5_exec-disk_io.o \
 			  vstafs_stage1_5_exec-fsys_vstafs.o \
+			  vstafs_stage1_5_exec-moddiv.o \
 			  vstafs_stage1_5_exec-stage1_5.o
 
 $(VSTAFS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -575,14 +596,15 @@ $(VSTAFS_STAGE1_5_OBJS)	:= CFLAGS = $(BASE_CFLAGS) $(STAGE1_5_CFLAGS) \
 XFS_STAGE1_5_DATA	= xfs_stage1_5
 XFS_STAGE1_5_EXEC	= xfs_stage1_5.exec
 
-XFS_STAGE1_5_ASMOBJS	= xfs_stage1_5_exec-asm.o \
-			  xfs_stage1_5_exec-start.o
+XFS_STAGE1_5_ASMOBJS	= xfs_stage1_5_exec-start.o \
+			  xfs_stage1_5_exec-asm.o
 
 XFS_STAGE1_5_OBJS	= xfs_stage1_5_exec-bios.o \
 			  xfs_stage1_5_exec-char_io.o \
 			  xfs_stage1_5_exec-common.o \
 			  xfs_stage1_5_exec-disk_io.o \
 			  xfs_stage1_5_exec-fsys_xfs.o \
+			  xfs_stage1_5_exec-moddiv.o \
 			  xfs_stage1_5_exec-stage1_5.o
 
 $(XFS_STAGE1_5_EXEC)	:= LDFLAGS = $(BASE_LDFLAGS) $(STAGE1_5_LINK)
@@ -604,14 +626,15 @@ SRC_DIR		= $(ROOT_SRC)/stage2
 SRC_ZFSINC_DIR	= $(SRC_DIR)/zfs-include
 SRC_FILES	= Makefile.am Makefile.in apic.h apm.S asm.S bios.c boot.c \
 		  builtins.c char_io.c cmdline.c common.c console.c defs.h \
-		  dir.h disk_inode.h disk_inode_ffs.h disk_io.c fat.h \
+		  dir.h disk_inode.h disk_inode_ffs.h disk_io.c expand.c \
+		  expand.h fat.h \
 		  filesys.h freebsd.h fs.h fsys_ext2fs.c fsys_fat.c \
 		  fsys_ffs.c fsys_iso9660.c fsys_jfs.c fsys_minix.c \
-		  zfs_sha256.c zfs_lzjb.c zfs_fletcher.c fsys_zfs.c \
+		  zfs_sha256.c zfs_lzjb.c zfs_lz4.c zfs_fletcher.c fsys_zfs.c \
 		  fsys_reiserfs.c fsys_ufs.c fsys_ufs2.c fsys_vstafs.c \
 		  fsys_xfs.c graphics.c graphics.h gunzip.c hercules.c \
 		  hercules.h i386-elf.h imgact_aout.h iso9660.h jfs.h \
-		  mb_header.h mb_info.h md5.c md5.h nbi.h nbloader.S \
+		  mb_header.h mb_info.h md5.c md5.h moddiv.c nbi.h nbloader.S \
 		  pc_slice.h pxeloader.S serial.c serial.h setjmp.S shared.h \
 		  size_test smp-imps.c smp-imps.h stage1_5.c stage2.c \
 		  start.S start_eltorito.S term.h terminfo.c terminfo.h \

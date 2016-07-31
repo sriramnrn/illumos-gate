@@ -127,6 +127,12 @@ pics/%64.o: $(LIBCBASE)/../port/print/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
 
+pics/%64.o: $(LIBCBASE)/../port/regex/%.c
+	$(COMPILE.c) -DM_I18N_MB -DI18N \
+	-I$(LIBCBASE)/../port/regex \
+	-I$(LIBCBASE)/../port/gen -o $@ $<
+	$(POST_PROCESS_O)
+
 pics/%64.o: $(LIBCBASE)/../port/stdio/%.c
 	$(COMPILE.c) -o $@ $<
 	$(POST_PROCESS_O)
@@ -286,6 +292,11 @@ $(DTRACEOBJS:%=pics/%): $(SRC)/common/dtrace/$$(@F:.o=.c)
 
 $(UNICODEOBJS:%=pics/%): $(SRC)/common/unicode/$$(@F:.o=.c)
 	$(COMPILE.c) -o $@ $(SRC)/common/unicode/$(@F:.o=.c)
+	$(POST_PROCESS_O)
+
+$(CHACHAOBJS:%=pics/%): $(SRC)/common/crypto/chacha/$$(@F:.o=.c)
+	$(COMPILE.c) -I$(SRC)/common/crypto/chacha -DKEYSTREAM_ONLY \
+	    -o $@ $(SRC)/common/crypto/chacha/$(@F:.o=.c)
 	$(POST_PROCESS_O)
 
 # DTrace rules

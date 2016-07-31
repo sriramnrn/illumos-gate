@@ -67,6 +67,13 @@ $(ROOTKEYSERVDFLT) :=				FILEMODE=	444
 CPPFLAGS += -I. -I$(SRC)/lib/libnsl/include -I$(SRC)/lib/libsldap/common \
 		-D_REENTRANT
 
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-address
+CERRWARN +=	-_gcc=-Wno-unused-function
+
 LDLIBS +=	-lnsl
 chkey :=	LDLIBS += -lsldap
 keyserv :=	LDLIBS += -lmp
@@ -112,7 +119,7 @@ install: all $(DIRS) $(IBINPROG) $(ISBINPROG) $(ROOTETCDEFAULTFILES) \
 	$(ROOTMANIFEST)
 
 clean:
-	$(RM) $(OBJS)
+	$(RM) $(OBJS) $(OUTSIDE_UTIL_OBJS)
 
 lint: lint_SRCS
 

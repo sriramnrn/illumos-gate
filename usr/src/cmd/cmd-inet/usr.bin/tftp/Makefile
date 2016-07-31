@@ -20,11 +20,9 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright (c) 1989,2001 by Sun Microsystems, Inc.
 # All rights reserved.
-#
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
 
 PROG=	tftp
 OBJS=	main.o tftp.o tftpsubs.o
@@ -33,7 +31,15 @@ SRCS= $(OBJS:%.o=%.c)
 include ../../../Makefile.cmd
 include ../../Makefile.cmd-inet
 
+MANIFEST=    tftp-udp6.xml
+
+ROOTMANIFESTDIR = $(ROOTSVCNETWORK)
+
+$(ROOTMANIFEST):= FILEMODE = 0444
+
 CPPFLAGS +=	-DSYSV -DSTRNET -DBSD_COMP -I$(CMDINETCOMMONDIR)
+CERRWARN +=	-_gcc=-Wno-clobbered
+CERRWARN +=	-_gcc=-Wno-parentheses
 LDLIBS +=	-lsocket -lnsl
 
 .KEEP_STATE:
@@ -44,11 +50,13 @@ $(PROG): $(OBJS)
 	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
-install: all $(ROOTPROG)
+install: all $(ROOTPROG) $(ROOTMANIFEST)
 
 clean:
 	$(RM) $(OBJS)
 
 lint:	lint_SRCS
+
+check:		$(CHKMANIFEST)
 
 include ../../../Makefile.targ

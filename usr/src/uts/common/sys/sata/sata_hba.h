@@ -23,6 +23,9 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 #ifndef _SATA_HBA_H
 #define	_SATA_HBA_H
@@ -224,6 +227,8 @@ _NOTE(SCHEME_PROTECTS_DATA("unshared data", sata_device))
 	(SATA_DTYPE_ATAPI|0x08)			/* ATAPI disk */
 #define	SATA_DTYPE_PMULT		0x10	/* Port Multiplier */
 #define	SATA_DTYPE_UNKNOWN		0x20	/* Device attached, unkown */
+#define	SATA_DTYPE_ATAPIPROC	\
+	(SATA_DTYPE_ATAPI|0x80)			/* ATAPI processor */
 
 
 /*
@@ -746,6 +751,7 @@ sata_pkt_t *sata_get_rdwr_pmult_pkt(dev_info_t *, sata_device_t *, uint8_t,
 void	sata_free_rdwr_pmult_pkt(sata_pkt_t *);
 void	sata_register_pmult(dev_info_t *, sata_device_t *, sata_pmult_gscr_t *);
 void	sata_free_dma_resources(sata_pkt_t *);
+void	sata_split_model(char *, char **, char **);
 
 /*
  * SATA trace ring buffer constants

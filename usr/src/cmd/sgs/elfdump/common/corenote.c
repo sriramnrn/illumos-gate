@@ -23,7 +23,10 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
+/*
+ * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ */
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -430,6 +433,7 @@ dump_auxv(note_state_t *state, const char *title)
 	const sl_auxv_layout_t	*layout = state->ns_arch->auxv;
 	union {
 		Conv_cap_val_hw1_buf_t		hw1;
+		Conv_cap_val_hw2_buf_t		hw2;
 		Conv_cnote_auxv_af_buf_t	auxv_af;
 		Conv_ehdr_flags_buf_t		ehdr_flags;
 		Conv_inv_buf_t			inv;
@@ -522,6 +526,28 @@ dump_auxv(note_state_t *state, const char *title)
 				vstr = NULL;
 			num_fmt = SL_FMT_NUM_HEX;
 			break;
+		case AT_SUN_HWCAP2:
+			w = extract_as_word(state, &layout->a_val);
+			vstr = conv_cap_val_hw2(w, state->ns_mach,
+			    0, &conv_buf.hw2);
+			/*
+			 * conv_cap_val_hw2() produces output like:
+			 *
+			 *	0xfff [ flg1 flg2 0xff]
+			 *
+			 * where the first hex value is the complete value,
+			 * and the second is the leftover bits. We only
+			 * want the part in brackets, and failing that,
+			 * would rather fall back to formatting the full
+			 * value ourselves.
+			 */
+			while ((*vstr != '\0') && (*vstr != '['))
+				vstr++;
+			if (*vstr != '[')
+				vstr = NULL;
+			num_fmt = SL_FMT_NUM_HEX;
+			break;
+
 
 
 		case AT_SUN_AUXFLAGS:
@@ -833,9 +859,9 @@ dump_prgregset(note_state_t *state, const char *title)
 	Conv_inv_buf_t	inv_buf1, inv_buf2;
 	Word		w;
 
+	fdesc1 = fdesc2 = state->ns_arch->prgregset->elt0;
 	indent_enter(state, title, &fdesc1);
 
-	fdesc1 = fdesc2 = state->ns_arch->prgregset->elt0;
 	for (w = 0; w < fdesc1.slf_nelts; ) {
 		if (w == (fdesc1.slf_nelts - 1)) {
 			/* One last register is left */
@@ -901,12 +927,12 @@ dump_lwpstatus(note_state_t *state, const char *title)
 		w = extract_as_word(state, &layout->pr_why);
 		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHY),
 		    conv_cnote_pr_why(w, 0, &conv_buf.inv));
-	}
 
-	if (data_present(state, &layout->pr_what)) {
-		w2 = extract_as_word(state, &layout->pr_what);
-		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
-		    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+		if (data_present(state, &layout->pr_what)) {
+			w2 = extract_as_word(state, &layout->pr_what);
+			print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
+			    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+		}
 	}
 
 	if (data_present(state, &layout->pr_cursig)) {
@@ -1106,12 +1132,13 @@ dump_prstatus(note_state_t *state, const char *title)
 		w = extract_as_word(state, &layout->pr_why);
 		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHY),
 		    conv_cnote_pr_why(w, 0, &conv_buf.inv));
-	}
 
-	if (data_present(state, &layout->pr_what)) {
-		w2 = extract_as_word(state, &layout->pr_what);
-		print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
-		    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+
+		if (data_present(state, &layout->pr_what)) {
+			w2 = extract_as_word(state, &layout->pr_what);
+			print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_WHAT),
+			    conv_cnote_pr_what(w, w2, 0, &conv_buf.inv));
+		}
 	}
 
 	PRINT_SUBTYPE(MSG_ORIG(MSG_CNOTE_T_PR_INFO), pr_info, dump_siginfo);
@@ -1412,7 +1439,6 @@ dump_psinfo(note_state_t *state, const char *title)
 	indent_exit(state);
 }
 
-
 /*
  * Output information from prpsinfo_t structure.
  */
@@ -1545,6 +1571,45 @@ dump_prpriv(note_state_t *state, const char *title)
 	indent_exit(state);
 }
 
+static void
+dump_prfdinfo(note_state_t *state, const char *title)
+{
+	const sl_prfdinfo_layout_t *layout = state->ns_arch->prfdinfo;
+	char buf[1024];
+	uint32_t fileflags, mode;
+
+	indent_enter(state, title, &layout->pr_fd);
+
+	PRINT_DEC(MSG_ORIG(MSG_CNOTE_T_PR_FD), pr_fd);
+	mode = extract_as_word(state, &layout->pr_mode);
+
+	print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_MODE),
+	    conv_cnote_filemode(mode, 0, buf, sizeof (buf)));
+
+	PRINT_DEC_2UP(MSG_ORIG(MSG_CNOTE_T_PR_UID), pr_uid,
+	    MSG_ORIG(MSG_CNOTE_T_PR_GID), pr_gid);
+
+	PRINT_DEC_2UP(MSG_ORIG(MSG_CNOTE_T_PR_MAJOR), pr_major,
+	    MSG_ORIG(MSG_CNOTE_T_PR_MINOR), pr_minor);
+	PRINT_DEC_2UP(MSG_ORIG(MSG_CNOTE_T_PR_RMAJOR), pr_rmajor,
+	    MSG_ORIG(MSG_CNOTE_T_PR_RMINOR), pr_rminor);
+
+	PRINT_DEC(MSG_ORIG(MSG_CNOTE_T_PR_INO), pr_ino);
+
+	PRINT_DEC_2UP(MSG_ORIG(MSG_CNOTE_T_PR_SIZE), pr_size,
+	    MSG_ORIG(MSG_CNOTE_T_PR_OFFSET), pr_offset);
+
+	fileflags = extract_as_word(state, &layout->pr_fileflags);
+
+	print_str(state, MSG_ORIG(MSG_CNOTE_T_PR_FILEFLAGS),
+	    conv_cnote_fileflags(fileflags, 0, buf, sizeof (buf)));
+
+	PRINT_DEC(MSG_ORIG(MSG_CNOTE_T_PR_FDFLAGS), pr_fdflags);
+
+	PRINT_STRBUF(MSG_ORIG(MSG_CNOTE_T_PR_PATH), pr_path);
+
+	indent_exit(state);
+}
 
 /*
  * Output information from priv_impl_info_t structure.
@@ -1776,6 +1841,21 @@ corenote(Half mach, int do_swap, Word type,
 	case NT_ZONENAME:		/* string from getzonenamebyid(3C) */
 		dbg_print(0, MSG_ORIG(MSG_NOTE_DESC));
 		dbg_print(0, MSG_ORIG(MSG_FMT_INDENT), safe_str(desc, descsz));
+		return (CORENOTE_R_OK);
+
+
+	case NT_FDINFO:
+		state.ns_vcol = 22;
+		state.ns_t2col = 41;
+		state.ns_v2col = 54;
+		dump_prfdinfo(&state, MSG_ORIG(MSG_CNOTE_DESC_PRFDINFO_T));
+		return (CORENOTE_R_OK);
+
+	case NT_SPYMASTER:
+		state.ns_vcol = 25;
+		state.ns_t2col = 45;
+		state.ns_v2col = 58;
+		dump_psinfo(&state, MSG_ORIG(MSG_CNOTE_DESC_PSINFO_T));
 		return (CORENOTE_R_OK);
 	}
 

@@ -21,6 +21,7 @@
 # uts/intel/Makefile
 #
 # Copyright (c) 1999, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
 #	This makefile drives the production of all implementation architecture
 #	independent modules for Intel processors.
@@ -33,23 +34,12 @@ LINT_KMODS_X1	= $(LINT_KMODS:nsmb=)
 LINT_KMODS_X2	= $(LINT_KMODS_X1:smbfs=)
 LINT_KMODLIBS	= $(LINT_KMODS_X2:e1000g=)
 LINT_LIBS	= $(LINT_LIB) $(GEN_LINT_LIB) \
-		  $(LINT_KMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
-		  $(CLOSED_LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln) 
-
-# EXPORT DELETE START
-$(CLOSED_BUILD)LINT_LIBS	+= $(SVVS_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln)
-$(CLOSED_BUILD)LINT_CLOSED_XMOD4	= $(CLOSED_XMODS:bnx=)
-$(CLOSED_BUILD)LINT_CLOSED_XMOD3	= $(LINT_CLOSED_XMOD4:bnxe=)
-$(CLOSED_BUILD)LINT_CLOSED_XMOD2	= $(LINT_CLOSED_XMOD3:lsimega=)
-$(CLOSED_BUILD)LINT_CLOSED_XMOD1	= $(LINT_CLOSED_XMOD2:adpu320=)
-$(CLOSED_BUILD)LINT_LIBS	+= $(LINT_XMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln)
+		  $(LINT_KMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln)
 
 #
 # dprov is delivered in the SUNWcryptoint package.
 #
 DRV_KMODS	+= dprov
-
-# EXPORT DELETE END
 
 #
 #
@@ -58,7 +48,7 @@ def.prereq	:=	TARGET= def
 all		:=	TARGET= all
 all.prereq	:=	TARGET= all
 install		:=	TARGET= install
-install.prereq	:=	TARGET= all
+install.prereq	:=	TARGET= install
 clean		:=	TARGET= clean
 clobber		:=	TARGET= clobber
 lint		:=	TARGET= lint
@@ -73,12 +63,11 @@ install_h.prereq	:=	TARGET= install_h
 
 .KEEP_STATE:
 
-.PARALLEL:	$(PARALLEL_KMODS) $(CLOSED_KMODS) $(SVVS) $(XMODS) \
-		$(CLOSED_XMODS) config $(LINT_DEPS)
+.PARALLEL:	$(PARALLEL_KMODS) $(XMODS) config $(LINT_DEPS)
 
-def all install clean clobber modlist: $(KMODS) $(CLOSED_KMODS) \
-	$(SVVS) $(XMODS) $(CLOSED_XMODS) config
+def all install clean clobber modlist: $(KMODS) $(XMODS) config
 
+clobber: clobber.targ
 
 #
 # Privilege constants
@@ -90,7 +79,9 @@ def all install clean clobber modlist: $(KMODS) $(CLOSED_KMODS) \
 PRIVS_C = $(SRC)/uts/common/os/priv_const.c
 
 $(PRIVS_C): $(PRIVS_AWK) $(PRIVS_DEF)
-	$(NAWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
+	$(AWK) -f $(PRIVS_AWK) < $(PRIVS_DEF) cfile=$@
+
+CLOBBERFILES += $(PRIVS_C)
 
 #
 # Prerequisites
@@ -132,26 +123,14 @@ lint.prereq: FRC
 
 genunix: $(PRIVS_C)
 
-modlintlib clean.lint: $(LINT_KMODS) $(CLOSED_LINT_KMODS) $(SVVS) \
-	$(XMODS) $(CLOSED_XMODS)
+modlintlib clean.lint: $(LINT_KMODS) $(XMODS)
 
 $(KMODS) $(SUBDIRS) config:	FRC
 	@cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
 
-$(CLOSED_KMODS):	FRC
-	cd $(CLOSED)/uts/intel/$@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
-
 $(XMODS):	FRC
 	@if [ -f $@/Makefile  ]; then \
 		cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET); \
-	else \
-		true; \
-	fi
-
-$(SVVS) $(CLOSED_XMODS):	FRC
-	@if [ -f $(CLOSED)/uts/intel/$@/Makefile  ]; then \
-		cd $(CLOSED)/uts/intel/$@; pwd; \
-		    $(MAKE) $(NO_STATE) $(TARGET); \
 	else \
 		true; \
 	fi
@@ -181,16 +160,5 @@ globallint:
 	@-$(LINT) $(LINTFLAGS) $(LINT_LIBS) 2>&1 | $(LGREP.intel) | $(LGREP.2)
 
 lint:	modlintlib .WAIT $(LINT_DEPS)
-
-# EXPORT DELETE START
-
-EXPORT_SRC:
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-	    < Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-
-# EXPORT DELETE END
 
 include ../Makefile.targ

@@ -20,8 +20,8 @@
  */
 
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -141,14 +141,12 @@
 #include <sys/sdt.h>
 #include <sys/spl.h>
 
-static int smb_legacy_dispatch_stats_update(kstat_t *, int);
 static int is_andx_com(unsigned char);
 static int smbsr_check_result(struct smb_request *, int, int);
+static void smb1_tq_work(void *);
 
-static kstat_t *smb_legacy_dispatch_ksp = NULL;
-static kmutex_t smb_legacy_dispatch_ksmtx;
-
-static smb_disp_entry_t	smb_disp_table[SMB_COM_NUM] = {
+static const smb_disp_entry_t const
+smb_disp_table[SMB_COM_NUM] = {
 	{ "SmbCreateDirectory", SMB_SDT_OPS(create_directory),  /* 0x00 000 */
 	    0x00, PC_NETWORK_PROGRAM_1_0 },
 	{ "SmbDeleteDirectory", SMB_SDT_OPS(delete_directory),	/* 0x01 001 */
@@ -184,8 +182,8 @@ static smb_disp_entry_t	smb_disp_table[SMB_COM_NUM] = {
 	{ "SmbCheckDirectory", SMB_SDT_OPS(check_directory),	/* 0x10 016 */
 	    0x10, PC_NETWORK_PROGRAM_1_0 },
 	{ "SmbProcessExit", SMB_SDT_OPS(process_exit),		/* 0x11 017 */
-	    0x11, PC_NETWORK_PROGRAM_1_0, SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID,
-	    0, 0, { 0 } },
+	    0x11, PC_NETWORK_PROGRAM_1_0,
+	    SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID },
 	{ "SmbSeek", SMB_SDT_OPS(seek),				/* 0x12 018 */
 	    0x12, PC_NETWORK_PROGRAM_1_0 },
 	{ "SmbLockAndRead", SMB_SDT_OPS(lock_and_read),		/* 0x13 019 */
@@ -197,12 +195,10 @@ static smb_disp_entry_t	smb_disp_table[SMB_COM_NUM] = {
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x17, 0 },		/* 0x17 023 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x18, 0 },		/* 0x18 024 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x19, 0 },		/* 0x19 025 */
-	{ "SmbReadRaw", SMB_SDT_OPS(read_raw),			/* 0x1A 026 */
-	    0x1A, LANMAN1_0 },
+	{ "SmbReadRaw", SMB_SDT_OPS(invalid), 0x1A, 0 },	/* 0x1A 026 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x1B, 0 },		/* 0x1B 027 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x1C, 0 },		/* 0x1C 028 */
-	{ "SmbWriteRaw", SMB_SDT_OPS(write_raw),		/* 0x1D 029 */
-	    0x1D, LANMAN1_0 },
+	{ "SmbWriteRaw", SMB_SDT_OPS(invalid), 0x1D, 0 },	/* 0x1D 029 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x1E, 0 },		/* 0x1E 030 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x1F, 0 },		/* 0x1F 031 */
 	{ "Invalid", SMB_SDT_OPS(invalid), 0x20, 0 },		/* 0x20 032 */
@@ -307,11 +303,16 @@ static smb_disp_entry_t	smb_disp_table[SMB_COM_NUM] = {
 	{ "SmbTreeConnect", SMB_SDT_OPS(tree_connect),		/* 0x70 112 */
 	    0x70, PC_NETWORK_PROGRAM_1_0, SDDF_SUPPRESS_TID },
 	{ "SmbTreeDisconnect", SMB_SDT_OPS(tree_disconnect),	/* 0x71 113 */
-	    0x71, PC_NETWORK_PROGRAM_1_0, SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID,
-	    NULL },
-	{ "SmbNegotiate", SMB_SDT_OPS(negotiate),		/* 0x72 114 */
-	    0x72, PC_NETWORK_PROGRAM_1_0, SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID,
-	    NULL },
+	    0x71, PC_NETWORK_PROGRAM_1_0,
+	    SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID },
+	/*
+	 * NB: Negotiate gets special handling via
+	 * smb_initial_request_handler.  After that,
+	 * another Negotiate is an invalid request.
+	 */
+	{ "SmbNegotiate", SMB_SDT_OPS(invalid),			/* 0x72 114 */
+	    0x72, PC_NETWORK_PROGRAM_1_0,
+	    SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID },
 	{ "SmbSessionSetupX", SMB_SDT_OPS(session_setup_andx),	/* 0x73 115 */
 	    0x73, LANMAN1_0, SDDF_SUPPRESS_TID | SDDF_SUPPRESS_UID },
 	{ "SmbLogoffX", SMB_SDT_OPS(logoff_andx),		/* 0x74 116 */
@@ -506,28 +507,115 @@ smbsr_cleanup(smb_request_t *sr)
 		sr->sr_state = SMB_REQ_STATE_CLEANED_UP;
 	mutex_exit(&sr->sr_mutex);
 }
+
 /*
- * smb_dispatch_request
+ * This is the SMB1 handler for new smb requests, called from
+ * smb_session_reader after SMB negotiate is done.  For most SMB
+ * requests, we just enqueue them for the smb_session_worker to
+ * execute via the task queue, so they can block for resources
+ * without stopping the reader thread.  A few protocol messages
+ * are special cases and are handled directly here in the reader
+ * thread so they don't wait for taskq scheduling.  Later, a few
+ * MORE things could be handled here, such as REPLY messages
+ * (oplock break reply) and things like "NT_cancel".
  *
- * Returns:
- *
- *    B_TRUE	The caller must free the smb request passed in.
- *    B_FALSE	The caller must not access the smb request passed in. It has
- *		been kept in an internal queue and may have already been freed.
+ * This function must either enqueue the new request for
+ * execution via the task queue, or execute it directly
+ * and then free it.  If this returns non-zero, the caller
+ * will drop the session.
  */
-boolean_t
-smb_dispatch_request(struct smb_request *sr)
+int
+smb1sr_newrq(smb_request_t *sr)
+{
+	uint32_t magic;
+
+	magic = SMB_READ_PROTOCOL(sr->sr_request_buf);
+	if (magic != SMB_PROTOCOL_MAGIC) {
+		smb_request_free(sr);
+		return (EPROTO);
+	}
+
+	if (sr->session->signing.flags & SMB_SIGNING_ENABLED) {
+		if (SMB_IS_NT_CANCEL(sr)) {
+			sr->session->signing.seqnum++;
+			sr->sr_seqnum = sr->session->signing.seqnum + 1;
+			sr->reply_seqnum = 0;
+		} else {
+			sr->session->signing.seqnum += 2;
+			sr->sr_seqnum = sr->session->signing.seqnum;
+			sr->reply_seqnum = sr->sr_seqnum + 1;
+		}
+	}
+
+	/*
+	 * Submit the request to the task queue, which calls
+	 * smb1_tq_work when the workload permits.
+	 */
+	sr->sr_time_submitted = gethrtime();
+	sr->sr_state = SMB_REQ_STATE_SUBMITTED;
+	smb_srqueue_waitq_enter(sr->session->s_srqueue);
+	(void) taskq_dispatch(sr->sr_server->sv_worker_pool,
+	    smb1_tq_work, sr, TQ_SLEEP);
+
+	return (0);
+}
+
+static void
+smb1_tq_work(void *arg)
+{
+	smb_request_t	*sr;
+	smb_srqueue_t	*srq;
+
+	sr = (smb_request_t *)arg;
+	SMB_REQ_VALID(sr);
+
+	srq = sr->session->s_srqueue;
+	smb_srqueue_waitq_to_runq(srq);
+	sr->sr_worker = curthread;
+	sr->sr_time_active = gethrtime();
+
+	mutex_enter(&sr->sr_mutex);
+	switch (sr->sr_state) {
+	case SMB_REQ_STATE_SUBMITTED:
+		mutex_exit(&sr->sr_mutex);
+		smb1sr_work(sr);
+		sr = NULL;
+		break;
+
+	default:
+		/*
+		 * SMB1 requests that have been cancelled
+		 * have no reply.  Just free it.
+		 */
+		sr->sr_state = SMB_REQ_STATE_COMPLETED;
+		mutex_exit(&sr->sr_mutex);
+		smb_request_free(sr);
+		break;
+	}
+	smb_srqueue_runq_exit(srq);
+}
+
+/*
+ * smb1sr_work
+ *
+ * In most cases, this should free the request before return.
+ * Exceptions are when a dispatch function returns SDRC_SR_KEPT.
+ */
+void
+smb1sr_work(struct smb_request *sr)
 {
 	smb_sdrc_t		sdrc;
-	smb_disp_entry_t	*sdd;
+	const smb_disp_entry_t	*sdd;
+	smb_disp_stats_t	*sds;
 	boolean_t		disconnect = B_FALSE;
 	smb_session_t		*session;
-	uint32_t		capabilities;
+	smb_server_t		*server;
 	uint32_t		byte_count;
 	uint32_t		max_bytes;
+	uint16_t		pid_hi, pid_lo;
 
 	session = sr->session;
-	capabilities = session->capabilities;
+	server = session->s_server;
 
 	ASSERT(sr->tid_tree == 0);
 	ASSERT(sr->uid_user == 0);
@@ -535,10 +623,12 @@ smb_dispatch_request(struct smb_request *sr)
 	sr->smb_fid = (uint16_t)-1;
 
 	/* temporary until we identify a user */
-	sr->user_cr = kcred;
+	sr->user_cr = zone_kcred();
 	sr->orig_request_hdr = sr->command.chain_offset;
 
-	/* If this connection is shutting down just kill request */
+	/*
+	 * Decode the SMB header.
+	 */
 	if (smb_mbc_decodef(&sr->command, SMB_HEADER_ED_FMT,
 	    &sr->smb_com,
 	    &sr->smb_rcls,
@@ -546,15 +636,16 @@ smb_dispatch_request(struct smb_request *sr)
 	    &sr->smb_err,
 	    &sr->smb_flg,
 	    &sr->smb_flg2,
-	    &sr->smb_pid_high,
+	    &pid_hi,
 	    sr->smb_sig,
 	    &sr->smb_tid,
-	    &sr->smb_pid,
+	    &pid_lo,
 	    &sr->smb_uid,
 	    &sr->smb_mid) != 0) {
 		disconnect = B_TRUE;
 		goto drop_connection;
 	}
+	sr->smb_pid = (pid_hi << 16) | pid_lo;
 
 	/*
 	 * The reply "header" is filled in now even though it will,
@@ -579,20 +670,17 @@ smb_dispatch_request(struct smb_request *sr)
 	    sr->smb_err,
 	    sr->smb_flg,
 	    sr->smb_flg2,
-	    sr->smb_pid_high,
+	    pid_hi,
 	    sr->smb_sig,
 	    sr->smb_tid,
-	    sr->smb_pid,
+	    pid_lo,
 	    sr->smb_uid,
 	    sr->smb_mid);
 	sr->first_smb_com = sr->smb_com;
 
-	/*
-	 * Verify SMB signature if signing is enabled, dialect is NT LM 0.12,
-	 * signing was negotiated and authentication has occurred.
-	 */
-	if (session->signing.flags & SMB_SIGNING_ENABLED) {
-		if (smb_sign_check_request(sr) != 0) {
+	if ((session->signing.flags & SMB_SIGNING_CHECK) != 0) {
+		if ((sr->smb_flg2 & SMB_FLAGS2_SMB_SECURITY_SIGNATURE) == 0 ||
+		    smb_sign_check_request(sr) != 0) {
 			smbsr_error(sr, NT_STATUS_ACCESS_DENIED,
 			    ERRDOS, ERROR_ACCESS_DENIED);
 			disconnect = B_TRUE;
@@ -603,6 +691,7 @@ smb_dispatch_request(struct smb_request *sr)
 andx_more:
 	sdd = &smb_disp_table[sr->smb_com];
 	ASSERT(sdd->sdt_function);
+	sds = &server->sv_disp_stats1[sr->smb_com];
 
 	if (smb_mbc_decodef(&sr->command, "b", &sr->smb_wct) != 0) {
 		disconnect = B_TRUE;
@@ -617,7 +706,7 @@ andx_more:
 		goto report_error;
 	}
 
-	atomic_add_64(&sdd->sdt_rxb,
+	atomic_add_64(&sds->sdt_rxb,
 	    (int64_t)(sr->smb_wct * 2 + sr->smb_bcc + 1));
 	sr->sr_txb = sr->reply.chain_offset;
 
@@ -627,11 +716,8 @@ andx_more:
 	 * large reads/write and bcc is only 16-bits.
 	 */
 	max_bytes = sr->command.max_bytes - sr->command.chain_offset;
-	if (((sr->smb_com == SMB_COM_READ_ANDX) &&
-	    (capabilities & CAP_LARGE_READX)) ||
-	    ((sr->smb_com == SMB_COM_WRITE_ANDX) &&
-	    (capabilities & CAP_LARGE_WRITEX))) {
-		/* May be > BCC */
+	if (sr->smb_com == SMB_COM_WRITE_ANDX) {
+		/* Allow > BCC */
 		byte_count = max_bytes;
 	} else if (max_bytes < (uint32_t)sr->smb_bcc) {
 		/* BCC is bogus.  Will fail later. */
@@ -694,33 +780,15 @@ andx_more:
 		}
 
 		sr->user_cr = smb_user_getcred(sr->uid_user);
-
-		if (!(sdd->sdt_flags & SDDF_SUPPRESS_TID) &&
-		    (sr->tid_tree == NULL)) {
-			sr->tid_tree = smb_user_lookup_tree(
-			    sr->uid_user, sr->smb_tid);
-			if (sr->tid_tree == NULL) {
-				smbsr_error(sr, 0, ERRSRV, ERRinvnid);
-				smbsr_cleanup(sr);
-				goto report_error;
-			}
+	}
+	if (!(sdd->sdt_flags & SDDF_SUPPRESS_TID) && (sr->tid_tree == NULL)) {
+		sr->tid_tree = smb_session_lookup_tree(session, sr->smb_tid);
+		if (sr->tid_tree == NULL) {
+			smbsr_error(sr, 0, ERRSRV, ERRinvnid);
+			smbsr_cleanup(sr);
+			goto report_error;
 		}
 	}
-
-	/*
-	 * If the command is not a read raw request we can set the
-	 * state of the session back to SMB_SESSION_STATE_NEGOTIATED
-	 * (if the current state is SMB_SESSION_STATE_OPLOCK_BREAKING).
-	 * Otherwise we let the read raw handler to deal with it.
-	 */
-	smb_rwx_rwenter(&session->s_lock, RW_READER);
-	if ((session->s_state == SMB_SESSION_STATE_OPLOCK_BREAKING) &&
-	    (sr->smb_com != SMB_COM_READ_RAW)) {
-		(void) smb_rwx_rwupgrade(&session->s_lock);
-		if (session->s_state == SMB_SESSION_STATE_OPLOCK_BREAKING)
-			session->s_state = SMB_SESSION_STATE_NEGOTIATED;
-	}
-	smb_rwx_rwexit(&session->s_lock);
 
 	sr->sr_time_start = gethrtime();
 	if ((sdrc = (*sdd->sdt_pre_op)(sr)) == SDRC_SUCCESS)
@@ -730,26 +798,10 @@ andx_more:
 		(*sdd->sdt_post_op)(sr);
 		smbsr_cleanup(sr);
 	}
-	smb_latency_add_sample(&sdd->sdt_lat, gethrtime() - sr->sr_time_start);
+	smb_latency_add_sample(&sds->sdt_lat, gethrtime() - sr->sr_time_start);
 
-	atomic_add_64(&sdd->sdt_txb,
+	atomic_add_64(&sds->sdt_txb,
 	    (int64_t)(sr->reply.chain_offset - sr->sr_txb));
-
-	if (sdrc != SDRC_SUCCESS) {
-		/*
-		 * Handle errors from raw write.
-		 */
-		smb_rwx_rwenter(&session->s_lock, RW_WRITER);
-		if (session->s_state == SMB_SESSION_STATE_WRITE_RAW_ACTIVE) {
-			/*
-			 * Set state so that the netbios session
-			 * daemon will start accepting data again.
-			 */
-			session->s_write_raw_status = 0;
-			session->s_state = SMB_SESSION_STATE_NEGOTIATED;
-		}
-		smb_rwx_rwexit(&session->s_lock);
-	}
 
 	switch (sdrc) {
 	case SDRC_SUCCESS:
@@ -760,10 +812,13 @@ andx_more:
 		goto drop_connection;
 
 	case SDRC_NO_REPLY:
-		return (B_TRUE);
+		/* will free sr */
+		goto out;
 
 	case SDRC_SR_KEPT:
-		return (B_FALSE);
+		/* Do NOT free sr */
+		sr = NULL;
+		goto out;
 
 	case SDRC_ERROR:
 		goto report_error;
@@ -820,7 +875,13 @@ drop_connection:
 		smb_rwx_rwexit(&session->s_lock);
 	}
 
-	return (B_TRUE);
+out:
+	if (sr != NULL) {
+		mutex_enter(&sr->sr_mutex);
+		sr->sr_state = SMB_REQ_STATE_COMPLETED;
+		mutex_exit(&sr->sr_mutex);
+		smb_request_free(sr);
+	}
 }
 
 int
@@ -830,7 +891,8 @@ smbsr_encode_empty_result(struct smb_request *sr)
 }
 
 int
-smbsr_encode_result(struct smb_request *sr, int wct, int bcc, char *fmt, ...)
+smbsr_encode_result(struct smb_request *sr, int wct, int bcc,
+    const char *fmt, ...)
 {
 	va_list ap;
 
@@ -906,7 +968,7 @@ smbsr_check_result(struct smb_request *sr, int wct, int bcc)
 }
 
 int
-smbsr_decode_vwv(struct smb_request *sr, char *fmt, ...)
+smbsr_decode_vwv(struct smb_request *sr, const char *fmt, ...)
 {
 	int rc;
 	va_list ap;
@@ -921,7 +983,7 @@ smbsr_decode_vwv(struct smb_request *sr, char *fmt, ...)
 }
 
 int
-smbsr_decode_data(struct smb_request *sr, char *fmt, ...)
+smbsr_decode_data(struct smb_request *sr, const char *fmt, ...)
 {
 	int rc;
 	va_list ap;
@@ -944,10 +1006,14 @@ smbsr_decode_data_avail(smb_request_t *sr)
 void
 smbsr_send_reply(smb_request_t *sr)
 {
+	uint16_t	pid_hi, pid_lo;
+
 	if (SMB_TREE_IS_CASEINSENSITIVE(sr))
 		sr->smb_flg |= SMB_FLAGS_CASE_INSENSITIVE;
 	else
 		sr->smb_flg &= ~SMB_FLAGS_CASE_INSENSITIVE;
+	pid_hi = sr->smb_pid >> 16;
+	pid_lo = (uint16_t)sr->smb_pid;
 
 	(void) smb_mbc_poke(&sr->reply, 0, SMB_HEADER_ED_FMT,
 	    sr->first_smb_com,
@@ -956,79 +1022,32 @@ smbsr_send_reply(smb_request_t *sr)
 	    sr->smb_err,
 	    sr->smb_flg | SMB_FLAGS_REPLY,
 	    sr->smb_flg2,
-	    sr->smb_pid_high,
+	    pid_hi,
 	    sr->smb_sig,
 	    sr->smb_tid,
-	    sr->smb_pid,
+	    pid_lo,
 	    sr->smb_uid,
 	    sr->smb_mid);
 
 	if (sr->session->signing.flags & SMB_SIGNING_ENABLED)
 		smb_sign_reply(sr, NULL);
 
-	smb_server_inc_req(sr->session->s_server);
 	if (smb_session_send(sr->session, 0, &sr->reply) == 0)
 		sr->reply.chain = 0;
 }
 
-/*
- * Map errno values to SMB and NT status values.
- * Note: ESRCH is a special case to handle a streams lookup failure.
- */
-static struct {
-	int errnum;
-	int errcls;
-	int errcode;
-	DWORD status32;
-} smb_errno_map[] = {
-	{ ENOSPC,	ERRDOS, ERROR_DISK_FULL, NT_STATUS_DISK_FULL },
-	{ EDQUOT,	ERRDOS, ERROR_DISK_FULL, NT_STATUS_DISK_FULL },
-	{ EPERM,	ERRSRV, ERRaccess, NT_STATUS_ACCESS_DENIED },
-	{ ENOTDIR,	ERRDOS, ERRbadpath, NT_STATUS_OBJECT_PATH_NOT_FOUND },
-	{ EISDIR,	ERRDOS, ERRbadpath, NT_STATUS_FILE_IS_A_DIRECTORY },
-	{ ENOENT,	ERRDOS, ERRbadfile, NT_STATUS_NO_SUCH_FILE },
-	{ ENOTEMPTY,	ERRDOS, ERROR_DIR_NOT_EMPTY,
-	    NT_STATUS_DIRECTORY_NOT_EMPTY },
-	{ EILSEQ,	ERRDOS, ERROR_INVALID_NAME,
-	    NT_STATUS_OBJECT_NAME_INVALID },
-	{ EACCES,	ERRDOS, ERRnoaccess, NT_STATUS_ACCESS_DENIED },
-	{ ENOMEM,	ERRDOS, ERRnomem, NT_STATUS_NO_MEMORY },
-	{ EIO,		ERRHRD, ERRgeneral, NT_STATUS_IO_DEVICE_ERROR },
-	{ EXDEV, 	ERRSRV, ERRdiffdevice, NT_STATUS_NOT_SAME_DEVICE },
-	{ EREMOTE, 	ERRSRV, ERRbadpath, NT_STATUS_PATH_NOT_COVERED},
-	{ EROFS,	ERRHRD, ERRnowrite, NT_STATUS_ACCESS_DENIED },
-	{ ESTALE,	ERRDOS, ERRbadfid, NT_STATUS_INVALID_HANDLE },
-	{ EBADF,	ERRDOS, ERRbadfid, NT_STATUS_INVALID_HANDLE },
-	{ EEXIST,	ERRDOS, ERRfilexists, NT_STATUS_OBJECT_NAME_COLLISION },
-	{ ENXIO,	ERRSRV, ERRinvdevice, NT_STATUS_BAD_DEVICE_TYPE },
-	{ ESRCH,	ERRDOS, ERROR_FILE_NOT_FOUND,
-	    NT_STATUS_OBJECT_NAME_NOT_FOUND },
-	/*
-	 * It's not clear why smb_read_common effectively returns
-	 * ERRnoaccess if a range lock prevents access and smb_write_common
-	 * effectively returns ERRaccess.  This table entry is used by
-	 * smb_read_common and preserves the behavior that was there before.
-	 */
-	{ ERANGE,	ERRDOS, ERRnoaccess, NT_STATUS_FILE_LOCK_CONFLICT }
-};
-
 void
 smbsr_map_errno(int errnum, smb_error_t *err)
 {
-	int i;
+	uint32_t status;
+	uint16_t doserr;
 
-	for (i = 0; i < sizeof (smb_errno_map)/sizeof (smb_errno_map[0]); ++i) {
-		if (smb_errno_map[i].errnum == errnum) {
-			err->status   = smb_errno_map[i].status32;
-			err->errcls   = smb_errno_map[i].errcls;
-			err->errcode  = smb_errno_map[i].errcode;
-			return;
-		}
-	}
+	status = smb_errno2status(errnum);
+	doserr = smb_status2doserr(status);
 
-	err->status   = NT_STATUS_INTERNAL_ERROR;
-	err->errcls   = ERRDOS;
-	err->errcode  = ERROR_INTERNAL_ERROR;
+	err->status  = status;
+	err->errcls  = ERRDOS;
+	err->errcode = doserr;
 }
 
 void
@@ -1044,7 +1063,26 @@ smbsr_errno(struct smb_request *sr, int errnum)
 void
 smbsr_status(smb_request_t *sr, DWORD status, uint16_t errcls, uint16_t errcode)
 {
+
 	sr->smb_error.status   = status;
+
+	/*
+	 * This function is SMB1 specific.  While adding SMB2 support,
+	 * calls to this function have been removed from common code.
+	 * In case we missed any, check for SMB2 callers here, and
+	 * vector into a wrapper function that we can watch for...
+	 * (and track down with dtrace:)
+	 */
+	if (sr->session->dialect >= SMB_VERS_2_BASE) {
+		smbsr_status_smb2(sr, status);
+		return;
+	}
+
+	if (status != 0 && errcls == 0 && errcode == 0) {
+		errcls = ERRDOS;
+		errcode = smb_status2doserr(status);
+	}
+
 	sr->smb_error.errcls   = errcls;
 	sr->smb_error.errcode  = errcode;
 
@@ -1116,8 +1154,7 @@ void
 smbsr_lookup_file(smb_request_t *sr)
 {
 	if (sr->fid_ofile == NULL)
-		sr->fid_ofile = smb_ofile_lookup_by_fid(sr->tid_tree,
-		    sr->smb_fid);
+		sr->fid_ofile = smb_ofile_lookup_by_fid(sr, sr->smb_fid);
 }
 
 static int
@@ -1139,10 +1176,6 @@ is_andx_com(unsigned char com)
 
 /*
  * Invalid command stubs.
- *
- * SmbWriteComplete is sent to acknowledge completion of raw write requests.
- * We never send raw write commands to other servers so, if we receive
- * SmbWriteComplete, we treat it as an error.
  *
  * The Read/Write Block Multiplexed (mpx) protocol is used to maximize
  * performance when reading/writing a large block of data: it can be
@@ -1190,45 +1223,18 @@ smb_com_invalid(smb_request_t *sr)
  * Initializes dispatch statistics.
  */
 void
-smb_dispatch_stats_init(smb_kstat_req_t *ksr)
+smb_dispatch_stats_init(smb_server_t *sv)
 {
-	kstat_named_t	*ksn;
-	int		ks_ndata;
+	smb_disp_stats_t *sds = sv->sv_disp_stats1;
+	smb_kstat_req_t *ksr;
 	int		i;
 
+	ksr = ((smbsrv_kstats_t *)sv->sv_ksp->ks_data)->ks_reqs1;
+
 	for (i = 0; i < SMB_COM_NUM; i++, ksr++) {
-		smb_latency_init(&smb_disp_table[i].sdt_lat);
+		smb_latency_init(&sds[i].sdt_lat);
 		(void) strlcpy(ksr->kr_name, smb_disp_table[i].sdt_name,
 		    sizeof (ksr->kr_name));
-	}
-	/* Legacy Statistics */
-	for (i = 0, ks_ndata = 0; i < SMB_COM_NUM; i++) {
-		if (smb_disp_table[i].sdt_function != smb_com_invalid)
-			ks_ndata++;
-	}
-
-	smb_legacy_dispatch_ksp = kstat_create(SMBSRV_KSTAT_MODULE, 0,
-	    SMBSRV_KSTAT_NAME_CMDS, SMBSRV_KSTAT_CLASS,
-	    KSTAT_TYPE_NAMED, ks_ndata, 0);
-
-	if (smb_legacy_dispatch_ksp != NULL) {
-		ksn = smb_legacy_dispatch_ksp->ks_data;
-
-		for (i = 0, ks_ndata = 0; i < SMB_COM_NUM; i++) {
-			if (smb_disp_table[i].sdt_function != smb_com_invalid) {
-				(void) strlcpy(ksn->name,
-				    smb_disp_table[i].sdt_name,
-				    sizeof (ksn->name));
-				ksn->data_type = KSTAT_DATA_UINT64;
-				++ksn;
-			}
-		}
-		mutex_init(&smb_legacy_dispatch_ksmtx, NULL,
-		    MUTEX_DEFAULT, NULL);
-		smb_legacy_dispatch_ksp->ks_update =
-		    smb_legacy_dispatch_stats_update;
-		smb_legacy_dispatch_ksp->ks_lock = &smb_legacy_dispatch_ksmtx;
-		kstat_install(smb_legacy_dispatch_ksp);
 	}
 }
 
@@ -1238,23 +1244,20 @@ smb_dispatch_stats_init(smb_kstat_req_t *ksr)
  * Frees and destroyes the resources used for statistics.
  */
 void
-smb_dispatch_stats_fini(void)
+smb_dispatch_stats_fini(smb_server_t *sv)
 {
+	smb_disp_stats_t *sds = sv->sv_disp_stats1;
 	int	i;
 
-	if (smb_legacy_dispatch_ksp != NULL) {
-		kstat_delete(smb_legacy_dispatch_ksp);
-		mutex_destroy(&smb_legacy_dispatch_ksmtx);
-		smb_legacy_dispatch_ksp = NULL;
-	}
-
 	for (i = 0; i < SMB_COM_NUM; i++)
-		smb_latency_destroy(&smb_disp_table[i].sdt_lat);
+		smb_latency_destroy(&sds[i].sdt_lat);
 }
 
 void
-smb_dispatch_stats_update(smb_kstat_req_t *ksr, int first, int nreq)
+smb_dispatch_stats_update(smb_server_t *sv,
+    smb_kstat_req_t *ksr, int first, int nreq)
 {
+	smb_disp_stats_t *sds = sv->sv_disp_stats1;
 	int	i;
 	int	last;
 
@@ -1262,56 +1265,22 @@ smb_dispatch_stats_update(smb_kstat_req_t *ksr, int first, int nreq)
 
 	if ((first < SMB_COM_NUM) && (last < SMB_COM_NUM))  {
 		for (i = first; i <= last; i++, ksr++) {
-			ksr->kr_rxb = smb_disp_table[i].sdt_rxb;
-			ksr->kr_txb = smb_disp_table[i].sdt_txb;
-			mutex_enter(&smb_disp_table[i].sdt_lat.ly_mutex);
-			ksr->kr_nreq = smb_disp_table[i].sdt_lat.ly_a_nreq;
-			ksr->kr_sum = smb_disp_table[i].sdt_lat.ly_a_sum;
-			ksr->kr_a_mean = smb_disp_table[i].sdt_lat.ly_a_mean;
+			ksr->kr_rxb = sds[i].sdt_rxb;
+			ksr->kr_txb = sds[i].sdt_txb;
+			mutex_enter(&sds[i].sdt_lat.ly_mutex);
+			ksr->kr_nreq = sds[i].sdt_lat.ly_a_nreq;
+			ksr->kr_sum = sds[i].sdt_lat.ly_a_sum;
+			ksr->kr_a_mean = sds[i].sdt_lat.ly_a_mean;
 			ksr->kr_a_stddev =
-			    smb_disp_table[i].sdt_lat.ly_a_stddev;
-			ksr->kr_d_mean = smb_disp_table[i].sdt_lat.ly_d_mean;
+			    sds[i].sdt_lat.ly_a_stddev;
+			ksr->kr_d_mean = sds[i].sdt_lat.ly_d_mean;
 			ksr->kr_d_stddev =
-			    smb_disp_table[i].sdt_lat.ly_d_stddev;
-			smb_disp_table[i].sdt_lat.ly_d_mean = 0;
-			smb_disp_table[i].sdt_lat.ly_d_nreq = 0;
-			smb_disp_table[i].sdt_lat.ly_d_stddev = 0;
-			smb_disp_table[i].sdt_lat.ly_d_sum = 0;
-			mutex_exit(&smb_disp_table[i].sdt_lat.ly_mutex);
+			    sds[i].sdt_lat.ly_d_stddev;
+			sds[i].sdt_lat.ly_d_mean = 0;
+			sds[i].sdt_lat.ly_d_nreq = 0;
+			sds[i].sdt_lat.ly_d_stddev = 0;
+			sds[i].sdt_lat.ly_d_sum = 0;
+			mutex_exit(&sds[i].sdt_lat.ly_mutex);
 		}
-	}
-}
-
-/*
- * smb_legacy_dispatch_stats_update
- *
- * This callback function updates the smb_legacy_dispatch_kstat_data when kstat
- * command is invoked.
- */
-static int
-smb_legacy_dispatch_stats_update(kstat_t *ksp, int rw)
-{
-	kstat_named_t   *ksn;
-	int		i;
-
-	ASSERT(MUTEX_HELD(ksp->ks_lock));
-
-	switch (rw) {
-	case KSTAT_WRITE:
-		return (EACCES);
-
-	case KSTAT_READ:
-		ksn = ksp->ks_data;
-		for (i = 0; i < SMB_COM_NUM; i++) {
-			if (smb_disp_table[i].sdt_function != smb_com_invalid) {
-				ksn->value.ui64 =
-				    smb_disp_table[i].sdt_lat.ly_a_nreq;
-				++ksn;
-			}
-		}
-		return (0);
-
-	default:
-		return (EIO);
 	}
 }

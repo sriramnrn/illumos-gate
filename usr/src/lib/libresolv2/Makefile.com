@@ -27,7 +27,7 @@
 LIBRARY= libresolv.a
 VERS= .2
 
-BSDOBJS=   	daemon.o	putenv.o	strcasecmp.o	strsep.o \
+BSDOBJS=   	putenv.o	strcasecmp.o	strsep.o \
 		ftruncate.o	readv.o		strdup.o	strtoul.o \
 		gettimeofday.o	setenv.o	strerror.o	utimes.o \
 		mktemp.o	setitimer.o	strpbrk.o	writev.o
@@ -109,6 +109,9 @@ LOCFLAGS +=	-D_SYS_STREAM_H -D_REENTRANT -DSVR4 -DSUNW_OPTIONS \
 		$(SOLCOMPAT) -I../include -I../../common/inc
 
 CPPFLAGS +=	$(LOCFLAGS) 
+
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+
 DYNFLAGS +=	$(ZNODELETE)
 
 LDLIBS +=	-lsocket -lnsl -lc -lmd

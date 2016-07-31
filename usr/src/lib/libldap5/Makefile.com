@@ -22,8 +22,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 LIBRARY= libldap.a
 VERS= .5
@@ -59,7 +57,7 @@ OBJECTS=	$(BEROBJS) $(LDAPOBJS) $(SSLDAPOBJS) $(PRLDAPOBJS) \
 include ../../Makefile.lib
 
 NSS_LIBS=	-lnspr4 -lplc4 -lnss3 -lssl3
-NSS_HDRS=	/usr/include/mps
+NSS_HDRS=	$(ADJUNCT_PROTO)/usr/include/mps
 NSS_LDPATH=	/usr/lib/mps
 NSS_LDPATH64=	$(NSS_LDPATH)/64	
 
@@ -113,6 +111,15 @@ sparcv9_C_PICFLAGS =	$(sparcv9_C_BIGPICFLAGS)
 
 CFLAGS +=	$(CCVERBOSE) $(LOCFLAGS)
 CFLAGS64 +=	$(LOCFLAGS)
+
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-type-limits
+CERRWARN +=	-_gcc=-Wno-unused-function
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-unused-value
+CERRWARN +=	-_gcc=-Wno-address
+
 LDLIBS +=	-lsasl -lsocket -lnsl -lmd -lc
 
 .KEEP_STATE:

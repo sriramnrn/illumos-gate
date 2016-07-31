@@ -25,6 +25,8 @@
 
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013 Saso Kiselkov. All rights reserved.
+ * Copyright 2016 OmniTI Computer Consulting, Inc. All rights reserved.
  */
 
 #ifndef	_IXGBE_SW_H
@@ -166,6 +168,7 @@ extern "C" {
 #define	DEFAULT_MR_ENABLE		B_TRUE
 #define	DEFAULT_TX_HEAD_WB_ENABLE	B_TRUE
 #define	DEFAULT_RELAX_ORDER_ENABLE	B_TRUE
+#define	DEFAULT_ALLOW_UNSUPPORTED_SFP	B_FALSE
 
 #define	IXGBE_LSO_MAXLEN		65535
 
@@ -207,6 +210,7 @@ extern "C" {
 #define	ATTACH_PROGRESS_SFP_TASKQ	0x4000	/* SFP taskq created */
 #define	ATTACH_PROGRESS_LINK_TIMER	0x8000	/* link check timer */
 #define	ATTACH_PROGRESS_OVERTEMP_TASKQ	0x10000 /* Over-temp taskq created */
+#define	ATTACH_PROGRESS_PHY_TASKQ	0x20000 /* Ext. PHY taskq created */
 
 #define	PROP_DEFAULT_MTU		"default_mtu"
 #define	PROP_FLOW_CONTROL		"flow_control"
@@ -232,6 +236,7 @@ extern "C" {
 #define	PROP_RX_LIMIT_PER_INTR		"rx_limit_per_intr"
 #define	PROP_INTR_THROTTLING		"intr_throttling"
 #define	PROP_FM_CAPABLE			"fm_capable"
+#define	PROP_ALLOW_UNSUPPORTED_SFP	"allow_unsupported_sfp"
 
 #define	IXGBE_LB_NONE			0
 #define	IXGBE_LB_EXTERNAL		1
@@ -626,6 +631,7 @@ typedef struct ixgbe {
 	adapter_info_t		*capab;	/* adapter hardware capabilities */
 	ddi_taskq_t		*sfp_taskq;	/* sfp-change taskq */
 	ddi_taskq_t		*overtemp_taskq; /* overtemp taskq */
+	ddi_taskq_t		*phy_taskq;	/* external PHY taskq */
 	uint32_t		eims;		/* interrupt mask setting */
 	uint32_t		eimc;		/* interrupt mask clear */
 	uint32_t		eicr;		/* interrupt cause reg */
@@ -640,6 +646,7 @@ typedef struct ixgbe {
 	uint32_t		loopback_mode;
 	uint32_t		default_mtu;
 	uint32_t		max_frame_size;
+	ixgbe_link_speed	speeds_supported;
 
 	uint32_t		rcb_pending;
 
@@ -727,9 +734,13 @@ typedef struct ixgbe {
 	kstat_t			*ixgbe_ks;
 
 	uint32_t		param_en_10000fdx_cap:1,
+				param_en_5000fdx_cap:1,
+				param_en_2500fdx_cap:1,
 				param_en_1000fdx_cap:1,
 				param_en_100fdx_cap:1,
 				param_adv_10000fdx_cap:1,
+				param_adv_5000fdx_cap:1,
+				param_adv_2500fdx_cap:1,
 				param_adv_1000fdx_cap:1,
 				param_adv_100fdx_cap:1,
 				param_pause_cap:1,
@@ -740,13 +751,15 @@ typedef struct ixgbe {
 				param_adv_asym_pause_cap:1,
 				param_adv_rem_fault:1,
 				param_lp_10000fdx_cap:1,
+				param_lp_5000fdx_cap:1,
+				param_lp_2500fdx_cap:1,
 				param_lp_1000fdx_cap:1,
 				param_lp_100fdx_cap:1,
 				param_lp_autoneg_cap:1,
 				param_lp_pause_cap:1,
 				param_lp_asym_pause_cap:1,
 				param_lp_rem_fault:1,
-				param_pad_to_32:12;
+				param_pad_to_32:6;
 } ixgbe_t;
 
 typedef struct ixgbe_stat {

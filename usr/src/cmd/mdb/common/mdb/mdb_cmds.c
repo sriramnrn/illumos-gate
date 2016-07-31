@@ -26,7 +26,9 @@
 
 /*
  * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 #include <sys/elf.h>
@@ -67,6 +69,7 @@
 #include <mdb/mdb_whatis_impl.h>
 #include <mdb/mdb_macalias.h>
 #include <mdb/mdb_tab.h>
+#include <mdb/mdb_typedef.h>
 #ifdef _KMDB
 #include <kmdb/kmdb_kdi.h>
 #endif
@@ -250,7 +253,7 @@ write_arglist(mdb_tgt_as_t as, mdb_tgt_addr_t addr,
 			mdb_warn("failed to write %llr at address 0x%llx",
 			    value, addr);
 			mdb.m_incr = 0;
-			break;
+			return (DCMD_ERR);
 		}
 
 		mdb.m_incr = naddr - addr;
@@ -518,8 +521,7 @@ cmd_print_phys(uintptr_t x, uint_t flags, int argc, const mdb_arg_t *argv)
 
 /*ARGSUSED*/
 static int
-cmd_print_value(uintptr_t addr, uint_t flags,
-	int argc, const mdb_arg_t *argv)
+cmd_print_value(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
 	uintmax_t ndot, dot = mdb_get_dot();
 	const char *tgt_argv[1];
@@ -1562,11 +1564,6 @@ showrev_addversion(void *vers_nv, const mdb_map_t *ignored, const char *object)
 	if (version == NULL)
 		version = "Unknown";
 
-	/*
-	 * The hash table implementation in OVERLOAD mode limits the version
-	 * name to 31 characters because we cannot specify an external name.
-	 * The full version name is available via the ::objects dcmd if needed.
-	 */
 	(void) mdb_nv_insert(vers_nv, version, NULL, (uintptr_t)objname,
 	    MDB_NV_OVERLOAD);
 
@@ -2013,7 +2010,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (opt_a)
 				mdb_printf("%-#32p%8T%s\n", addr, buf);
 			else if (opt_b)
-				mdb_printf("%-#10p%-#32a%8T%s\n",
+				mdb_printf("%-#?p  %-#32a%8T%s\n",
 				    addr, addr, buf);
 			else
 				mdb_printf("%-#32a%8T%s\n", addr, buf);
@@ -2037,7 +2034,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (opt_a)
 				mdb_printf("%-#32p%8T%s\n", oaddr, buf);
 			else if (opt_b)
-				mdb_printf("%-#10p%-#32a%8T%s\n",
+				mdb_printf("%-#?p  %-#32a%8T%s\n",
 				    oaddr, oaddr, buf);
 			else
 				mdb_printf("%-#32a%8T%s\n", oaddr, buf);
@@ -2052,7 +2049,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		if (opt_a)
 			mdb_printf("%-#32p%8T%s%", addr, buf);
 		else if (opt_b)
-			mdb_printf("%-#10p%-#32a%8T%s", addr, addr, buf);
+			mdb_printf("%-#?p  %-#32a%8T%s", addr, addr, buf);
 		else
 			mdb_printf("%-#32a%8T%s%", addr, buf);
 		mdb_printf("%</b>\n");
@@ -2065,7 +2062,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			if (opt_a)
 				mdb_printf("%-#32p%8T%s\n", addr, buf);
 			else if (opt_b)
-				mdb_printf("%-#10p%-#32a%8T%s\n",
+				mdb_printf("%-#?p  %-#32a%8T%s\n",
 				    addr, addr, buf);
 			else
 				mdb_printf("%-#32a%8T%s\n", addr, buf);
@@ -2080,7 +2077,7 @@ cmd_dis(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 static int
 walk_step(uintptr_t addr, const void *data, void *private)
 {
-	mdb_printf("%lr\n", addr);
+	mdb_printf("%#lr\n", addr);
 	return (WALK_NEXT);
 }
 
@@ -2178,6 +2175,7 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	uint_t phys = FALSE;
 	uint_t file = FALSE;
 	uintptr_t group = 4;
+	uintptr_t length = 0;
 	uintptr_t width = 1;
 	mdb_tgt_status_t st;
 	int error;
@@ -2186,6 +2184,7 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	    'e', MDB_OPT_SETBITS, MDB_DUMP_ENDIAN, &dflags,
 	    'f', MDB_OPT_SETBITS, TRUE, &file,
 	    'g', MDB_OPT_UINTPTR, &group,
+	    'l', MDB_OPT_UINTPTR, &length,
 	    'p', MDB_OPT_SETBITS, TRUE, &phys,
 	    'q', MDB_OPT_CLRBITS, MDB_DUMP_ASCII, &dflags,
 	    'r', MDB_OPT_SETBITS, MDB_DUMP_RELATIVE, &dflags,
@@ -2198,8 +2197,11 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	if ((phys && file) ||
 	    (width == 0) || (width > 0x10) ||
-	    (group == 0) || (group > 0x100))
+	    (group == 0) || (group > 0x100) ||
+	    (mdb.m_dcount > 1 && length > 0))
 		return (DCMD_USAGE);
+	if (length == 0)
+		length = mdb.m_dcount;
 
 	/*
 	 * If neither -f nor -p were specified and the state is IDLE (i.e. no
@@ -2211,13 +2213,13 @@ cmd_dump(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 
 	dflags |= MDB_DUMP_GROUP(group) | MDB_DUMP_WIDTH(width);
 	if (phys)
-		error = mdb_dump64(mdb_get_dot(), mdb.m_dcount, dflags,
+		error = mdb_dump64(mdb_get_dot(), length, dflags,
 		    mdb_partial_pread, NULL);
 	else if (file)
-		error = mdb_dumpptr(addr, mdb.m_dcount, dflags,
+		error = mdb_dumpptr(addr, length, dflags,
 		    mdb_partial_xread, (void *)mdb_tgt_fread);
 	else
-		error = mdb_dumpptr(addr, mdb.m_dcount, dflags,
+		error = mdb_dumpptr(addr, length, dflags,
 		    mdb_partial_xread, (void *)mdb_tgt_vread);
 
 	return (((flags & DCMD_LOOP) || (error == -1)) ? DCMD_ABORT : DCMD_OK);
@@ -2857,6 +2859,8 @@ dump_help(void)
 #endif
 	    "-g n  display bytes in groups of n\n"
 	    "      (default is 4; n must be a power of 2, divide line width)\n"
+	    "-l n  display n bytes\n"
+	    "      (default is 1; rounded up to multiple of line width)\n"
 	    "-p    dump from physical memory\n"
 	    "-q    don't print ASCII\n"
 	    "-r    use relative numbering (automatically sets -u)\n"
@@ -2927,7 +2931,7 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ "disasms", NULL, "list available disassemblers", cmd_disasms },
 	{ "dismode", "[mode]", "get/set disassembly mode", cmd_dismode },
 	{ "dmods", "[-l] [mod]", "list loaded debugger modules", cmd_dmods },
-	{ "dump", "?[-eqrstu] [-f|-p] [-g bytes] [-w paragraphs]",
+	{ "dump", "?[-eqrstu] [-f|-p] [-g bytes] [-l bytes] [-w paragraphs]",
 	    "dump memory from specified address", cmd_dump, dump_help },
 	{ "echo", "args ...", "echo arguments", cmd_echo },
 	{ "enum", "?[-ex] enum [name]", "print an enumeration", cmd_enum,
@@ -2946,7 +2950,8 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ "grep", "?expr", "print dot if expression is true", cmd_grep },
 	{ "head", "-num|-n num", "limit number of elements in pipe", cmd_head,
 	    head_help },
-	{ "help", "[cmd]", "list commands/command help", cmd_help },
+	{ "help", "[cmd]", "list commands/command help", cmd_help, NULL,
+	    cmd_help_tab },
 	{ "list", "?type member [variable]",
 	    "walk list using member as link pointer", cmd_list, NULL,
 	    mdb_tab_complete_mt },
@@ -2964,6 +2969,9 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ "print", "?[-aCdhiLptx] [-c lim] [-l lim] [type] [member|offset ...]",
 	    "print the contents of a data structure", cmd_print, print_help,
 	    cmd_print_tab },
+	{ "printf", "?format type member ...", "print and format the "
+	    "member(s) of a data structure", cmd_printf, printf_help,
+	    cmd_printf_tab },
 	{ "regs", NULL, "print general purpose registers", cmd_notsup },
 	{ "set", "[-wF] [+/-o opt] [-s dist] [-I path] [-L path] [-P prompt]",
 	    "get/set debugger properties", cmd_set },
@@ -2976,6 +2984,8 @@ const mdb_dcmd_t mdb_dcmd_builtins[] = {
 	{ "status", NULL, "print summary of current target", cmd_notsup },
 	{ "term", NULL, "display current terminal type", cmd_term },
 	{ "typeset", "[+/-t] var ...", "set variable attributes", cmd_typeset },
+	{ "typedef", "[-c model | -d | -l | -r file | -w file ] [type] [name]",
+		"create synthetic types", cmd_typedef, cmd_typedef_help },
 	{ "unset", "[name ...]", "unset variables", cmd_unset },
 	{ "vars", "[-npt]", "print listing of variables", cmd_vars },
 	{ "version", NULL, "print debugger version string", cmd_version },

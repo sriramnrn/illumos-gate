@@ -20,8 +20,9 @@
  */
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
+ * Copyright 2012 Alexey Zaytsev <alexey.zaytsev@gmail.com> All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -49,6 +50,7 @@
 #include <sys/sunddi.h>
 #include <sys/note.h>
 #include <sys/blkdev.h>
+#include <sys/scsi/impl/inquiry.h>
 
 #define	BD_MAXPART	64
 #define	BDINST(dev)	(getminor(dev) / BD_MAXPART)
@@ -62,6 +64,7 @@ struct bd {
 	dev_info_t	*d_dip;
 	kmutex_t	d_ocmutex;
 	kmutex_t	d_iomutex;
+	kmutex_t	*d_errmutex;
 	kmutex_t	d_statemutex;
 	kcondvar_t	d_statecv;
 	enum dkio_state	d_state;
@@ -74,6 +77,7 @@ struct bd {
 	uint32_t	d_qactive;
 	uint32_t	d_maxxfer;
 	uint32_t	d_blkshift;
+	uint32_t	d_pblkshift;
 	uint64_t	d_numblks;
 	ddi_devid_t	d_devid;
 
@@ -82,8 +86,11 @@ struct bd {
 	list_t		d_waitq;
 	kstat_t		*d_ksp;
 	kstat_io_t	*d_kiop;
+	kstat_t		*d_errstats;
+	struct bd_errstats *d_kerr;
 
 	boolean_t	d_rdonly;
+	boolean_t	d_ssd;
 	boolean_t	d_removable;
 	boolean_t	d_hotpluggable;
 	boolean_t	d_use_dma;
@@ -130,6 +137,12 @@ struct bd_xfer_impl {
 /*
  * Private prototypes.
  */
+
+static void bd_prop_update_inqstring(dev_info_t *, char *, char *, size_t);
+static void bd_create_inquiry_props(dev_info_t *, bd_drive_t *);
+static void bd_create_errstats(bd_t *, int, bd_drive_t *);
+static void bd_errstats_setstr(kstat_named_t *, char *, size_t, char *);
+static void bd_init_errstats(bd_t *, bd_drive_t *);
 
 static int bd_getinfo(dev_info_t *, ddi_info_cmd_t, void *, void **);
 static int bd_attach(dev_info_t *, ddi_attach_cmd_t);
@@ -280,6 +293,168 @@ bd_getinfo(dev_info_t *dip, ddi_info_cmd_t cmd, void *arg, void **resultp)
 	return (DDI_SUCCESS);
 }
 
+static void
+bd_prop_update_inqstring(dev_info_t *dip, char *name, char *data, size_t len)
+{
+	int	ilen;
+	char	*data_string;
+
+	ilen = scsi_ascii_inquiry_len(data, len);
+	ASSERT3U(ilen, <=, len);
+	if (ilen <= 0)
+		return;
+	/* ensure null termination */
+	data_string = kmem_zalloc(ilen + 1, KM_SLEEP);
+	bcopy(data, data_string, ilen);
+	(void) ndi_prop_update_string(DDI_DEV_T_NONE, dip, name, data_string);
+	kmem_free(data_string, ilen + 1);
+}
+
+static void
+bd_create_inquiry_props(dev_info_t *dip, bd_drive_t *drive)
+{
+	if (drive->d_vendor_len > 0)
+		bd_prop_update_inqstring(dip, INQUIRY_VENDOR_ID,
+		    drive->d_vendor, drive->d_vendor_len);
+
+	if (drive->d_product_len > 0)
+		bd_prop_update_inqstring(dip, INQUIRY_PRODUCT_ID,
+		    drive->d_product, drive->d_product_len);
+
+	if (drive->d_serial_len > 0)
+		bd_prop_update_inqstring(dip, INQUIRY_SERIAL_NO,
+		    drive->d_serial, drive->d_serial_len);
+
+	if (drive->d_revision_len > 0)
+		bd_prop_update_inqstring(dip, INQUIRY_REVISION_ID,
+		    drive->d_revision, drive->d_revision_len);
+}
+
+static void
+bd_create_errstats(bd_t *bd, int inst, bd_drive_t *drive)
+{
+	char	ks_module[KSTAT_STRLEN];
+	char	ks_name[KSTAT_STRLEN];
+	int	ndata = sizeof (struct bd_errstats) / sizeof (kstat_named_t);
+
+	if (bd->d_errstats != NULL)
+		return;
+
+	(void) snprintf(ks_module, sizeof (ks_module), "%serr",
+	    ddi_driver_name(bd->d_dip));
+	(void) snprintf(ks_name, sizeof (ks_name), "%s%d,err",
+	    ddi_driver_name(bd->d_dip), inst);
+
+	bd->d_errstats = kstat_create(ks_module, inst, ks_name, "device_error",
+	    KSTAT_TYPE_NAMED, ndata, KSTAT_FLAG_PERSISTENT);
+
+	if (bd->d_errstats == NULL) {
+		/*
+		 * Even if we cannot create the kstat, we create a
+		 * scratch kstat.  The reason for this is to ensure
+		 * that we can update the kstat all of the time,
+		 * without adding an extra branch instruction.
+		 */
+		bd->d_kerr = kmem_zalloc(sizeof (struct bd_errstats),
+		    KM_SLEEP);
+		bd->d_errmutex = kmem_zalloc(sizeof (kmutex_t), KM_SLEEP);
+		mutex_init(bd->d_errmutex, NULL, MUTEX_DRIVER, NULL);
+	} else {
+		if (bd->d_errstats->ks_lock == NULL) {
+			bd->d_errstats->ks_lock = kmem_zalloc(sizeof (kmutex_t),
+			    KM_SLEEP);
+			mutex_init(bd->d_errstats->ks_lock, NULL, MUTEX_DRIVER,
+			    NULL);
+		}
+
+		bd->d_errmutex = bd->d_errstats->ks_lock;
+		bd->d_kerr = (struct bd_errstats *)bd->d_errstats->ks_data;
+	}
+
+	kstat_named_init(&bd->d_kerr->bd_softerrs,	"Soft Errors",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_harderrs,	"Hard Errors",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_transerrs,	"Transport Errors",
+	    KSTAT_DATA_UINT32);
+
+	if (drive->d_model_len > 0) {
+		kstat_named_init(&bd->d_kerr->bd_model,	"Model",
+		    KSTAT_DATA_STRING);
+	} else {
+		kstat_named_init(&bd->d_kerr->bd_vid,	"Vendor",
+		    KSTAT_DATA_STRING);
+		kstat_named_init(&bd->d_kerr->bd_pid,	"Product",
+		    KSTAT_DATA_STRING);
+	}
+
+	kstat_named_init(&bd->d_kerr->bd_revision,	"Revision",
+	    KSTAT_DATA_STRING);
+	kstat_named_init(&bd->d_kerr->bd_serial,	"Serial No",
+	    KSTAT_DATA_STRING);
+	kstat_named_init(&bd->d_kerr->bd_capacity,	"Size",
+	    KSTAT_DATA_ULONGLONG);
+	kstat_named_init(&bd->d_kerr->bd_rq_media_err,	"Media Error",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_rq_ntrdy_err,	"Device Not Ready",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_rq_nodev_err,	"No Device",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_rq_recov_err,	"Recoverable",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_rq_illrq_err,	"Illegal Request",
+	    KSTAT_DATA_UINT32);
+	kstat_named_init(&bd->d_kerr->bd_rq_pfa_err,
+	    "Predictive Failure Analysis", KSTAT_DATA_UINT32);
+
+	bd->d_errstats->ks_private = bd;
+
+	kstat_install(bd->d_errstats);
+}
+
+static void
+bd_errstats_setstr(kstat_named_t *k, char *str, size_t len, char *alt)
+{
+	char	*tmp;
+
+	if (KSTAT_NAMED_STR_PTR(k) == NULL) {
+		if (len > 0) {
+			tmp = kmem_alloc(len + 1, KM_SLEEP);
+			(void) strlcpy(tmp, str, len + 1);
+		} else {
+			tmp = alt;
+		}
+
+		kstat_named_setstr(k, tmp);
+	}
+}
+
+static void
+bd_init_errstats(bd_t *bd, bd_drive_t *drive)
+{
+	struct bd_errstats	*est = bd->d_kerr;
+
+	mutex_enter(bd->d_errmutex);
+
+	if (drive->d_model_len > 0 &&
+	    KSTAT_NAMED_STR_PTR(&est->bd_model) == NULL) {
+		bd_errstats_setstr(&est->bd_model, drive->d_model,
+		    drive->d_model_len, NULL);
+	} else {
+		bd_errstats_setstr(&est->bd_vid, drive->d_vendor,
+		    drive->d_vendor_len, "Unknown ");
+		bd_errstats_setstr(&est->bd_pid, drive->d_product,
+		    drive->d_product_len, "Unknown         ");
+	}
+
+	bd_errstats_setstr(&est->bd_revision, drive->d_revision,
+	    drive->d_revision_len, "0001");
+	bd_errstats_setstr(&est->bd_serial, drive->d_serial,
+	    drive->d_serial_len, "0               ");
+
+	mutex_exit(bd->d_errmutex);
+}
+
 static int
 bd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 {
@@ -396,9 +571,17 @@ bd_attach(dev_info_t *dip, ddi_attach_cmd_t cmd)
 	bzero(&drive, sizeof (drive));
 	bd->d_ops.o_drive_info(bd->d_private, &drive);
 	bd->d_qsize = drive.d_qsize;
-	bd->d_maxxfer = drive.d_maxxfer;
 	bd->d_removable = drive.d_removable;
 	bd->d_hotpluggable = drive.d_hotpluggable;
+
+	if (drive.d_maxxfer && drive.d_maxxfer < bd->d_maxxfer)
+		bd->d_maxxfer = drive.d_maxxfer;
+
+	bd_create_inquiry_props(dip, &drive);
+
+	bd_create_errstats(bd, inst, &drive);
+	bd_init_errstats(bd, &drive);
+	bd_update_state(bd);
 
 	rv = cmlb_attach(dip, &bd_tg_ops, DTYPE_DIRECT,
 	    bd->d_removable, bd->d_hotpluggable,
@@ -477,6 +660,15 @@ bd_detach(dev_info_t *dip, ddi_detach_cmd_t cmd)
 	} else {
 		kmem_free(bd->d_kiop, sizeof (kstat_io_t));
 	}
+
+	if (bd->d_errstats != NULL) {
+		kstat_delete(bd->d_errstats);
+		bd->d_errstats = NULL;
+	} else {
+		kmem_free(bd->d_kerr, sizeof (struct bd_errstats));
+		mutex_destroy(bd->d_errmutex);
+	}
+
 	cmlb_detach(bd->d_cmlbh, 0);
 	cmlb_free_handle(&bd->d_cmlbh);
 	if (bd->d_devid)
@@ -499,7 +691,7 @@ bd_xfer_ctor(void *buf, void *arg, int kmflag)
 	bd_t		*bd = arg;
 	int		(*dcb)(caddr_t);
 
-	if (kmflag == KM_SLEEP) {
+	if (kmflag == KM_PUSHPAGE || kmflag == KM_SLEEP) {
 		dcb = DDI_DMA_SLEEP;
 	} else {
 		dcb = DDI_DMA_DONTWAIT;
@@ -536,7 +728,7 @@ bd_xfer_alloc(bd_t *bd, struct buf *bp, int (*func)(void *, bd_xfer_t *),
     int kmflag)
 {
 	bd_xfer_impl_t		*xi;
-	int			rv;
+	int			rv = 0;
 	int			status;
 	unsigned		dir;
 	int			(*cb)(caddr_t);
@@ -556,7 +748,6 @@ bd_xfer_alloc(bd_t *bd, struct buf *bp, int (*func)(void *, bd_xfer_t *),
 	}
 
 	ASSERT(bp);
-	ASSERT(bp->b_bcount);
 
 	xi->i_bp = bp;
 	xi->i_func = func;
@@ -900,32 +1091,51 @@ bd_dump(dev_t dev, caddr_t caddr, daddr_t blkno, int nblk)
 	return (rv);
 }
 
+void
+bd_minphys(struct buf *bp)
+{
+	minor_t inst;
+	bd_t	*bd;
+	inst = BDINST(bp->b_edev);
+
+	bd = ddi_get_soft_state(bd_state, inst);
+
+	/*
+	 * In a non-debug kernel, bd_strategy will catch !bd as
+	 * well, and will fail nicely.
+	 */
+	ASSERT(bd);
+
+	if (bp->b_bcount > bd->d_maxxfer)
+		bp->b_bcount = bd->d_maxxfer;
+}
+
 static int
 bd_read(dev_t dev, struct uio *uio, cred_t *credp)
 {
 	_NOTE(ARGUNUSED(credp));
-	return (physio(bd_strategy, NULL, dev, B_READ, minphys, uio));
+	return (physio(bd_strategy, NULL, dev, B_READ, bd_minphys, uio));
 }
 
 static int
 bd_write(dev_t dev, struct uio *uio, cred_t *credp)
 {
 	_NOTE(ARGUNUSED(credp));
-	return (physio(bd_strategy, NULL, dev, B_WRITE, minphys, uio));
+	return (physio(bd_strategy, NULL, dev, B_WRITE, bd_minphys, uio));
 }
 
 static int
 bd_aread(dev_t dev, struct aio_req *aio, cred_t *credp)
 {
 	_NOTE(ARGUNUSED(credp));
-	return (aphysio(bd_strategy, anocancel, dev, B_READ, minphys, aio));
+	return (aphysio(bd_strategy, anocancel, dev, B_READ, bd_minphys, aio));
 }
 
 static int
 bd_awrite(dev_t dev, struct aio_req *aio, cred_t *credp)
 {
 	_NOTE(ARGUNUSED(credp));
-	return (aphysio(bd_strategy, anocancel, dev, B_WRITE, minphys, aio));
+	return (aphysio(bd_strategy, anocancel, dev, B_WRITE, bd_minphys, aio));
 }
 
 static int
@@ -1019,6 +1229,11 @@ bd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 	if (rv != ENOTTY)
 		return (rv);
 
+	if (rvalp != NULL) {
+		/* the return value of the ioctl is 0 by default */
+		*rvalp = 0;
+	}
+
 	switch (cmd) {
 	case DKIOCGMEDIAINFO: {
 		struct dk_minfo minfo;
@@ -1029,7 +1244,22 @@ bd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 		minfo.dki_media_type = DK_FIXED_DISK;
 		minfo.dki_lbsize = (1U << bd->d_blkshift);
 		minfo.dki_capacity = bd->d_numblks;
-		if (ddi_copyout(&minfo, ptr, sizeof (minfo), flag))  {
+		if (ddi_copyout(&minfo, ptr, sizeof (minfo), flag)) {
+			return (EFAULT);
+		}
+		return (0);
+	}
+	case DKIOCGMEDIAINFOEXT: {
+		struct dk_minfo_ext miext;
+
+		/* make sure our state information is current */
+		bd_update_state(bd);
+		bzero(&miext, sizeof (miext));
+		miext.dki_media_type = DK_FIXED_DISK;
+		miext.dki_lbsize = (1U << bd->d_blkshift);
+		miext.dki_pbsize = (1U << bd->d_pblkshift);
+		miext.dki_capacity = bd->d_numblks;
+		if (ddi_copyout(&miext, ptr, sizeof (miext), flag)) {
 			return (EFAULT);
 		}
 		return (0);
@@ -1052,7 +1282,7 @@ bd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 		cinfo.dki_space = 0;
 		cinfo.dki_prio = 0;
 		cinfo.dki_vec = 0;
-		if (ddi_copyout(&cinfo, ptr, sizeof (cinfo), flag))  {
+		if (ddi_copyout(&cinfo, ptr, sizeof (cinfo), flag)) {
 			return (EFAULT);
 		}
 		return (0);
@@ -1081,6 +1311,14 @@ bd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 		}
 		return (0);
 	}
+	case DKIOCSOLIDSTATE: {
+		int i;
+		i = bd->d_ssd ? 1 : 0;
+		if (ddi_copyout(&i, ptr, sizeof (i), flag)) {
+			return (EFAULT);
+		}
+		return (0);
+	}
 	case DKIOCSTATE: {
 		enum dkio_state	state;
 		if (ddi_copyin(ptr, &state, sizeof (state), flag)) {
@@ -1095,9 +1333,11 @@ bd_ioctl(dev_t dev, int cmd, intptr_t arg, int flag, cred_t *credp, int *rvalp)
 		return (0);
 	}
 	case DKIOCFLUSHWRITECACHE: {
-		struct dk_callback *dkc;
+		struct dk_callback *dkc = NULL;
 
-		dkc = flag & FKIOCTL ? (void *)arg : NULL;
+		if (flag & FKIOCTL)
+			dkc = (void *)arg;
+
 		rv = bd_flush_write_cache(bd, dkc);
 		return (rv);
 	}
@@ -1222,6 +1462,7 @@ bd_tg_getinfo(dev_info_t *dip, int cmd, void *arg, void *tg_cookie)
 		bd_update_state(bd);
 		((tg_attribute_t *)arg)->media_is_writable =
 		    bd->d_rdonly ? B_FALSE : B_TRUE;
+		((tg_attribute_t *)arg)->media_is_solid_state = bd->d_ssd;
 		return (0);
 
 	default:
@@ -1256,14 +1497,16 @@ bd_sched(bd_t *bd)
 		rv = xi->i_func(bd->d_private, &xi->i_public);
 		if (rv != 0) {
 			bp = xi->i_bp;
-			bd_xfer_free(xi);
 			bioerror(bp, rv);
 			biodone(bp);
+
+			atomic_inc_32(&bd->d_kerr->bd_transerrs.value.ui32);
 
 			mutex_enter(&bd->d_iomutex);
 			bd->d_qactive--;
 			kstat_runq_exit(bd->d_kiop);
 			list_remove(&bd->d_runq, xi);
+			bd_xfer_free(xi);
 		} else {
 			mutex_enter(&bd->d_iomutex);
 		}
@@ -1310,59 +1553,64 @@ bd_runq_exit(bd_xfer_impl_t *xi, int err)
 static void
 bd_update_state(bd_t *bd)
 {
-	enum	dkio_state	state;
-	bd_media_t		media;
+	enum	dkio_state	state = DKIO_INSERTED;
 	boolean_t		docmlb = B_FALSE;
+	bd_media_t		media;
 
 	bzero(&media, sizeof (media));
 
 	mutex_enter(&bd->d_statemutex);
-	if (bd->d_ops.o_media_info(bd->d_private, &media) == 0) {
-		if ((1U << bd->d_blkshift) != media.m_blksize) {
-			if ((media.m_blksize < 512) ||
-			    (!ISP2(media.m_blksize)) ||
-			    (P2PHASE(bd->d_maxxfer, media.m_blksize))) {
-				cmn_err(CE_WARN,
-				    "%s%d: Invalid media block size (%d)",
-				    ddi_driver_name(bd->d_dip),
-				    ddi_get_instance(bd->d_dip),
-				    media.m_blksize);
-				/*
-				 * We can't use the media, treat it as
-				 * not present.
-				 */
-				state = DKIO_EJECTED;
-				bd->d_numblks = 0;
-			} else {
-				bd->d_blkshift = ddi_ffs(media.m_blksize) - 1;
-				bd->d_numblks = media.m_nblks;
-				bd->d_rdonly = media.m_readonly;
-				state = DKIO_INSERTED;
-			}
-
-			/* Device size changed */
-			docmlb = B_TRUE;
-
-		} else {
-			if (bd->d_numblks != media.m_nblks) {
-				/* Device size changed */
-				docmlb = B_TRUE;
-			}
-			bd->d_numblks = media.m_nblks;
-			bd->d_rdonly = media.m_readonly;
-			state = DKIO_INSERTED;
-		}
-
-	} else {
+	if (bd->d_ops.o_media_info(bd->d_private, &media) != 0) {
 		bd->d_numblks = 0;
 		state = DKIO_EJECTED;
+		goto done;
 	}
+
+	if ((media.m_blksize < 512) ||
+	    (!ISP2(media.m_blksize)) ||
+	    (P2PHASE(bd->d_maxxfer, media.m_blksize))) {
+		cmn_err(CE_WARN, "%s%d: Invalid media block size (%d)",
+		    ddi_driver_name(bd->d_dip), ddi_get_instance(bd->d_dip),
+		    media.m_blksize);
+		/*
+		 * We can't use the media, treat it as not present.
+		 */
+		state = DKIO_EJECTED;
+		bd->d_numblks = 0;
+		goto done;
+	}
+
+	if (((1U << bd->d_blkshift) != media.m_blksize) ||
+	    (bd->d_numblks != media.m_nblks)) {
+		/* Device size changed */
+		docmlb = B_TRUE;
+	}
+
+	bd->d_blkshift = ddi_ffs(media.m_blksize) - 1;
+	bd->d_pblkshift = bd->d_blkshift;
+	bd->d_numblks = media.m_nblks;
+	bd->d_rdonly = media.m_readonly;
+	bd->d_ssd = media.m_solidstate;
+
+	/*
+	 * Only use the supplied physical block size if it is non-zero,
+	 * greater or equal to the block size, and a power of 2. Ignore it
+	 * if not, it's just informational and we can still use the media.
+	 */
+	if ((media.m_pblksize != 0) &&
+	    (media.m_pblksize >= media.m_blksize) &&
+	    (ISP2(media.m_pblksize)))
+		bd->d_pblkshift = ddi_ffs(media.m_pblksize) - 1;
+
+done:
 	if (state != bd->d_state) {
 		bd->d_state = state;
 		cv_broadcast(&bd->d_statecv);
 		docmlb = B_TRUE;
 	}
 	mutex_exit(&bd->d_statemutex);
+
+	bd->d_kerr->bd_capacity.value.ui64 = bd->d_numblks << bd->d_blkshift;
 
 	if (docmlb) {
 		if (state == DKIO_INSERTED) {
@@ -1438,24 +1686,24 @@ bd_flush_write_cache(bd_t *bd, struct dk_callback *dkc)
 		return (rv);
 	}
 
-	if (dkc != NULL) {
+	/* Make an asynchronous flush, but only if there is a callback */
+	if (dkc != NULL && dkc->dkc_callback != NULL) {
 		/* Make a private copy of the callback structure */
 		dc = kmem_alloc(sizeof (*dc), KM_SLEEP);
 		*dc = *dkc;
 		bp->b_private = dc;
 		bp->b_iodone = bd_flush_write_cache_done;
+
+		bd_submit(bd, xi);
+		return (0);
 	}
 
+	/* In case there is no callback, perform a synchronous flush */
 	bd_submit(bd, xi);
-	if (dkc == NULL) {
-		/* wait synchronously */
-		(void) biowait(bp);
-		rv = geterror(bp);
-		freerbuf(bp);
-	} else {
-		/* deferred via callback */
-		rv = 0;
-	}
+	(void) biowait(bp);
+	rv = geterror(bp);
+	freerbuf(bp);
+
 	return (rv);
 }
 
@@ -1521,7 +1769,7 @@ int
 bd_attach_handle(dev_info_t *dip, bd_handle_t hdl)
 {
 	dev_info_t	*child;
-	bd_drive_t	drive;
+	bd_drive_t	drive = { 0 };
 
 	/* if drivers don't override this, make it assume none */
 	drive.d_lun = -1;
@@ -1585,7 +1833,7 @@ bd_detach_handle(bd_handle_t hdl)
 	}
 
 	ndi_devi_exit(hdl->h_parent, circ);
-	return (rv = NDI_SUCCESS ? DDI_SUCCESS : DDI_FAILURE);
+	return (rv == NDI_SUCCESS ? DDI_SUCCESS : DDI_FAILURE);
 }
 
 void
@@ -1593,12 +1841,13 @@ bd_xfer_done(bd_xfer_t *xfer, int err)
 {
 	bd_xfer_impl_t	*xi = (void *)xfer;
 	buf_t		*bp = xi->i_bp;
-	int		rv;
+	int		rv = DDI_SUCCESS;
 	bd_t		*bd = xi->i_bd;
 	size_t		len;
 
 	if (err != 0) {
 		bd_runq_exit(xi, err);
+		atomic_inc_32(&bd->d_kerr->bd_harderrs.value.ui32);
 
 		bp->b_resid += xi->i_resid;
 		bd_xfer_free(xi);
@@ -1651,10 +1900,43 @@ bd_xfer_done(bd_xfer_t *xfer, int err)
 	if (rv != 0) {
 		bd_runq_exit(xi, rv);
 
+		atomic_inc_32(&bd->d_kerr->bd_transerrs.value.ui32);
+
 		bp->b_resid += xi->i_resid;
 		bd_xfer_free(xi);
 		bioerror(bp, rv);
 		biodone(bp);
+	}
+}
+
+void
+bd_error(bd_xfer_t *xfer, int error)
+{
+	bd_xfer_impl_t	*xi = (void *)xfer;
+	bd_t		*bd = xi->i_bd;
+
+	switch (error) {
+	case BD_ERR_MEDIA:
+		atomic_inc_32(&bd->d_kerr->bd_rq_media_err.value.ui32);
+		break;
+	case BD_ERR_NTRDY:
+		atomic_inc_32(&bd->d_kerr->bd_rq_ntrdy_err.value.ui32);
+		break;
+	case BD_ERR_NODEV:
+		atomic_inc_32(&bd->d_kerr->bd_rq_nodev_err.value.ui32);
+		break;
+	case BD_ERR_RECOV:
+		atomic_inc_32(&bd->d_kerr->bd_rq_recov_err.value.ui32);
+		break;
+	case BD_ERR_ILLRQ:
+		atomic_inc_32(&bd->d_kerr->bd_rq_illrq_err.value.ui32);
+		break;
+	case BD_ERR_PFA:
+		atomic_inc_32(&bd->d_kerr->bd_rq_pfa_err.value.ui32);
+		break;
+	default:
+		cmn_err(CE_PANIC, "bd_error: unknown error type %d", error);
+		break;
 	}
 }
 

@@ -18,7 +18,7 @@
 #
 # CDDL HEADER END
 #
-#
+# Copyright 2016 Toomas Soome <tsoome@me.com>
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -51,10 +51,14 @@ ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
 LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 
+LDFLAGS += -dy -Nmisc/cmlb
+
 #
 #	Overrides.
 #
 CFLAGS		+= $(CCVERBOSE)
+
+CERRWARN	+= -_gcc=-Wno-uninitialized
 
 INC_PATH	+= -I$(SRC)/common/lzma  
 

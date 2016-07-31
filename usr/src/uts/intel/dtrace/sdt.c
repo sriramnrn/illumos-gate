@@ -23,6 +23,10 @@
  * Use is subject to license terms.
  */
 
+/*
+ * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, 2014 by Delphix. All rights reserved.
+ */
 
 #include <sys/modctl.h>
 #include <sys/sunddi.h>
@@ -326,16 +330,17 @@ sdt_getarg(void *arg, dtrace_id_t id, void *parg, int argno, int aframes)
 			 * In the case of amd64, we will use the pointer to the
 			 * regs structure that was pushed when we took the
 			 * trap.  To get this structure, we must increment
-			 * beyond the frame structure.  If the argument that
-			 * we're seeking is passed on the stack, we'll pull
-			 * the true stack pointer out of the saved registers
-			 * and decrement our argument by the number of
-			 * arguments passed in registers; if the argument
+			 * beyond the frame structure, the calling RIP, and
+			 * padding stored in dtrace_invop().  If the argument
+			 * that we're seeking is passed on the stack, we'll
+			 * pull the true stack pointer out of the saved
+			 * registers and decrement our argument by the number
+			 * of arguments passed in registers; if the argument
 			 * we're seeking is passed in regsiters, we can just
 			 * load it directly.
 			 */
 			struct regs *rp = (struct regs *)((uintptr_t)&fp[1] +
-			    sizeof (uintptr_t));
+			    sizeof (uintptr_t) * 2);
 
 			if (argno <= inreg) {
 				stack = (uintptr_t *)&rp->r_rdi;
@@ -419,9 +424,19 @@ sdt_attach(dev_info_t *devi, ddi_attach_cmd_t cmd)
 	dtrace_invop_add(sdt_invop);
 
 	for (prov = sdt_providers; prov->sdtp_name != NULL; prov++) {
+		uint32_t priv;
+
+		if (prov->sdtp_priv == DTRACE_PRIV_NONE) {
+			priv = DTRACE_PRIV_KERNEL;
+			sdt_pops.dtps_mode = NULL;
+		} else {
+			priv = prov->sdtp_priv;
+			ASSERT(priv == DTRACE_PRIV_USER);
+			sdt_pops.dtps_mode = sdt_mode;
+		}
+
 		if (dtrace_register(prov->sdtp_name, prov->sdtp_attr,
-		    DTRACE_PRIV_KERNEL, NULL,
-		    &sdt_pops, prov, &prov->sdtp_id) != 0) {
+		    priv, NULL, &sdt_pops, prov, &prov->sdtp_id) != 0) {
 			cmn_err(CE_WARN, "failed to register sdt provider %s",
 			    prov->sdtp_name);
 		}

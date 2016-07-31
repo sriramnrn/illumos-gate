@@ -21,6 +21,7 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright (c) 2015, Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1648,7 +1649,7 @@ seg_unmap(struct seg *seg)
 	int ret;
 #endif /* DEBUG */
 
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	/* Shouldn't have called seg_unmap if mapping isn't yet established */
 	ASSERT(seg->s_data != NULL);
@@ -1850,4 +1851,14 @@ seg_swresv(struct seg *seg)
 			swap = svd->swresv;
 	}
 	return (swap);
+}
+
+/*
+ * General not supported function for SEGOP_INHERIT
+ */
+/* ARGSUSED */
+int
+seg_inherit_notsup(struct seg *seg, caddr_t addr, size_t len, uint_t op)
+{
+	return (ENOTSUP);
 }

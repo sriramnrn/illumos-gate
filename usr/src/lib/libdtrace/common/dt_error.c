@@ -18,9 +18,15 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+
+/*
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 #include <strings.h>
@@ -36,7 +42,6 @@ static const struct {
 	{ EDT_VERSREDUCED, "Requested version conflicts with earlier setting" },
 	{ EDT_CTF,	"Unexpected libctf error" },
 	{ EDT_COMPILER, "Error in D program compilation" },
-	{ EDT_NOREG,	"Insufficient registers to generate code" },
 	{ EDT_NOTUPREG,	"Insufficient tuple registers to generate code" },
 	{ EDT_NOMEM,	"Memory allocation failure" },
 	{ EDT_INT2BIG,	"Integer constant table limit exceeded" },
@@ -104,7 +109,9 @@ static const struct {
 	{ EDT_BADSTACKPC, "Invalid stack program counter size" },
 	{ EDT_BADAGGVAR, "Invalid aggregation variable identifier" },
 	{ EDT_OVERSION,	"Client requested deprecated version of library" },
-	{ EDT_ENABLING_ERR, "Failed to enable probe" }
+	{ EDT_ENABLING_ERR, "Failed to enable probe" },
+	{ EDT_NOPROBES, "No probe sites found for declared provider" },
+	{ EDT_CANTLOAD, "Failed to load module" },
 };
 
 static const int _dt_nerr = sizeof (_dt_errlist) / sizeof (_dt_errlist[0]);

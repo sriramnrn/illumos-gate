@@ -10,7 +10,7 @@
  */
 
 /*
- * Copyright 2011 <contributor>.  All rights reserved.
+ * Copyright 2016 <contributor>
  */
 
 #ifndef _PROTOTYPE_H

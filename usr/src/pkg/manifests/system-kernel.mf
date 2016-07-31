@@ -21,6 +21,8 @@
 
 #
 # Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc. All rights reserved.
 #
 
 #
@@ -92,6 +94,9 @@ dir path=lib/svc
 dir path=lib/svc/manifest group=sys
 dir path=lib/svc/manifest/system group=sys
 dir path=lib/svc/method
+dir path=usr/kernel group=sys
+dir path=usr/kernel/drv group=sys
+dir path=usr/kernel/drv/$(ARCH64) group=sys
 dir path=usr/share/man
 dir path=usr/share/man/man1m
 dir path=usr/share/man/man2
@@ -252,6 +257,7 @@ $(i386_ONLY)driver name=sd perms="* 0640 root sys" \
 driver name=sgen perms="* 0600 root sys" \
     alias=scsa,08.bfcp \
     alias=scsa,08.bvhci
+driver name=signalfd perms="* 0666 root sys"
 driver name=simnet clone_perms="simnet 0666 root sys" perms="* 0666 root sys"
 $(i386_ONLY)driver name=smbios perms="smbios 0444 root sys"
 driver name=softmac
@@ -293,6 +299,8 @@ file path=boot/solaris/filelist.ramdisk group=sys
 file path=boot/solaris/filelist.safe group=sys
 file path=etc/crypto/kcf.conf group=sys \
     original_name=SUNWckr:etc/crypto/kcf.conf preserve=true
+$(i386_ONLY)file path=etc/mach group=sys original_name=SUNWos86r:etc/mach \
+    preserve=true
 file path=etc/name_to_sysnum group=sys \
     original_name=SUNWckr:etc/name_to_sysnum preserve=renameold
 file path=etc/sock2path.d/system%2Fkernel group=sys
@@ -303,22 +311,26 @@ file path=kernel/crypto/$(ARCH64)/arcfour group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/blowfish group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/des group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/ecc group=sys mode=0755
+file path=kernel/crypto/$(ARCH64)/edonr group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/md4 group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/md5 group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/rsa group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/sha1 group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/sha2 group=sys mode=0755
+file path=kernel/crypto/$(ARCH64)/skein group=sys mode=0755
 file path=kernel/crypto/$(ARCH64)/swrand group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/aes group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/arcfour group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/blowfish group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/des group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/ecc group=sys mode=0755
+$(i386_ONLY)file path=kernel/crypto/edonr group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/md4 group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/md5 group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/rsa group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/sha1 group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/sha2 group=sys mode=0755
+$(i386_ONLY)file path=kernel/crypto/skein group=sys mode=0755
 $(i386_ONLY)file path=kernel/crypto/swrand group=sys mode=0755
 $(sparc_ONLY)file path=kernel/dacf/$(ARCH64)/consconfig_dacf group=sys \
     mode=0755
@@ -525,8 +537,11 @@ file path=kernel/drv/sad.conf group=sys
 $(i386_ONLY)file path=kernel/drv/scsi_vhci group=sys
 file path=kernel/drv/scsi_vhci.conf group=sys \
     original_name=SUNWckr:kernel/drv/scsi_vhci.conf preserve=true
+$(i386_ONLY)file path=kernel/drv/sd group=sys
 $(sparc_ONLY)file path=kernel/drv/sd.conf group=sys \
     original_name=SUNWckr:kernel/drv/sd.conf preserve=true
+$(i386_ONLY)file path=kernel/drv/sd.conf group=sys \
+    original_name=SUNWos86r:kernel/drv/sd.conf preserve=true
 $(i386_ONLY)file path=kernel/drv/sgen group=sys
 file path=kernel/drv/sgen.conf group=sys \
     original_name=SUNWckr:kernel/drv/sgen.conf preserve=true
@@ -574,7 +589,7 @@ file path=kernel/exec/$(ARCH64)/intpexec group=sys mode=0755
 $(i386_ONLY)file path=kernel/exec/elfexec group=sys mode=0755
 $(i386_ONLY)file path=kernel/exec/intpexec group=sys mode=0755
 file path=kernel/fs/$(ARCH64)/autofs group=sys mode=0755
-file path=kernel/fs/$(ARCH64)/cachefs group=sys mode=0755
+file path=kernel/fs/$(ARCH64)/bootfs group=sys mode=0755
 file path=kernel/fs/$(ARCH64)/ctfs group=sys mode=0755
 file path=kernel/fs/$(ARCH64)/dcfs group=sys mode=0755
 file path=kernel/fs/$(ARCH64)/dev group=sys mode=0755
@@ -592,7 +607,7 @@ file path=kernel/fs/$(ARCH64)/specfs group=sys mode=0755
 file path=kernel/fs/$(ARCH64)/tmpfs group=sys mode=0755
 file path=kernel/fs/$(ARCH64)/ufs group=sys mode=0755
 $(i386_ONLY)file path=kernel/fs/autofs group=sys mode=0755
-$(i386_ONLY)file path=kernel/fs/cachefs group=sys mode=0755
+$(i386_ONLY)file path=kernel/fs/bootfs group=sys mode=0755
 $(i386_ONLY)file path=kernel/fs/ctfs group=sys mode=0755
 $(i386_ONLY)file path=kernel/fs/dcfs group=sys mode=0755
 $(i386_ONLY)file path=kernel/fs/dev group=sys mode=0755
@@ -809,6 +824,9 @@ file path=lib/svc/manifest/system/scheduler.xml group=sys mode=0444
 file path=lib/svc/method/svc-dumpadm mode=0555
 file path=lib/svc/method/svc-intrd mode=0555
 file path=lib/svc/method/svc-scheduler mode=0555
+file path=usr/kernel/drv/$(ARCH64)/signalfd group=sys
+$(i386_ONLY)file path=usr/kernel/drv/signalfd group=sys
+file path=usr/kernel/drv/signalfd.conf group=sys
 $(sparc_ONLY)file path=usr/share/man/man1m/monitor.1m
 $(sparc_ONLY)file path=usr/share/man/man1m/obpsym.1m
 # On SPARC driver/bscv is Serverblade1 specific, and in system/kernel/platform
@@ -817,15 +835,21 @@ $(sparc_ONLY)file path=usr/share/man/man7d/dad.7d
 $(i386_ONLY)file path=usr/share/man/man7d/smbios.7d
 # Sadly vuid mouse support is in different packages on different platforms
 # While kstat(7D) is in SUNWcs, the structures are general
+hardlink path=kernel/misc/$(ARCH64)/edonr \
+    target=../../../kernel/crypto/$(ARCH64)/edonr
 hardlink path=kernel/misc/$(ARCH64)/md5 \
     target=../../../kernel/crypto/$(ARCH64)/md5
 hardlink path=kernel/misc/$(ARCH64)/sha1 \
     target=../../../kernel/crypto/$(ARCH64)/sha1
 hardlink path=kernel/misc/$(ARCH64)/sha2 \
     target=../../../kernel/crypto/$(ARCH64)/sha2
+hardlink path=kernel/misc/$(ARCH64)/skein \
+    target=../../../kernel/crypto/$(ARCH64)/skein
+$(i386_ONLY)hardlink path=kernel/misc/edonr target=../../kernel/crypto/edonr
 $(i386_ONLY)hardlink path=kernel/misc/md5 target=../../kernel/crypto/md5
 $(i386_ONLY)hardlink path=kernel/misc/sha1 target=../../kernel/crypto/sha1
 $(i386_ONLY)hardlink path=kernel/misc/sha2 target=../../kernel/crypto/sha2
+$(i386_ONLY)hardlink path=kernel/misc/skein target=../../kernel/crypto/skein
 hardlink path=kernel/socketmod/$(ARCH64)/icmp \
     target=../../../kernel/drv/$(ARCH64)/icmp
 hardlink path=kernel/socketmod/$(ARCH64)/rts \

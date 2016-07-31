@@ -20,10 +20,10 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"	
-#
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2015 RackTop Systems.
 # 
 
 PROG=	ncab2clf 
@@ -47,6 +47,7 @@ LINTFLAGS +=	$(_EXTN)
 
 INC_PATH +=	../../../../uts/common/inet/nca -I.
 CFLAGS +=	$(CCVERBOSE)
+CERRWARN +=	-_gcc=-Wno-parentheses
 CPPFLAGS +=	-I$(INC_PATH)
 
 .KEEP_STATE:
@@ -56,7 +57,7 @@ CPPFLAGS +=	-I$(INC_PATH)
 all: $(PROG)
 
 $(PROG): $(OBJS)
-	$(LINK.c) $(OBJS) -o $@
+	$(LINK.c) $(OBJS) -o $@ $(LDLIBS)
 	$(POST_PROCESS)
 
 #

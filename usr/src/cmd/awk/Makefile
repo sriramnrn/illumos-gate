@@ -20,12 +20,9 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 #
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
-#
-# cmd/awk/Makefile
 #
 
 # NOTE: awk is oawk.
@@ -38,6 +35,13 @@ OBJS= $(OBJ2) $(OBJ1)
 SRCS= $(OBJ1:%.o=%.c)
 
 include ../Makefile.cmd
+
+CERRWARN += -_gcc=-Wno-implicit-function-declaration
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-uninitialized
+
 #
 # Message catalog
 #
@@ -73,7 +77,7 @@ proctab.c: maketab
 	rm -f $@; ./maketab > $@
 
 maketab: maketab.c
-	$(NATIVECC) -O maketab.c -o $@ $(LDLIBS)
+	$(NATIVECC) $(NATIVE_CFLAGS) maketab.c -o $@ $(LDLIBS)
 
 install: all $(ROOTPROG) $(ROOTLINK)
 

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <smbsrv/smb_kproto.h>
@@ -32,6 +33,7 @@ static uint32_t smb_nt_trans_ioctl_set_sparse(smb_request_t *, smb_xa_t *);
 static uint32_t smb_nt_trans_ioctl_query_alloc_ranges(smb_request_t *,
     smb_xa_t *);
 static uint32_t smb_nt_trans_ioctl_set_zero_data(smb_request_t *, smb_xa_t *);
+static uint32_t smb_nt_trans_ioctl_enum_snaps(smb_request_t *, smb_xa_t *);
 
 /*
  * This table defines the list of FSCTL values for which we'll
@@ -41,14 +43,14 @@ static uint32_t smb_nt_trans_ioctl_set_zero_data(smb_request_t *, smb_xa_t *);
  * any oplocks on the file to none:
  *   smb_oplock_break(sr, node, SMB_OPLOCK_BREAK_TO_NONE);
  */
-static struct {
+static const struct {
 	uint32_t fcode;
 	uint32_t (*ioctl_func)(smb_request_t *sr, smb_xa_t *xa);
 } ioctl_ret_tbl[] = {
 	{ FSCTL_GET_OBJECT_ID, smb_nt_trans_ioctl_invalid_parm },
 	{ FSCTL_QUERY_ALLOCATED_RANGES, smb_nt_trans_ioctl_query_alloc_ranges },
 	{ FSCTL_SET_ZERO_DATA, smb_nt_trans_ioctl_set_zero_data },
-	{ FSCTL_SRV_ENUMERATE_SNAPSHOTS, smb_vss_ioctl_enumerate_snaps },
+	{ FSCTL_SRV_ENUMERATE_SNAPSHOTS, smb_nt_trans_ioctl_enum_snaps },
 	{ FSCTL_SET_SPARSE, smb_nt_trans_ioctl_set_sparse },
 	{ FSCTL_FIND_FILES_BY_SID, smb_nt_trans_ioctl_noop }
 };
@@ -148,7 +150,7 @@ smb_nt_trans_ioctl_set_sparse(smb_request_t *sr, smb_xa_t *xa)
 {
 	int		rc = 0;
 	uint8_t		set = 1;
-	smb_node_t	*node;
+	smb_ofile_t	*of;
 	smb_attr_t	attr;
 
 	if (SMB_TREE_IS_READONLY(sr))
@@ -166,8 +168,8 @@ smb_nt_trans_ioctl_set_sparse(smb_request_t *sr, smb_xa_t *xa)
 		return (NT_STATUS_INVALID_PARAMETER);
 	}
 
-	node = sr->fid_ofile->f_node;
-	if (smb_node_is_dir(node)) {
+	of = sr->fid_ofile;
+	if (smb_node_is_dir(of->f_node)) {
 		smbsr_release_file(sr);
 		return (NT_STATUS_INVALID_PARAMETER);
 	}
@@ -179,9 +181,14 @@ smb_nt_trans_ioctl_set_sparse(smb_request_t *sr, smb_xa_t *xa)
 		}
 	}
 
+	/*
+	 * Using kcred because we just want the DOS attrs
+	 * and don't want access errors for this.
+	 */
 	bzero(&attr, sizeof (smb_attr_t));
 	attr.sa_mask = SMB_AT_DOSATTR;
-	if ((rc = smb_node_getattr(sr, node, &attr)) != 0) {
+	rc = smb_node_getattr(sr, of->f_node, zone_kcred(), of, &attr);
+	if (rc != 0) {
 		smbsr_errno(sr, rc);
 		smbsr_release_file(sr);
 		return (sr->smb_error.status);
@@ -199,7 +206,7 @@ smb_nt_trans_ioctl_set_sparse(smb_request_t *sr, smb_xa_t *xa)
 	}
 
 	if (attr.sa_mask != 0) {
-		rc = smb_node_setattr(sr, node, sr->user_cr, NULL, &attr);
+		rc = smb_node_setattr(sr, of->f_node, of->f_cr, of, &attr);
 		if (rc != 0) {
 			smbsr_errno(sr, rc);
 			smbsr_release_file(sr);
@@ -260,7 +267,7 @@ smb_nt_trans_ioctl_query_alloc_ranges(smb_request_t *sr, smb_xa_t *xa)
 {
 	int		rc;
 	uint64_t	offset, len;
-	smb_node_t	*node;
+	smb_ofile_t	*of;
 	smb_attr_t	attr;
 
 	if (STYPE_ISIPC(sr->tid_tree->t_res_type))
@@ -275,8 +282,8 @@ smb_nt_trans_ioctl_query_alloc_ranges(smb_request_t *sr, smb_xa_t *xa)
 		return (NT_STATUS_INVALID_PARAMETER);
 	}
 
-	node = sr->fid_ofile->f_node;
-	if (smb_node_is_dir(node)) {
+	of = sr->fid_ofile;
+	if (smb_node_is_dir(of->f_node)) {
 		smbsr_release_file(sr);
 		return (NT_STATUS_INVALID_PARAMETER);
 	}
@@ -284,7 +291,8 @@ smb_nt_trans_ioctl_query_alloc_ranges(smb_request_t *sr, smb_xa_t *xa)
 	/* If zero size file don't return any data */
 	bzero(&attr, sizeof (smb_attr_t));
 	attr.sa_mask = SMB_AT_SIZE;
-	if ((rc = smb_node_getattr(sr, node, &attr)) != 0) {
+	rc = smb_node_getattr(sr, of->f_node, of->f_cr, of, &attr);
+	if (rc != 0) {
 		smbsr_errno(sr, rc);
 		smbsr_release_file(sr);
 		return (sr->smb_error.status);
@@ -316,4 +324,35 @@ smb_nt_trans_ioctl_query_alloc_ranges(smb_request_t *sr, smb_xa_t *xa)
 
 	smbsr_release_file(sr);
 	return (NT_STATUS_SUCCESS);
+}
+
+static uint32_t
+smb_nt_trans_ioctl_enum_snaps(smb_request_t *sr, smb_xa_t *xa)
+{
+	smb_fsctl_t fsctl;
+	uint32_t status;
+
+	if (STYPE_ISIPC(sr->tid_tree->t_res_type))
+		return (NT_STATUS_INVALID_PARAMETER);
+
+	smbsr_lookup_file(sr);
+	if (sr->fid_ofile == NULL)
+		return (NT_STATUS_INVALID_HANDLE);
+
+	if (!SMB_FTYPE_IS_DISK(sr->fid_ofile->f_ftype)) {
+		smbsr_release_file(sr);
+		return (NT_STATUS_INVALID_PARAMETER);
+	}
+
+	fsctl.CtlCode = FSCTL_SRV_ENUMERATE_SNAPSHOTS;
+	fsctl.InputCount = xa->smb_tpscnt;
+	fsctl.OutputCount = 0;
+	fsctl.MaxOutputResp = xa->smb_mdrcnt;
+	fsctl.in_mbc = &xa->req_param_mb;
+	fsctl.out_mbc = &xa->rep_data_mb;
+
+	status = smb_vss_enum_snapshots(sr, &fsctl);
+
+	smbsr_release_file(sr);
+	return (status);
 }

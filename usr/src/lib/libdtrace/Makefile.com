@@ -20,7 +20,7 @@
 #
 #
 # Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright (c) 2011 by Delphix. All rights reserved.
+# Copyright (c) 2012 by Delphix. All rights reserved.
 #
 
 LIBRARY = libdtrace.a
@@ -52,6 +52,7 @@ LIBSRCS = \
 	dt_parser.c \
 	dt_pcb.c \
 	dt_pid.c \
+	dt_pq.c \
 	dt_pragma.c \
 	dt_print.c \
 	dt_printf.c \
@@ -69,8 +70,15 @@ LIBISASRCS = \
 
 OBJECTS = dt_lex.o dt_grammar.o $(MACHOBJS) $(LIBSRCS:%.c=%.o) $(LIBISASRCS:%.c=%.o)
 
-DRTISRC = drti.c
-DRTIOBJ = $(DRTISRC:%.c=%.o)
+DRTISRCS = dlink_init.c dlink_common.c
+DRTIOBJS = $(DRTISRCS:%.c=pics/%.o)
+DRTIOBJ = drti.o
+
+LIBDAUDITSRCS = dlink_audit.c dlink_common.c
+LIBDAUDITOBJS = $(LIBDAUDITSRCS:%.c=pics/%.o)
+LIBDAUDIT = libdtrace_forceload.so
+
+DLINKSRCS = dlink_common.c dlink_init.c dlink_audit.c
 
 DLIBSRCS += \
 	errno.d \
@@ -109,15 +117,24 @@ CLEANFILES += ../common/dt_errtags.c ../common/dt_names.c
 CLEANFILES += ../common/sysevent.sed ../common/sysevent.d
 CLEANFILES += ../common/tcp.sed ../common/tcp.d
 CLEANFILES += ../common/udp.sed ../common/udp.d
+CLEANFILES += $(LIBDAUDITOBJS) $(DRTIOBJS)
 
-CLOBBERFILES += drti.o
+CLOBBERFILES += $(LIBDAUDIT) drti.o
 
 CPPFLAGS += -I../common -I.
 CFLAGS += $(CCVERBOSE) $(C_BIGPICFLAGS)
 CFLAGS64 += $(CCVERBOSE) $(C_BIGPICFLAGS)
+
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-switch
+
 YYCFLAGS =
 LDLIBS += -lgen -lproc -lrtld_db -lnsl -lsocket -lctf -lelf -lc
 DRTILDLIBS = $(LDLIBS.lib) -lc
+LIBDAUDITLIBS = $(LDLIBS.lib) -lmapmalloc -lc -lproc
 
 yydebug := YYCFLAGS += -DYYDEBUG
 
@@ -130,17 +147,23 @@ ROOTDLIBDIR = $(ROOT)/usr/lib/dtrace
 ROOTDLIBDIR64 = $(ROOT)/usr/lib/dtrace/64
 
 ROOTDLIBS = $(DLIBSRCS:%=$(ROOTDLIBDIR)/%)
-ROOTDOBJS = $(ROOTDLIBDIR)/$(DRTIOBJ)
-ROOTDOBJS64 = $(ROOTDLIBDIR64)/$(DRTIOBJ)
+ROOTDOBJS = $(ROOTDLIBDIR)/$(DRTIOBJ) $(ROOTDLIBDIR)/$(LIBDAUDIT)
+ROOTDOBJS64 = $(ROOTDLIBDIR64)/$(DRTIOBJ) $(ROOTDLIBDIR64)/$(LIBDAUDIT)
+
+$(ROOTDLIBDIR)/%.d := FILEMODE=444
+$(ROOTDLIBDIR)/%.o := FILEMODE=444
+$(ROOTDLIBDIR64)/%.o :=	FILEMODE=444
+$(ROOTDLIBDIR)/%.so := FILEMODE=555
+$(ROOTDLIBDIR64)/%.so := FILEMODE=555
 
 .KEEP_STATE:
 
-all: $(LIBS) $(DRTIOBJ)
+all: $(LIBS) $(DRTIOBJ) $(LIBDAUDIT)
 
-lint: lintdrti lintcheck
+lint: lintdlink lintcheck
 
-lintdrti: ../common/$(DRTISRC)
-	$(LINT.c) ../common/$(DRTISRC) $(DRTILDLIBS)
+lintdlink: $(DLINKSRCS:%.c=../common/%.c)
+	$(LINT.c) $(DLINKSRCS:%.c=../common/%.c) $(DRTILDLIBS)
 
 dt_lex.c: $(SRCDIR)/dt_lex.l dt_grammar.h
 	$(LEX) $(LFLAGS) $(SRCDIR)/dt_lex.l > $@
@@ -201,9 +224,15 @@ pics/%.o: ../$(MACH)/%.s
 	$(COMPILE.s) -o $@ $<
 	$(POST_PROCESS_O)
 
-%.o: ../common/%.c
-	$(COMPILE.c) -o $@ $<
+$(DRTIOBJ): $(DRTIOBJS)
+	$(LD) -o $@ -r -Blocal -Breduce $(DRTIOBJS)
 	$(POST_PROCESS_O)
+
+$(LIBDAUDIT): $(LIBDAUDITOBJS)
+	$(LINK.c) -o $@ $(GSHARED) -h$(LIBDAUDIT) $(ZTEXT) $(ZDEFS) $(BDIRECT) \
+	    $(MAPFILE.PGA:%=-M%) $(MAPFILE.NED:%=-M%) $(LIBDAUDITOBJS) \
+	    $(LIBDAUDITLIBS)
+	$(POST_PROCESS_SO)
 
 $(ROOTDLIBDIR):
 	$(INS.dir)
@@ -224,6 +253,12 @@ $(ROOTDLIBDIR)/%.o: %.o
 	$(INS.file)
 
 $(ROOTDLIBDIR64)/%.o: %.o
+	$(INS.file)
+
+$(ROOTDLIBDIR)/%.so: %.so
+	$(INS.file)
+
+$(ROOTDLIBDIR64)/%.so: %.so
 	$(INS.file)
 
 $(ROOTDLIBS): $(ROOTDLIBDIR)

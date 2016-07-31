@@ -37,6 +37,7 @@
  */
 /* Copyright (c) 2007, The Storage Networking Industry Association. */
 /* Copyright (c) 1996, 1997 PDC, Network Appliance. All Rights Reserved */
+/* Copyright 2014 Nexenta Systems, Inc.  All rights reserved. */
 
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -62,7 +63,6 @@
 
 static int create_listen_socket_v2(ndmpd_session_t *session, ulong_t *addr,
     ushort_t *port);
-static int tape_write(ndmpd_session_t *session, char *data, ssize_t length);
 static int tape_read(ndmpd_session_t *session, char *data);
 static int change_tape(ndmpd_session_t *session);
 static int discard_data(ndmpd_session_t *session, ulong_t length);
@@ -88,15 +88,30 @@ static void mover_data_read_v3(void *cookie, int fd, ulong_t mode);
 static void accept_connection(void *cookie, int fd, ulong_t mode);
 static void mover_data_write_v3(void *cookie, int fd, ulong_t mode);
 static void accept_connection_v3(void *cookie, int fd, ulong_t mode);
-static ndmp_error mover_connect_sock_v3(ndmpd_session_t *session,
+static ndmp_error mover_connect_sock(ndmpd_session_t *session,
     ndmp_mover_mode mode, ulong_t addr, ushort_t port);
 static boolean_t is_writer_running(ndmpd_session_t *session);
+static int set_socket_nonblock(int sock);
 
 
 int ndmp_max_mover_recsize = MAX_MOVER_RECSIZE; /* patchable */
 
 #define	TAPE_READ_ERR		-1
 #define	TAPE_NO_WRITER_ERR	-2
+
+/*
+ * Set non-blocking mode for socket.
+ */
+static int
+set_socket_nonblock(int sock)
+{
+	int flags;
+
+	flags = fcntl(sock, F_GETFL, 0);
+	if (flags < 0)
+		return (0);
+	return (fcntl(sock, F_SETFL, flags|O_NONBLOCK) == 0);
+}
 
 /*
  * ************************************************************************
@@ -278,8 +293,6 @@ ndmpd_mover_abort_v2(ndmp_connection_t *connection, void *body)
 	    "sending mover_abort reply");
 
 	ndmpd_mover_error(session, NDMP_MOVER_HALT_ABORTED);
-
-	nlp_event_nw(session);
 	ndmp_stop_buffer_worker(session);
 }
 
@@ -682,6 +695,7 @@ ndmpd_mover_continue_v3(ndmp_connection_t *connection, void *body)
 {
 	ndmp_mover_continue_reply reply;
 	ndmpd_session_t *session = ndmp_get_client_data(connection);
+	ndmp_lbr_params_t *nlp = ndmp_get_nlp(session);
 	int ret;
 
 	(void) memset((void*)&reply, 0, sizeof (reply));
@@ -746,8 +760,13 @@ ndmpd_mover_continue_v3(ndmp_connection_t *connection, void *body)
 		}
 	}
 
+	(void) mutex_lock(&nlp->nlp_mtx);
 	session->ns_mover.md_state = NDMP_MOVER_STATE_ACTIVE;
 	session->ns_mover.md_pause_reason = NDMP_MOVER_PAUSE_NA;
+	/* The tape has been likely exchanged, reset tape block counter */
+	session->ns_tape.td_record_count = 0;
+	(void) cond_broadcast(&nlp->nlp_cv);
+	(void) mutex_unlock(&nlp->nlp_mtx);
 
 	reply.error = NDMP_NO_ERR;
 	ndmp_send_reply(connection, (void *) &reply,
@@ -1067,7 +1086,7 @@ ndmpd_mover_connect_v3(ndmp_connection_t *connection, void *body)
 		break;
 
 	case NDMP_ADDR_TCP:
-		reply.error = mover_connect_sock_v3(session, request->mode,
+		reply.error = mover_connect_sock(session, request->mode,
 		    request->addr.tcp_ip_v3, request->addr.tcp_port_v3);
 		break;
 
@@ -1324,7 +1343,7 @@ ndmpd_mover_connect_v4(ndmp_connection_t *connection, void *body)
 		break;
 
 	case NDMP_ADDR_TCP:
-		reply.error = mover_connect_sock_v3(session, request->mode,
+		reply.error = mover_connect_sock(session, request->mode,
 		    request->addr.tcp_ip_v4(0), request->addr.tcp_port_v4(0));
 		break;
 
@@ -1352,30 +1371,6 @@ ndmpd_mover_connect_v4(ndmp_connection_t *connection, void *body)
  * LOCALS
  * ************************************************************************
  */
-
-/*
- * ndmpd_write_eom
- *
- * Write end-of-media magic string.  This is called after hitting the LEOT.
- */
-void
-ndmpd_write_eom(int fd)
-{
-	int n;
-
-	(void) ndmp_mtioctl(fd, MTWEOF, 1);
-	n = write(fd, NDMP_EOM_MAGIC, strlen(NDMP_EOM_MAGIC));
-
-	NDMP_LOG(LOG_DEBUG, "%d EOM bytes wrote", n);
-	(void) ndmp_mtioctl(fd, MTWEOF, 1);
-
-	/*
-	 * Rewind to the previous file since the last two files are used
-	 * as the indicator for logical EOM.
-	 */
-	(void) ndmp_mtioctl(fd, MTBSF, 2);
-}
-
 
 /*
  * ndmpd_local_write
@@ -1413,7 +1408,7 @@ ndmpd_local_write(ndmpd_session_t *session, char *data, ulong_t length)
 		    0, session->ns_mover.md_record_size -
 		    session->ns_mover.md_w_index);
 
-		n = tape_write(session, session->ns_mover.md_buf,
+		n = mover_tape_write_v3(session, session->ns_mover.md_buf,
 		    session->ns_mover.md_record_size);
 		if (n <= 0) {
 			ndmpd_mover_error(session,
@@ -1439,7 +1434,7 @@ ndmpd_local_write(ndmpd_session_t *session, char *data, ulong_t length)
 		 */
 		if (session->ns_mover.md_w_index == 0 &&
 		    length - count >= session->ns_mover.md_record_size) {
-			n = tape_write(session, &data[count],
+			n = mover_tape_write_v3(session, &data[count],
 			    session->ns_mover.md_record_size);
 			if (n <= 0) {
 				ndmpd_mover_error(session,
@@ -1469,9 +1464,10 @@ ndmpd_local_write(ndmpd_session_t *session, char *data, ulong_t length)
 		/* Write the buffer if its full */
 		if (session->ns_mover.md_w_index ==
 		    session->ns_mover.md_record_size) {
-			n = tape_write(session, session->ns_mover.md_buf,
+			n = mover_tape_write_v3(session,
+			    session->ns_mover.md_buf,
 			    session->ns_mover.md_record_size);
-			if (n < 0) {
+			if (n <= 0) {
 				ndmpd_mover_error(session,
 				    (n == 0 ? NDMP_MOVER_HALT_ABORTED :
 				    NDMP_MOVER_HALT_INTERNAL_ERROR));
@@ -1600,27 +1596,8 @@ ndmpd_local_read(ndmpd_session_t *session, char *data, ulong_t length)
 			 * Wait until the state is changed by
 			 * an abort or continue request.
 			 */
-			nlp_ref_nw(session);
-			for (; ; ) {
-				nlp_wait_nw(session);
-
-				if (session->ns_eof == TRUE) {
-					nlp_unref_nw(session);
-					return (1);
-				}
-
-				switch (session->ns_mover.md_state) {
-				case NDMP_MOVER_STATE_ACTIVE:
-					break;
-
-				case NDMP_MOVER_STATE_PAUSED:
-					continue;
-
-				default:
-					nlp_unref_nw(session);
-					return (-1);
-				}
-			}
+			if (ndmp_wait_for_mover(session) != 0)
+				return (1);
 		}
 		len = length - count;
 
@@ -1887,6 +1864,12 @@ ndmpd_mover_init(ndmpd_session_t *session)
 void
 ndmpd_mover_shut_down(ndmpd_session_t *session)
 {
+	ndmp_lbr_params_t *nlp;
+
+	if ((nlp = ndmp_get_nlp(session)) == NULL)
+		return;
+
+	(void) mutex_lock(&nlp->nlp_mtx);
 	if (session->ns_mover.md_listen_sock != -1) {
 		NDMP_LOG(LOG_DEBUG, "mover.listen_sock: %d",
 		    session->ns_mover.md_listen_sock);
@@ -1903,6 +1886,8 @@ ndmpd_mover_shut_down(ndmpd_session_t *session)
 		(void) close(session->ns_mover.md_sock);
 		session->ns_mover.md_sock = -1;
 	}
+	(void) cond_broadcast(&nlp->nlp_cv);
+	(void) mutex_unlock(&nlp->nlp_mtx);
 }
 
 
@@ -1938,7 +1923,6 @@ ndmpd_mover_connect(ndmpd_session_t *session, ndmp_mover_mode mover_mode)
 	ndmp_mover_addr *mover = &session->ns_data.dd_mover;
 	struct sockaddr_in sin;
 	int sock = -1;
-	int flag = 1;
 
 	if (mover->addr_type == NDMP_ADDR_TCP) {
 		if (mover->ndmp_mover_addr_u.addr.ip_addr) {
@@ -1978,17 +1962,7 @@ ndmpd_mover_connect(ndmpd_session_t *session, ndmp_mover_mode mover_mode)
 				(void) close(sock);
 				return (NDMP_IO_ERR);
 			}
-
-			if (ndmp_sbs > 0)
-				ndmp_set_socket_snd_buf(sock,
-				    ndmp_sbs * KILOBYTE);
-			if (ndmp_rbs > 0)
-				ndmp_set_socket_rcv_buf(sock,
-				    ndmp_rbs * KILOBYTE);
-
-			ndmp_set_socket_nodelay(sock);
-			(void) setsockopt(sock, SOL_SOCKET, SO_KEEPALIVE, &flag,
-			    sizeof (flag));
+			set_socket_options(sock);
 		} else {
 			if ((session->ns_mover.md_state !=
 			    NDMP_MOVER_STATE_ACTIVE) ||
@@ -2211,7 +2185,6 @@ create_listen_socket_v2(ndmpd_session_t *session, ulong_t *addr, ushort_t *port)
 	return (0);
 }
 
-
 /*
  * accept_connection
  *
@@ -2234,7 +2207,6 @@ accept_connection(void *cookie, int fd, ulong_t mode)
 	ndmpd_session_t *session = (ndmpd_session_t *)cookie;
 	struct sockaddr_in from;
 	int from_len;
-	int flag = 1;
 
 	from_len = sizeof (from);
 	session->ns_mover.md_sock = accept(fd, (struct sockaddr *)&from,
@@ -2249,12 +2221,7 @@ accept_connection(void *cookie, int fd, ulong_t mode)
 		ndmpd_mover_error(session, NDMP_MOVER_HALT_CONNECT_ERROR);
 		return;
 	}
-
-	(void) setsockopt(session->ns_mover.md_sock, SOL_SOCKET, SO_KEEPALIVE,
-	    &flag, sizeof (flag));
-	ndmp_set_socket_nodelay(session->ns_mover.md_sock);
-	ndmp_set_socket_rcv_buf(session->ns_mover.md_sock, 60 * KILOBYTE);
-	ndmp_set_socket_snd_buf(session->ns_mover.md_sock, 60 * KILOBYTE);
+	set_socket_options(session->ns_mover.md_sock);
 
 	NDMP_LOG(LOG_DEBUG, "sock fd: %d", session->ns_mover.md_sock);
 
@@ -2277,99 +2244,6 @@ accept_connection(void *cookie, int fd, ulong_t mode)
 
 	session->ns_mover.md_state = NDMP_MOVER_STATE_ACTIVE;
 }
-
-/*
- * tape_write
- *
- * Writes a data record to tape. Detects and handles EOT conditions.
- *
- * Parameters:
- *   session (input) - session pointer.
- *   data    (input) - data to be written.
- *   length  (input) - length of data to be written.
- *
- * Returns:
- *    0 - operation aborted by client.
- *   -1 - error.
- *   otherwise - number of bytes written.
- */
-static int
-tape_write(ndmpd_session_t *session, char *data, ssize_t length)
-{
-	ssize_t n;
-	int err;
-
-	for (; ; ) {
-		/*
-		 * Refer to the comment at the top of ndmpd_tape.c file for
-		 * Mammoth2 tape drives.
-		 */
-		if (session->ns_tape.td_eom_seen) {
-			NDMP_LOG(LOG_DEBUG, "eom_seen");
-			session->ns_tape.td_eom_seen = FALSE;
-			/*
-			 * End of media reached.
-			 * Notify client and wait for the client to
-			 * either abort the operation or continue the
-			 * operation after changing the tape.
-			 */
-			NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
-			    ++ndmp_log_msg_id,
-			    "End of tape reached. Load next tape.\n");
-
-			err = change_tape(session);
-
-			/* Operation aborted or connection terminated? */
-			if (err < 0)
-				return (-1);
-
-			continue;
-		}
-
-		n = write(session->ns_tape.td_fd, data, length);
-		if (n < 0) {
-			NDMP_LOG(LOG_ERR, "Tape write error: %m.");
-			return (-1);
-		}
-		NS_ADD(wtape, n);
-
-		if (n == 0 || n != length) {
-			if (n != 0) {
-				NDMP_LOG(LOG_DEBUG, "LEOT n: %d", n);
-
-				NDMP_LOG(LOG_DEBUG, "Backup one record");
-				(void) ndmp_mtioctl(session->ns_tape.td_fd,
-				    MTBSR, 1);
-
-				/* setting logical EOM */
-				ndmpd_write_eom(session->ns_tape.td_fd);
-			}
-
-			/*
-			 * End of media reached.
-			 * Notify client and wait for the client to
-			 * either abort the operation or continue the
-			 * operation after changing the tape.
-			 */
-			NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
-			    ++ndmp_log_msg_id,
-			    "End of tape reached. Load next tape.\n");
-
-			err = change_tape(session);
-
-			/* Operation aborted or connection terminated? */
-			if (err < 0)
-				return (-1);
-
-			/* Retry the write to the new tape. */
-			continue;
-		}
-
-		session->ns_tape.td_record_count++;
-		return (n);
-	}
-}
-
 
 /*
  * tape_read
@@ -2493,45 +2367,7 @@ change_tape(ndmpd_session_t *session)
 	 * Wait for until the state is changed by
 	 * an abort or continue request.
 	 */
-	nlp_ref_nw(session);
-	for (; ; ) {
-		NDMP_LOG(LOG_DEBUG, "calling nlp_wait_nw()");
-
-		nlp_wait_nw(session);
-
-		if (nlp_event_rv_get(session) < 0) {
-			nlp_unref_nw(session);
-			return (-1);
-		}
-
-		if (session->ns_eof == TRUE) {
-			NDMP_LOG(LOG_DEBUG, "session->ns_eof == TRUE");
-			nlp_unref_nw(session);
-			return (-1);
-		}
-
-		switch (session->ns_mover.md_state) {
-		case NDMP_MOVER_STATE_ACTIVE:
-			NDMP_LOG(LOG_DEBUG,
-			    "mover.state: NDMP_MOVER_STATE_ACTIVE");
-
-			nlp_unref_nw(session);
-			session->ns_tape.td_record_count = 0;
-			return (0);
-
-		case NDMP_MOVER_STATE_PAUSED:
-			NDMP_LOG(LOG_DEBUG,
-			    "mover.state: NDMP_MOVER_STATE_PAUSED");
-			continue;
-
-		default:
-			NDMP_LOG(LOG_DEBUG, "default");
-			nlp_unref_nw(session);
-			return (-1);
-		}
-	}
-
-	/* nlp_unref_nw(session); - statement never reached */
+	return (ndmp_wait_for_mover(session));
 }
 
 
@@ -3143,7 +2979,8 @@ mover_tape_write_one_buf(ndmpd_session_t *session, tlm_buffer_t *buf)
 	    buf->tb_full, buf->tb_eot, buf->tb_eof, buf->tb_errno,
 	    buf->tb_buffer_size, buf->tb_buffer_data);
 
-	n = tape_write(session, buf->tb_buffer_data, buf->tb_buffer_size);
+	n = mover_tape_write_v3(session, buf->tb_buffer_data,
+	    buf->tb_buffer_size);
 
 	NDMP_LOG(LOG_DEBUG, "n: %d", n);
 
@@ -3404,63 +3241,6 @@ is_writer_running_v3(ndmpd_session_t *session)
 
 
 /*
- * ndmpd_mover_wait_v3
- *
- * Take the mover state to PAUSED state
- *
- * Parameters:
- *   session (input) - session pointer.
- *
- * Returns:
- *   0: on success
- *  -1: otherwise
- */
-int
-ndmpd_mover_wait_v3(ndmpd_session_t *session)
-{
-	int rv = 0;
-
-	nlp_ref_nw(session);
-	for (; ; ) {
-		nlp_wait_nw(session);
-
-		if (nlp_event_rv_get(session) < 0) {
-			rv = -1;
-			break;
-		}
-		if (session->ns_eof) {
-			NDMP_LOG(LOG_DEBUG, "session->ns_eof");
-			rv = -1;
-			break;
-		}
-		if (session->ns_data.dd_abort) {
-			NDMP_LOG(LOG_DEBUG, "data.abort");
-			rv = -1;
-			break;
-		}
-		if (session->ns_mover.md_state == NDMP_MOVER_STATE_ACTIVE) {
-			NDMP_LOG(LOG_DEBUG,
-			    "mover.state: NDMP_MOVER_STATE_ACTIVE");
-			session->ns_tape.td_record_count = 0;
-			rv = 0;
-			break;
-		} else if (session->ns_mover.md_state ==
-		    NDMP_MOVER_STATE_PAUSED) {
-			NDMP_LOG(LOG_DEBUG,
-			    "mover.state: NDMP_MOVER_STATE_PAUSED");
-		} else {
-			NDMP_LOG(LOG_DEBUG, "default");
-			rv = -1;
-			break;
-		}
-	}
-
-	session->ns_mover.md_pause_reason = NDMP_MOVER_PAUSE_NA;
-	nlp_unref_nw(session);
-	return (rv);
-}
-
-/*
  * ndmpd_mover_error_send
  *
  * This function sends the notify message to the client.
@@ -3527,6 +3307,8 @@ ndmpd_mover_error_send_v4(ndmpd_session_t *session,
 void
 ndmpd_mover_error(ndmpd_session_t *session, ndmp_mover_halt_reason reason)
 {
+	ndmp_lbr_params_t *nlp = ndmp_get_nlp(session);
+
 	if (session->ns_mover.md_state == NDMP_MOVER_STATE_HALTED ||
 	    (session->ns_protocol_version > NDMPV2 &&
 	    session->ns_mover.md_state == NDMP_MOVER_STATE_IDLE))
@@ -3545,6 +3327,7 @@ ndmpd_mover_error(ndmpd_session_t *session, ndmp_mover_halt_reason reason)
 			    "Error sending notify_mover_halted request");
 	}
 
+	(void) mutex_lock(&nlp->nlp_mtx);
 	if (session->ns_mover.md_listen_sock != -1) {
 		(void) ndmpd_remove_file_handler(session,
 		    session->ns_mover.md_listen_sock);
@@ -3560,6 +3343,8 @@ ndmpd_mover_error(ndmpd_session_t *session, ndmp_mover_halt_reason reason)
 
 	session->ns_mover.md_state = NDMP_MOVER_STATE_HALTED;
 	session->ns_mover.md_halt_reason = reason;
+	(void) cond_broadcast(&nlp->nlp_cv);
+	(void) mutex_unlock(&nlp->nlp_mtx);
 }
 
 
@@ -3637,7 +3422,7 @@ mover_pause_v3(ndmpd_session_t *session, ndmp_mover_pause_reason reason)
 	} else {
 		if (session->ns_mover.md_data_addr.addr_type ==
 		    NDMP_ADDR_LOCAL) {
-			rv = ndmpd_mover_wait_v3(session);
+			rv = ndmp_wait_for_mover(session);
 		} else {
 			NDMP_LOG(LOG_DEBUG, "Invalid address type %d",
 			    session->ns_mover.md_data_addr.addr_type);
@@ -3668,37 +3453,9 @@ static int
 mover_tape_write_v3(ndmpd_session_t *session, char *data, ssize_t length)
 {
 	ssize_t n;
-	int err;
+	ssize_t count = length;
 
-	for (; ; ) {
-		/*
-		 * Refer to the comment at the top of ndmpd_tape.c file for
-		 * Mammoth2 tape drives.
-		 */
-		if (session->ns_tape.td_eom_seen) {
-			NDMP_LOG(LOG_DEBUG, "eom_seen");
-
-			session->ns_tape.td_eom_seen = FALSE;
-			/*
-			 * End of media reached.
-			 * Notify client and wait for the client to
-			 * either abort the operation or continue the
-			 * operation after changing the tape.
-			 */
-			NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
-			    ++ndmp_log_msg_id,
-			    "End of tape reached. Load next tape");
-
-			err = mover_pause_v3(session, NDMP_MOVER_PAUSE_EOM);
-
-			/* Operation aborted or connection terminated? */
-			if (err < 0)
-				return (-1);
-
-			/* Retry the write to the new tape. */
-			continue;
-		}
-
+	while (count > 0) {
 		/*
 		 * Enforce mover window on write.
 		 */
@@ -3707,57 +3464,49 @@ mover_tape_write_v3(ndmpd_session_t *session, char *data, ssize_t length)
 		    session->ns_mover.md_window_length) {
 			NDMP_LOG(LOG_DEBUG, "MOVER_PAUSE_EOW");
 
-			err = mover_pause_v3(session, NDMP_MOVER_PAUSE_EOW);
-			/* Operation aborted or connection terminated? */
-			if (err < 0)
+			if (mover_pause_v3(session, NDMP_MOVER_PAUSE_EOW) < 0)
+				/* Operation aborted or connection terminated */
 				return (-1);
 
 		}
 
-		n = write(session->ns_tape.td_fd, data, length);
+		n = write(session->ns_tape.td_fd, data, count);
 		if (n < 0) {
 			NDMP_LOG(LOG_ERR, "Tape write error: %m.");
 			return (-1);
+		} else if (n > 0) {
+			NS_ADD(wtape, n);
+			count -= n;
+			data += n;
+			session->ns_tape.td_record_count++;
 		}
-		NS_ADD(wtape, n);
 
-		if (n == 0 || n != length) {
-			if (n != 0) {
-				/*
-				 * Backup one record since the record
-				 * hits the EOM.
-				 */
-				NDMP_LOG(LOG_DEBUG, "Back up one record");
-				(void) ndmp_mtioctl(session->ns_tape.td_fd,
-				    MTBSR, 1);
+		/* EOM handling */
+		if (count > 0) {
+			struct mtget mtstatus;
 
-				/* setting logical EOM */
-				ndmpd_write_eom(session->ns_tape.td_fd);
-			}
+			(void) ioctl(session->ns_tape.td_fd, MTIOCGET,
+			    &mtstatus);
+			NDMP_LOG(LOG_DEBUG, "EOM detected (%d written bytes, "
+			    "mover record %d, file #%d, block #%d)", n,
+			    session->ns_tape.td_record_count,
+			    mtstatus.mt_fileno, mtstatus.mt_blkno);
 
 			/*
-			 * End of media reached.
-			 * Notify client and wait for the client to
-			 * either abort the operation or continue the
-			 * operation after changing the tape.
+			 * Notify the client to either abort the operation
+			 * or change the tape.
 			 */
 			NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
 			    ++ndmp_log_msg_id,
 			    "End of tape reached. Load next tape");
 
-			err = mover_pause_v3(session, NDMP_MOVER_PAUSE_EOM);
-
-			/* Operation aborted or connection terminated? */
-			if (err < 0)
+			if (mover_pause_v3(session, NDMP_MOVER_PAUSE_EOM) < 0)
+				/* Operation aborted or connection terminated */
 				return (-1);
-
-			/* Retry the write to the new tape. */
-			continue;
 		}
-
-		session->ns_tape.td_record_count++;
-		return (n);
 	}
+
+	return (length);
 }
 
 
@@ -3904,7 +3653,7 @@ ndmpd_local_write_v3(ndmpd_session_t *session, char *data, ulong_t length)
 			n = mover_tape_write_v3(session,
 			    session->ns_mover.md_buf,
 			    session->ns_mover.md_record_size);
-			if (n < 0) {
+			if (n <= 0) {
 				ndmpd_mover_error(session,
 				    (n == 0 ?  NDMP_MOVER_HALT_ABORTED :
 				    NDMP_MOVER_HALT_MEDIA_ERROR));
@@ -3953,11 +3702,21 @@ mover_data_read_v3(void *cookie, int fd, ulong_t mode)
 	 * connection has been closed.
 	 */
 	if (n <= 0) {
-		if (n < 0 && errno == EWOULDBLOCK) {
-			NDMP_LOG(LOG_DEBUG, "n %d errno %d", n, errno);
-			return;
+		if (n == 0) {
+			NDMP_LOG(LOG_DEBUG, "Data connection closed");
+			ndmpd_mover_error(session,
+			    NDMP_MOVER_HALT_CONNECT_CLOSED);
+		} else {
+			/* Socket is non-blocking, perhaps there are no data */
+			if (errno == EAGAIN) {
+				NDMP_LOG(LOG_ERR, "No data to read");
+				return;
+			}
+
+			NDMP_LOG(LOG_ERR, "Failed to read from socket: %m");
+			ndmpd_mover_error(session,
+			    NDMP_MOVER_HALT_INTERNAL_ERROR);
 		}
-		NDMP_LOG(LOG_DEBUG, "n %d errno %d", n, errno);
 
 		/* Save the index since mover_tape_flush_v3 resets it. */
 		index = session->ns_mover.md_w_index;
@@ -3967,13 +3726,6 @@ mover_data_read_v3(void *cookie, int fd, ulong_t mode)
 			session->ns_mover.md_data_written += index;
 			session->ns_mover.md_record_num++;
 		}
-
-		if (n == 0)
-			ndmpd_mover_error(session,
-			    NDMP_MOVER_HALT_CONNECT_CLOSED);
-		else
-			ndmpd_mover_error(session,
-			    NDMP_MOVER_HALT_INTERNAL_ERROR);
 
 		return;
 	}
@@ -4017,59 +3769,84 @@ mover_data_read_v3(void *cookie, int fd, ulong_t mode)
 static int
 mover_tape_read_v3(ndmpd_session_t *session, char *data)
 {
+	int pause_reason;
 	ssize_t	 n;
 	int err;
 	int count;
 
 	count = session->ns_mover.md_record_size;
-	for (; ; ) {
+	while (count > 0) {
+		pause_reason = NDMP_MOVER_PAUSE_NA;
+
 		n = read(session->ns_tape.td_fd, data, count);
 		if (n < 0) {
-			NDMP_LOG(LOG_ERR, "Tape read error: %m.");
-			return (TAPE_READ_ERR);
-		}
-		NS_ADD(rtape, n);
-
-		if (n == 0) {
+			/*
+			 * If at beginning of file and read fails with EIO,
+			 * then it's repeated attempt to read at EOT.
+			 */
+			if (errno == EIO && tape_is_at_bof(session)) {
+				NDMP_LOG(LOG_DEBUG, "Repeated read at EOT");
+				pause_reason = NDMP_MOVER_PAUSE_EOM;
+				NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
+				    ++ndmp_log_msg_id,
+				    "End of tape reached. Load next tape");
+			}
+			/*
+			 * According to NDMPv4 spec preferred error code when
+			 * trying to read from blank tape is NDMP_EOM_ERR.
+			 */
+			else if (errno == EIO && tape_is_at_bot(session)) {
+				NDMP_LOG(LOG_ERR,
+				    "Blank tape detected, returning EOM");
+				NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
+				    ++ndmp_log_msg_id,
+				    "Blank tape. Load another tape");
+				pause_reason = NDMP_MOVER_PAUSE_EOM;
+			} else {
+				NDMP_LOG(LOG_ERR, "Tape read error: %m.");
+				return (TAPE_READ_ERR);
+			}
+		} else if (n > 0) {
+			NS_ADD(rtape, n);
+			data += n;
+			count -= n;
+			session->ns_tape.td_record_count++;
+		} else {
 			if (!is_writer_running_v3(session))
 				return (TAPE_NO_WRITER_ERR);
 
 			/*
-			 * End of media reached.
-			 * Notify client and wait for the client to
-			 * either abort the data operation or continue the
-			 * operation after changing the tape.
+			 * End of file or media reached. Notify client and
+			 * wait for the client to either abort the data
+			 * operation or continue the operation after changing
+			 * the tape.
 			 */
-			NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
-			    ++ndmp_log_msg_id,
-			    "End of tape reached. Load next tape");
+			if (tape_is_at_bof(session)) {
+				NDMP_LOG(LOG_DEBUG, "EOT detected");
+				pause_reason = NDMP_MOVER_PAUSE_EOM;
+				NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
+				    ++ndmp_log_msg_id, "End of medium reached");
+			} else {
+				NDMP_LOG(LOG_DEBUG, "EOF detected");
+				/* reposition the tape to BOT side of FM */
+				fm_dance(session);
+				pause_reason = NDMP_MOVER_PAUSE_EOF;
+				NDMP_APILOG((void*)session, NDMP_LOG_NORMAL,
+				    ++ndmp_log_msg_id, "End of file reached.");
+			}
+		}
 
-			err = mover_pause_v3(session, NDMP_MOVER_PAUSE_EOF);
+		if (pause_reason != NDMP_MOVER_PAUSE_NA) {
+			err = mover_pause_v3(session, pause_reason);
 
 			/* Operation aborted or connection terminated? */
 			if (err < 0) {
-				/*
-				 * Back up one record if it's read but not
-				 * used.
-				 */
-				if (count != session->ns_mover.md_record_size)
-					(void) ndmp_mtioctl(
-					    session->ns_tape.td_fd, MTBSR, 1);
 				return (0);
 			}
-
-			/* Retry the read from the new tape. */
-			continue;
-		}
-
-		data += n;
-		count -= n;
-		if (count <= 0) {
-			session->ns_mover.md_record_num++;
-			session->ns_tape.td_record_count++;
-			return (n);
+			/* Retry the read from new location */
 		}
 	}
+	return (session->ns_mover.md_record_size);
 }
 
 
@@ -4168,6 +3945,7 @@ mover_data_write_v3(void *cookie, int fd, ulong_t mode)
 		}
 
 		session->ns_mover.md_w_index = n;
+		session->ns_mover.md_record_num++;
 	}
 
 	/*
@@ -4208,12 +3986,12 @@ mover_data_write_v3(void *cookie, int fd, ulong_t mode)
 	    &session->ns_mover.md_buf[session->ns_mover.md_r_index], len);
 
 	if (n < 0) {
-		if (errno == EWOULDBLOCK) {
-			NDMP_LOG(LOG_DEBUG, "n %d errno %d", n, errno);
+		/* Socket is non-blocking, perhaps the write queue is full */
+		if (errno == EAGAIN) {
+			NDMP_LOG(LOG_ERR, "Cannot write to socket");
 			return;
 		}
-
-		NDMP_LOG(LOG_DEBUG, "n %d errno %d", n, errno);
+		NDMP_LOG(LOG_ERR, "Failed to write to socket: %m");
 		ndmpd_mover_error(session, NDMP_MOVER_HALT_CONNECT_CLOSED);
 		return;
 	}
@@ -4270,7 +4048,6 @@ accept_connection_v3(void *cookie, int fd, ulong_t mode)
 	ndmpd_session_t *session = (ndmpd_session_t *)cookie;
 	int from_len;
 	struct sockaddr_in from;
-	int flag = 1;
 
 	from_len = sizeof (from);
 	session->ns_mover.md_sock = accept(fd, (struct sockaddr *)&from,
@@ -4295,19 +4072,21 @@ accept_connection_v3(void *cookie, int fd, ulong_t mode)
 	session->ns_mover.md_data_addr.tcp_ip_v3 = from.sin_addr.s_addr;
 	session->ns_mover.md_data_addr.tcp_port_v3 = ntohs(from.sin_port);
 
-	/*
-	 * Set the parameter of the new socket.
-	 */
-	(void) setsockopt(session->ns_mover.md_sock, SOL_SOCKET, SO_KEEPALIVE,
-	    &flag, sizeof (flag));
+	/* Set the parameter of the new socket */
+	set_socket_options(session->ns_mover.md_sock);
 
-	ndmp_set_socket_nodelay(session->ns_mover.md_sock);
-	if (ndmp_sbs > 0)
-		ndmp_set_socket_snd_buf(session->ns_mover.md_sock,
-		    ndmp_sbs*KILOBYTE);
-	if (ndmp_rbs > 0)
-		ndmp_set_socket_rcv_buf(session->ns_mover.md_sock,
-		    ndmp_rbs*KILOBYTE);
+	/*
+	 * Backup/restore is handled by a callback called from main event loop,
+	 * which reads/writes data to md_sock socket. IO on socket must be
+	 * non-blocking, otherwise ndmpd would be unable to process other
+	 * incoming requests.
+	 */
+	if (!set_socket_nonblock(session->ns_mover.md_sock)) {
+		NDMP_LOG(LOG_ERR, "Could not set non-blocking mode "
+		    "on socket: %m");
+		ndmpd_mover_error(session, NDMP_MOVER_HALT_INTERNAL_ERROR);
+		return;
+	}
 
 	NDMP_LOG(LOG_DEBUG, "sock fd: %d", session->ns_mover.md_sock);
 
@@ -4372,7 +4151,7 @@ create_listen_socket_v3(ndmpd_session_t *session, ulong_t *addr, ushort_t *port)
 
 
 /*
- * mover_connect_sock_v3
+ * mover_connect_sock
  *
  * Connect the mover to the specified address
  *
@@ -4386,7 +4165,7 @@ create_listen_socket_v3(ndmpd_session_t *session, ulong_t *addr, ushort_t *port)
  *   error code.
  */
 static ndmp_error
-mover_connect_sock_v3(ndmpd_session_t *session, ndmp_mover_mode mode,
+mover_connect_sock(ndmpd_session_t *session, ndmp_mover_mode mode,
     ulong_t addr, ushort_t port)
 {
 	int sock;
@@ -4394,6 +4173,19 @@ mover_connect_sock_v3(ndmpd_session_t *session, ndmp_mover_mode mode,
 	sock = ndmp_connect_sock_v3(addr, port);
 	if (sock < 0)
 		return (NDMP_CONNECT_ERR);
+
+	/*
+	 * Backup/restore is handled by a callback called from main event loop,
+	 * which reads/writes data to md_sock socket. IO on socket must be
+	 * non-blocking, otherwise ndmpd would be unable to process other
+	 * incoming requests.
+	 */
+	if (!set_socket_nonblock(sock)) {
+		NDMP_LOG(LOG_ERR, "Could not set non-blocking mode "
+		    "on socket: %m");
+		(void) close(sock);
+		return (NDMP_CONNECT_ERR);
+	}
 
 	if (mode == NDMP_MOVER_MODE_READ) {
 		if (ndmpd_add_file_handler(session, (void*)session, sock,
@@ -4540,6 +4332,7 @@ ndmpd_local_read_v3(ndmpd_session_t *session, char *data, ulong_t length)
 			count += n;
 			session->ns_mover.md_bytes_left_to_read -= n;
 			session->ns_mover.md_position += n;
+			session->ns_mover.md_record_num++;
 			continue;
 		}
 
@@ -4557,6 +4350,7 @@ ndmpd_local_read_v3(ndmpd_session_t *session, char *data, ulong_t length)
 
 		session->ns_mover.md_w_index = n;
 		session->ns_mover.md_r_index = 0;
+		session->ns_mover.md_record_num++;
 
 		NDMP_LOG(LOG_DEBUG, "n: %d", n);
 

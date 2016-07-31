@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 1986, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -73,6 +75,27 @@
 #include <sys/project.h>
 #include <sys/zone.h>
 #include <sys/shm_impl.h>
+
+/*
+ * segvn_fault needs a temporary page list array.  To avoid calling kmem all
+ * the time, it creates a small (PVN_GETPAGE_NUM entry) array and uses it if
+ * it can.  In the rare case when this page list is not large enough, it
+ * goes and gets a large enough array from kmem.
+ *
+ * This small page list array covers either 8 pages or 64kB worth of pages -
+ * whichever is smaller.
+ */
+#define	PVN_MAX_GETPAGE_SZ	0x10000
+#define	PVN_MAX_GETPAGE_NUM	0x8
+
+#if PVN_MAX_GETPAGE_SZ > PVN_MAX_GETPAGE_NUM * PAGESIZE
+#define	PVN_GETPAGE_SZ	ptob(PVN_MAX_GETPAGE_NUM)
+#define	PVN_GETPAGE_NUM	PVN_MAX_GETPAGE_NUM
+#else
+#define	PVN_GETPAGE_SZ	PVN_MAX_GETPAGE_SZ
+#define	PVN_GETPAGE_NUM	btop(PVN_MAX_GETPAGE_SZ)
+#endif
+
 /*
  * Private seg op routines.
  */
@@ -112,6 +135,7 @@ static int	segvn_getmemid(struct seg *seg, caddr_t addr,
 		    memid_t *memidp);
 static lgrp_mem_policy_info_t	*segvn_getpolicy(struct seg *, caddr_t);
 static int	segvn_capable(struct seg *seg, segcapability_t capable);
+static int	segvn_inherit(struct seg *, caddr_t, size_t, uint_t);
 
 struct	seg_ops segvn_ops = {
 	segvn_dup,
@@ -137,6 +161,7 @@ struct	seg_ops segvn_ops = {
 	segvn_getmemid,
 	segvn_getpolicy,
 	segvn_capable,
+	segvn_inherit
 };
 
 /*
@@ -515,6 +540,7 @@ segvn_setvnode_mpss(vnode_t *vp)
 int
 segvn_create(struct seg *seg, void *argsp)
 {
+	extern lgrp_mem_policy_t lgrp_mem_default_policy;
 	struct segvn_crargs *a = (struct segvn_crargs *)argsp;
 	struct segvn_data *svd;
 	size_t swresv = 0;
@@ -522,11 +548,11 @@ segvn_create(struct seg *seg, void *argsp)
 	struct anon_map *amp;
 	int error = 0;
 	size_t pgsz;
-	lgrp_mem_policy_t mpolicy = LGRP_MEM_POLICY_DEFAULT;
+	lgrp_mem_policy_t mpolicy = lgrp_mem_default_policy;
 	int use_rgn = 0;
 	int trok = 0;
 
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	if (a->type != MAP_PRIVATE && a->type != MAP_SHARED) {
 		panic("segvn_create type");
@@ -669,7 +695,6 @@ segvn_create(struct seg *seg, void *argsp)
 		struct segvn_data *psvd, *nsvd;
 		lgrp_mem_policy_t ppolicy, npolicy;
 		uint_t	lgrp_mem_policy_flags = 0;
-		extern lgrp_mem_policy_t lgrp_mem_default_policy;
 
 		/*
 		 * Memory policy flags (lgrp_mem_policy_flags) is valid when
@@ -806,6 +831,7 @@ segvn_create(struct seg *seg, void *argsp)
 	svd->softlockcnt = 0;
 	svd->softlockcnt_sbase = 0;
 	svd->softlockcnt_send = 0;
+	svd->svn_inz = 0;
 	svd->rcookie = HAT_INVALID_REGION_COOKIE;
 	svd->pageswap = 0;
 
@@ -996,7 +1022,7 @@ segvn_concat(struct seg *seg1, struct seg *seg2, int amp_cat)
 	pgcnt_t npages1, npages2;
 
 	ASSERT(seg1->s_as && seg2->s_as && seg1->s_as == seg2->s_as);
-	ASSERT(AS_WRITE_HELD(seg1->s_as, &seg1->s_as->a_lock));
+	ASSERT(AS_WRITE_HELD(seg1->s_as));
 	ASSERT(seg1->s_ops == seg2->s_ops);
 
 	if (HAT_IS_REGION_COOKIE_VALID(svd1->rcookie) ||
@@ -1241,7 +1267,7 @@ segvn_extend_prev(seg1, seg2, a, swresv)
 	 * We don't need any segment level locks for "segvn" data
 	 * since the address space is "write" locked.
 	 */
-	ASSERT(seg1->s_as && AS_WRITE_HELD(seg1->s_as, &seg1->s_as->a_lock));
+	ASSERT(seg1->s_as && AS_WRITE_HELD(seg1->s_as));
 
 	if (HAT_IS_REGION_COOKIE_VALID(svd1->rcookie)) {
 		return (-1);
@@ -1362,7 +1388,7 @@ segvn_extend_next(
 	 * We don't need any segment level locks for "segvn" data
 	 * since the address space is "write" locked.
 	 */
-	ASSERT(seg2->s_as && AS_WRITE_HELD(seg2->s_as, &seg2->s_as->a_lock));
+	ASSERT(seg2->s_as && AS_WRITE_HELD(seg2->s_as));
 
 	if (HAT_IS_REGION_COOKIE_VALID(svd2->rcookie)) {
 		return (-1);
@@ -1464,6 +1490,81 @@ segvn_extend_next(
 	return (0);
 }
 
+/*
+ * Duplicate all the pages in the segment. This may break COW sharing for a
+ * given page. If the page is marked with inherit zero set, then instead of
+ * duplicating the page, we zero the page.
+ */
+static int
+segvn_dup_pages(struct seg *seg, struct seg *newseg)
+{
+	int error;
+	uint_t prot;
+	page_t *pp;
+	struct anon *ap, *newap;
+	size_t i;
+	caddr_t addr;
+
+	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
+	struct segvn_data *newsvd = (struct segvn_data *)newseg->s_data;
+	ulong_t old_idx = svd->anon_index;
+	ulong_t new_idx = 0;
+
+	i = btopr(seg->s_size);
+	addr = seg->s_base;
+
+	/*
+	 * XXX break cow sharing using PAGESIZE
+	 * pages. They will be relocated into larger
+	 * pages at fault time.
+	 */
+	while (i-- > 0) {
+		if ((ap = anon_get_ptr(svd->amp->ahp, old_idx)) != NULL) {
+			struct vpage *vpp;
+
+			vpp = &svd->vpage[seg_page(seg, addr)];
+
+			/*
+			 * prot need not be computed below 'cause anon_private
+			 * is going to ignore it anyway as child doesn't inherit
+			 * pagelock from parent.
+			 */
+			prot = svd->pageprot ? VPP_PROT(vpp) : svd->prot;
+
+			/*
+			 * Check whether we should zero this or dup it.
+			 */
+			if (svd->svn_inz == SEGVN_INZ_ALL ||
+			    (svd->svn_inz == SEGVN_INZ_VPP &&
+			    VPP_ISINHZERO(vpp))) {
+				pp = anon_zero(newseg, addr, &newap,
+				    newsvd->cred);
+			} else {
+				page_t *anon_pl[1+1];
+				uint_t vpprot;
+				error = anon_getpage(&ap, &vpprot, anon_pl,
+				    PAGESIZE, seg, addr, S_READ, svd->cred);
+				if (error != 0)
+					return (error);
+
+				pp = anon_private(&newap, newseg, addr, prot,
+				    anon_pl[0], 0, newsvd->cred);
+			}
+			if (pp == NULL) {
+				return (ENOMEM);
+			}
+			(void) anon_set_ptr(newsvd->amp->ahp, new_idx, newap,
+			    ANON_SLEEP);
+			page_unlock(pp);
+		}
+		addr += PAGESIZE;
+		old_idx++;
+		new_idx++;
+	}
+
+	return (0);
+}
+
 static int
 segvn_dup(struct seg *seg, struct seg *newseg)
 {
@@ -1471,11 +1572,10 @@ segvn_dup(struct seg *seg, struct seg *newseg)
 	struct segvn_data *newsvd;
 	pgcnt_t npages = seg_pages(seg);
 	int error = 0;
-	uint_t prot;
 	size_t len;
 	struct anon_map *amp;
 
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 	ASSERT(newseg->s_as->a_proc->p_parent == curproc);
 
 	/*
@@ -1515,6 +1615,7 @@ segvn_dup(struct seg *seg, struct seg *newseg)
 	crhold(newsvd->cred);
 	newsvd->advice = svd->advice;
 	newsvd->pageadvice = svd->pageadvice;
+	newsvd->svn_inz = svd->svn_inz;
 	newsvd->swresv = svd->swresv;
 	newsvd->pageswap = svd->pageswap;
 	newsvd->flags = svd->flags;
@@ -1544,6 +1645,7 @@ segvn_dup(struct seg *seg, struct seg *newseg)
 		ASSERT(svd->tr_state == SEGVN_TR_OFF);
 		newsvd->tr_state = SEGVN_TR_OFF;
 		if (svd->type == MAP_SHARED) {
+			ASSERT(svd->svn_inz == SEGVN_INZ_NONE);
 			newsvd->amp = amp;
 			ANON_LOCK_ENTER(&amp->a_rwlock, RW_WRITER);
 			amp->refcnt++;
@@ -1559,6 +1661,9 @@ segvn_dup(struct seg *seg, struct seg *newseg)
 			    ANON_SLEEP);
 			newsvd->amp->a_szc = newseg->s_szc;
 			newsvd->anon_index = 0;
+			ASSERT(svd->svn_inz == SEGVN_INZ_NONE ||
+			    svd->svn_inz == SEGVN_INZ_ALL ||
+			    svd->svn_inz == SEGVN_INZ_VPP);
 
 			/*
 			 * We don't have to acquire the anon_map lock
@@ -1582,17 +1687,16 @@ segvn_dup(struct seg *seg, struct seg *newseg)
 			 * The strategy here is to just break the
 			 * sharing on pages that could possibly be
 			 * softlocked.
+			 *
+			 * In addition, if any pages have been marked that they
+			 * should be inherited as zero, then we immediately go
+			 * ahead and break COW and zero them. In the case of a
+			 * softlocked page that should be inherited zero, we
+			 * break COW and just get a zero page.
 			 */
 retry:
-			if (svd->softlockcnt) {
-				struct anon *ap, *newap;
-				size_t i;
-				uint_t vpprot;
-				page_t *anon_pl[1+1], *pp;
-				caddr_t addr;
-				ulong_t old_idx = svd->anon_index;
-				ulong_t new_idx = 0;
-
+			if (svd->softlockcnt ||
+			    svd->svn_inz != SEGVN_INZ_NONE) {
 				/*
 				 * The softlock count might be non zero
 				 * because some pages are still stuck in the
@@ -1602,59 +1706,16 @@ retry:
 				 * pages]. Note, we have the writers lock so
 				 * nothing gets inserted during the flush.
 				 */
-				if (reclaim == 1) {
+				if (svd->softlockcnt && reclaim == 1) {
 					segvn_purge(seg);
 					reclaim = 0;
 					goto retry;
 				}
-				i = btopr(seg->s_size);
-				addr = seg->s_base;
-				/*
-				 * XXX break cow sharing using PAGESIZE
-				 * pages. They will be relocated into larger
-				 * pages at fault time.
-				 */
-				while (i-- > 0) {
-					if (ap = anon_get_ptr(amp->ahp,
-					    old_idx)) {
-						error = anon_getpage(&ap,
-						    &vpprot, anon_pl, PAGESIZE,
-						    seg, addr, S_READ,
-						    svd->cred);
-						if (error) {
-							newsvd->vpage = NULL;
-							goto out;
-						}
-						/*
-						 * prot need not be computed
-						 * below 'cause anon_private is
-						 * going to ignore it anyway
-						 * as child doesn't inherit
-						 * pagelock from parent.
-						 */
-						prot = svd->pageprot ?
-						    VPP_PROT(
-						    &svd->vpage[
-						    seg_page(seg, addr)])
-						    : svd->prot;
-						pp = anon_private(&newap,
-						    newseg, addr, prot,
-						    anon_pl[0],	0,
-						    newsvd->cred);
-						if (pp == NULL) {
-							/* no mem abort */
-							newsvd->vpage = NULL;
-							error = ENOMEM;
-							goto out;
-						}
-						(void) anon_set_ptr(
-						    newsvd->amp->ahp, new_idx,
-						    newap, ANON_SLEEP);
-						page_unlock(pp);
-					}
-					addr += PAGESIZE;
-					old_idx++;
-					new_idx++;
+
+				error = segvn_dup_pages(seg, newseg);
+				if (error != 0) {
+					newsvd->vpage = NULL;
+					goto out;
 				}
 			} else {	/* common case */
 				if (seg->s_szc != 0) {
@@ -1811,7 +1872,7 @@ segvn_unmap(struct seg *seg, caddr_t addr, size_t len)
 	 * We don't need any segment level locks for "segvn" data
 	 * since the address space is "write" locked.
 	 */
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 
 	/*
 	 * Fail the unmap if pages are SOFTLOCKed through this mapping.
@@ -2191,6 +2252,7 @@ retry:
 	nsvd->softlockcnt = 0;
 	nsvd->softlockcnt_sbase = 0;
 	nsvd->softlockcnt_send = 0;
+	nsvd->svn_inz = svd->svn_inz;
 	ASSERT(nsvd->rcookie == HAT_INVALID_REGION_COOKIE);
 
 	if (svd->vp != NULL) {
@@ -2360,7 +2422,7 @@ segvn_free(struct seg *seg)
 	 * We don't need any segment level locks for "segvn" data
 	 * since the address space is "write" locked.
 	 */
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 	ASSERT(svd->tr_state == SEGVN_TR_OFF);
 
 	ASSERT(svd->rcookie == HAT_INVALID_REGION_COOKIE);
@@ -2510,7 +2572,7 @@ segvn_softunlock(struct seg *seg, caddr_t addr, size_t len, enum seg_rw rw)
 	struct anon_map *amp;
 	struct anon *ap = NULL;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 	ASSERT(SEGVN_LOCK_HELD(seg->s_as, &svd->lock));
 
 	if ((amp = svd->amp) != NULL)
@@ -2703,7 +2765,7 @@ segvn_faultpage(
 	}
 
 	if (type == F_SOFTLOCK) {
-		atomic_add_long((ulong_t *)&svd->softlockcnt, 1);
+		atomic_inc_ulong((ulong_t *)&svd->softlockcnt);
 	}
 
 	/*
@@ -3064,7 +3126,7 @@ out:
 		anon_array_exit(&cookie);
 
 	if (type == F_SOFTLOCK) {
-		atomic_add_long((ulong_t *)&svd->softlockcnt, -1);
+		atomic_dec_ulong((ulong_t *)&svd->softlockcnt);
 	}
 	return (FC_MAKE_ERR(err));
 }
@@ -3794,7 +3856,6 @@ segvn_fault_vnodepages(struct hat *hat, struct seg *seg, caddr_t lpgaddr,
 	int alloc_failed = 0;
 	int adjszc_chk;
 	struct vattr va;
-	int xhat = 0;
 	page_t *pplist;
 	pfn_t pfn;
 	int physcontig;
@@ -3842,10 +3903,6 @@ segvn_fault_vnodepages(struct hat *hat, struct seg *seg, caddr_t lpgaddr,
 	} else {
 		prot = svd->prot;
 		/* caller has already done segment level protection check. */
-	}
-
-	if (seg->s_as->a_hat != hat) {
-		xhat = 1;
 	}
 
 	if (rw == S_WRITE && segtype == MAP_PRIVATE) {
@@ -4203,25 +4260,9 @@ segvn_fault_vnodepages(struct hat *hat, struct seg *seg, caddr_t lpgaddr,
 				}
 				SEGVN_UPDATE_MODBITS(ppa, pages, rw,
 				    prot, vpprot);
-				if (!xhat) {
-					hat_memload_array_region(hat, a, pgsz,
-					    ppa, prot & vpprot, hat_flag,
-					    svd->rcookie);
-				} else {
-					/*
-					 * avoid large xhat mappings to FS
-					 * pages so that hat_page_demote()
-					 * doesn't need to check for xhat
-					 * large mappings.
-					 * Don't use regions with xhats.
-					 */
-					for (i = 0; i < pages; i++) {
-						hat_memload(hat,
-						    a + (i << PAGESHIFT),
-						    ppa[i], prot & vpprot,
-						    hat_flag);
-					}
-				}
+				hat_memload_array_region(hat, a, pgsz,
+				    ppa, prot & vpprot, hat_flag,
+				    svd->rcookie);
 
 				if (!(hat_flag & HAT_LOAD_LOCK)) {
 					for (i = 0; i < pages; i++) {
@@ -4275,7 +4316,7 @@ segvn_fault_vnodepages(struct hat *hat, struct seg *seg, caddr_t lpgaddr,
 			 * check if we should use smallest mapping size.
 			 */
 			upgrdfail = 0;
-			if (szc == 0 || xhat ||
+			if (szc == 0 ||
 			    (pszc >= szc &&
 			    !IS_P2ALIGNED(pfn, pages)) ||
 			    (pszc < szc &&
@@ -4307,7 +4348,7 @@ segvn_fault_vnodepages(struct hat *hat, struct seg *seg, caddr_t lpgaddr,
 					ierr = -1;
 					break;
 				}
-				if (szc != 0 && !xhat && !upgrdfail) {
+				if (szc != 0 && !upgrdfail) {
 					segvn_faultvnmpss_align_err5++;
 				}
 				SEGVN_VMSTAT_FLTVNPAGES(34);
@@ -4899,7 +4940,7 @@ segvn_fault(struct hat *hat, struct seg *seg, caddr_t addr, size_t len,
 	anon_sync_obj_t cookie;
 	int brkcow = BREAK_COW_SHARE(rw, type, svd->type);
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 	ASSERT(svd->amp == NULL || svd->rcookie == HAT_INVALID_REGION_COOKIE);
 
 	/*
@@ -4908,7 +4949,7 @@ segvn_fault(struct hat *hat, struct seg *seg, caddr_t addr, size_t len,
 	if (type == F_SOFTUNLOCK) {
 		if (rw == S_READ_NOCOW) {
 			rw = S_READ;
-			ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+			ASSERT(AS_WRITE_HELD(seg->s_as));
 		}
 		SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
 		pgsz = (seg->s_szc == 0) ? PAGESIZE :
@@ -5053,7 +5094,7 @@ top:
 			}
 		}
 
-		ASSERT(demote || AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+		ASSERT(demote || AS_WRITE_HELD(seg->s_as));
 
 		if (demote) {
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
@@ -5107,7 +5148,7 @@ top:
 	 */
 	if (rw == S_READ_NOCOW) {
 		ASSERT(type == F_SOFTLOCK);
-		ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+		ASSERT(AS_WRITE_HELD(seg->s_as));
 		rw = S_READ;
 	}
 
@@ -5578,7 +5619,7 @@ segvn_faulta(struct seg *seg, caddr_t addr)
 	struct anon_map *amp;
 	vnode_t *vp;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
 	if ((amp = svd->amp) != NULL) {
@@ -5635,7 +5676,7 @@ segvn_setprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 	anon_sync_obj_t cookie;
 	int unload_done = 0;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	if ((svd->maxprot & prot) != prot)
 		return (EACCES);			/* violated maxprot */
@@ -5712,7 +5753,7 @@ segvn_setprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 			 * we need to return IE_RETRY and let the as
 			 * layer drop and re-acquire the lock as a writer.
 			 */
-			if (AS_READ_HELD(seg->s_as, &seg->s_as->a_lock))
+			if (AS_READ_HELD(seg->s_as))
 				return (IE_RETRY);
 			VM_STAT_ADD(segvnvmstats.demoterange[1]);
 			if (svd->type == MAP_PRIVATE || svd->vp != NULL) {
@@ -5769,6 +5810,11 @@ segvn_setprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 					 * to len.
 					 */
 					segvn_vpage(seg);
+					if (svd->vpage == NULL) {
+						SEGVN_LOCK_EXIT(seg->s_as,
+						    &svd->lock);
+						return (ENOMEM);
+					}
 					svp = &svd->vpage[seg_page(seg, addr)];
 					evp = &svd->vpage[seg_page(seg,
 					    addr + len)];
@@ -5862,6 +5908,10 @@ segvn_setprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 		 * the operation.
 		 */
 		segvn_vpage(seg);
+		if (svd->vpage == NULL) {
+			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
+			return (ENOMEM);
+		}
 		svd->pageprot = 1;
 		if ((amp = svd->amp) != NULL) {
 			anon_idx = svd->anon_index + seg_page(seg, addr);
@@ -5966,6 +6016,10 @@ segvn_setprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 		}
 	} else {
 		segvn_vpage(seg);
+		if (svd->vpage == NULL) {
+			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
+			return (ENOMEM);
+		}
 		svd->pageprot = 1;
 		evp = &svd->vpage[seg_page(seg, addr + len)];
 		for (svp = &svd->vpage[seg_page(seg, addr)]; svp < evp; svp++) {
@@ -6025,7 +6079,7 @@ segvn_setpagesize(struct seg *seg, caddr_t addr, size_t len, uint_t szc)
 	int err;
 	u_offset_t off = svd->offset + (uintptr_t)(addr - seg->s_base);
 
-	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_WRITE_HELD(seg->s_as));
 	ASSERT(addr >= seg->s_base && eaddr <= seg->s_base + seg->s_size);
 
 	if (seg->s_szc == szc || segvn_lpg_disable != 0) {
@@ -6313,7 +6367,7 @@ segvn_clrszc(struct seg *seg)
 	uint_t prot = svd->prot, vpprot;
 	int pageflag = 0;
 
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock) ||
+	ASSERT(AS_WRITE_HELD(seg->s_as) ||
 	    SEGVN_WRITE_HELD(seg->s_as, &svd->lock));
 	ASSERT(svd->softlockcnt == 0);
 
@@ -6525,7 +6579,7 @@ segvn_split_seg(struct seg *seg, caddr_t addr)
 	size_t nsize;
 	struct segvn_data *nsvd;
 
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(AS_WRITE_HELD(seg->s_as));
 	ASSERT(svd->tr_state == SEGVN_TR_OFF);
 
 	ASSERT(addr >= seg->s_base);
@@ -6680,7 +6734,7 @@ segvn_demote_range(
 	uint_t szc = seg->s_szc;
 	uint_t tszcvec;
 
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(AS_WRITE_HELD(seg->s_as));
 	ASSERT(svd->tr_state == SEGVN_TR_OFF);
 	ASSERT(szc != 0);
 	pgsz = page_get_pagesize(szc);
@@ -6809,7 +6863,7 @@ segvn_checkprot(struct seg *seg, caddr_t addr, size_t len, uint_t prot)
 	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
 	struct vpage *vp, *evp;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
 	/*
@@ -6843,7 +6897,7 @@ segvn_getprot(struct seg *seg, caddr_t addr, size_t len, uint_t *protv)
 	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
 	size_t pgno = seg_page(seg, addr + len) - seg_page(seg, addr) + 1;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	if (pgno != 0) {
 		SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
@@ -6869,7 +6923,7 @@ segvn_getoffset(struct seg *seg, caddr_t addr)
 {
 	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (svd->offset + (uintptr_t)(addr - seg->s_base));
 }
@@ -6880,7 +6934,7 @@ segvn_gettype(struct seg *seg, caddr_t addr)
 {
 	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	return (svd->type | (svd->flags & (MAP_NORESERVE | MAP_TEXT |
 	    MAP_INITDATA)));
@@ -6892,7 +6946,7 @@ segvn_getvp(struct seg *seg, caddr_t addr, struct vnode **vpp)
 {
 	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	*vpp = svd->vp;
 	return (0);
@@ -6919,8 +6973,8 @@ segvn_kluster(struct seg *seg, caddr_t addr, ssize_t delta)
 	u_offset_t off1, off2;
 	struct anon_map *amp;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock) ||
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
+	ASSERT(AS_WRITE_HELD(seg->s_as) ||
 	    SEGVN_LOCK_HELD(seg->s_as, &svd->lock));
 
 	if (addr + delta < seg->s_base ||
@@ -7025,7 +7079,7 @@ segvn_swapout(struct seg *seg)
 	pgcnt_t page;
 	ulong_t anon_index;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
 	/*
@@ -7204,7 +7258,7 @@ segvn_sync(struct seg *seg, caddr_t addr, size_t len, int attr, uint_t flags)
 	struct anon *ap;
 	anon_sync_obj_t cookie;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
 
@@ -7426,7 +7480,7 @@ segvn_incore(struct seg *seg, caddr_t addr, size_t len, char *vec)
 	uint_t attr;
 	anon_sync_obj_t cookie;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
 	if (svd->amp == NULL && svd->vp == NULL) {
@@ -7602,7 +7656,7 @@ segvn_lockop(struct seg *seg, caddr_t addr, size_t len,
 	 * Hold write lock on address space because may split or concatenate
 	 * segments
 	 */
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	/*
 	 * If this is a shm, use shm's project and zone, else use
@@ -7656,9 +7710,13 @@ segvn_lockop(struct seg *seg, caddr_t addr, size_t len,
 	 */
 
 	if ((vpp = svd->vpage) == NULL) {
-		if (op == MC_LOCK)
+		if (op == MC_LOCK) {
 			segvn_vpage(seg);
-		else {
+			if (svd->vpage == NULL) {
+				SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
+				return (ENOMEM);
+			}
+		} else {
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
 			return (0);
 		}
@@ -7985,7 +8043,7 @@ out:
 
 /*
  * Set advice from user for specified pages
- * There are 5 types of advice:
+ * There are 10 types of advice:
  *	MADV_NORMAL	- Normal (default) behavior (whatever that is)
  *	MADV_RANDOM	- Random page references
  *				do not allow readahead or 'klustering'
@@ -7999,6 +8057,7 @@ out:
  *	MADV_ACCESS_DEFAULT- Default access
  *	MADV_ACCESS_LWP	- Next LWP will access heavily
  *	MADV_ACCESS_MANY- Many LWPs or processes will access heavily
+ *	MADV_PURGE	- Contents will be immediately discarded
  */
 static int
 segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
@@ -8014,13 +8073,13 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 	struct seg *prev;
 	struct vnode *vp;
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 
 	/*
-	 * In case of MADV_FREE, we won't be modifying any segment private
-	 * data structures; so, we only need to grab READER's lock
+	 * In case of MADV_FREE/MADV_PURGE, we won't be modifying any segment
+	 * private data structures; so, we only need to grab READER's lock
 	 */
-	if (behav != MADV_FREE) {
+	if (behav != MADV_FREE && behav != MADV_PURGE) {
 		SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_WRITER);
 		if (svd->tr_state != SEGVN_TR_OFF) {
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
@@ -8096,27 +8155,65 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 
 	amp = svd->amp;
 	vp = svd->vp;
-	if (behav == MADV_FREE) {
-		/*
-		 * MADV_FREE is not supported for segments with
-		 * underlying object; if anonmap is NULL, anon slots
-		 * are not yet populated and there is nothing for
-		 * us to do. As MADV_FREE is advisory, we don't
-		 * return error in either case.
-		 */
-		if (vp != NULL || amp == NULL) {
+	if (behav == MADV_FREE || behav == MADV_PURGE) {
+		pgcnt_t purged;
+
+		if (behav == MADV_FREE && (vp != NULL || amp == NULL)) {
+			/*
+			 * MADV_FREE is not supported for segments with an
+			 * underlying object; if anonmap is NULL, anon slots
+			 * are not yet populated and there is nothing for us
+			 * to do. As MADV_FREE is advisory, we don't return an
+			 * error in either case.
+			 */
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
 			return (0);
+		}
+
+		if (amp == NULL) {
+			/*
+			 * If we're here with a NULL anonmap, it's because we
+			 * are doing a MADV_PURGE.  We have nothing to do, but
+			 * because MADV_PURGE isn't merely advisory, we return
+			 * an error in this case.
+			 */
+			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
+			return (EBUSY);
 		}
 
 		segvn_purge(seg);
 
 		page = seg_page(seg, addr);
 		ANON_LOCK_ENTER(&amp->a_rwlock, RW_READER);
-		anon_disclaim(amp, svd->anon_index + page, len);
+		err = anon_disclaim(amp,
+		    svd->anon_index + page, len, behav, &purged);
+
+		if (purged != 0 && (svd->flags & MAP_NORESERVE)) {
+			/*
+			 * If we purged pages on a MAP_NORESERVE mapping, we
+			 * need to be sure to now unreserve our reserved swap.
+			 * (We use the atomic operations to manipulate our
+			 * segment and address space counters because we only
+			 * have the corresponding locks held as reader, not
+			 * writer.)
+			 */
+			ssize_t bytes = ptob(purged);
+
+			anon_unresv_zone(bytes, seg->s_as->a_proc->p_zone);
+			atomic_add_long(&svd->swresv, -bytes);
+			atomic_add_long(&seg->s_as->a_resvsize, -bytes);
+		}
+
 		ANON_LOCK_EXIT(&amp->a_rwlock);
 		SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
-		return (0);
+
+		/*
+		 * MADV_PURGE and MADV_FREE differ in their return semantics:
+		 * because MADV_PURGE is designed to be bug-for-bug compatible
+		 * with its clumsy Linux forebear, it will fail where MADV_FREE
+		 * does not.
+		 */
+		return (behav == MADV_PURGE ? err : 0);
 	}
 
 	/*
@@ -8142,8 +8239,7 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 				 * address space because the segment may be
 				 * split or concatenated when changing policy
 				 */
-				if (AS_READ_HELD(seg->s_as,
-				    &seg->s_as->a_lock)) {
+				if (AS_READ_HELD(seg->s_as)) {
 					SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
 					return (IE_RETRY);
 				}
@@ -8222,6 +8318,7 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 		case MADV_WILLNEED:	/* handled in memcntl */
 		case MADV_DONTNEED:	/* handled in memcntl */
 		case MADV_FREE:		/* handled above */
+		case MADV_PURGE:	/* handled above */
 			break;
 		default:
 			err = EINVAL;
@@ -8236,6 +8333,10 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 		page = seg_page(seg, addr);
 
 		segvn_vpage(seg);
+		if (svd->vpage == NULL) {
+			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
+			return (ENOMEM);
+		}
 
 		switch (behav) {
 			struct vpage *bvpp, *evpp;
@@ -8289,7 +8390,7 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 			 * split or concatenated when changing policy
 			 */
 			if (svd->type == MAP_PRIVATE &&
-			    AS_READ_HELD(seg->s_as, &seg->s_as->a_lock)) {
+			    AS_READ_HELD(seg->s_as)) {
 				SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
 				return (IE_RETRY);
 			}
@@ -8453,6 +8554,7 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 		case MADV_WILLNEED:	/* handled in memcntl */
 		case MADV_DONTNEED:	/* handled in memcntl */
 		case MADV_FREE:		/* handled above */
+		case MADV_PURGE:	/* handled above */
 			break;
 		default:
 			err = EINVAL;
@@ -8463,6 +8565,81 @@ segvn_advise(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
 }
 
 /*
+ * There is one kind of inheritance that can be specified for pages:
+ *
+ *     SEGP_INH_ZERO - Pages should be zeroed in the child
+ */
+static int
+segvn_inherit(struct seg *seg, caddr_t addr, size_t len, uint_t behav)
+{
+	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
+	struct vpage *bvpp, *evpp;
+	size_t page;
+	int ret = 0;
+
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
+
+	/* Can't support something we don't know about */
+	if (behav != SEGP_INH_ZERO)
+		return (ENOTSUP);
+
+	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_WRITER);
+
+	/*
+	 * This must be a straightforward anonymous segment that is mapped
+	 * privately and is not backed by a vnode.
+	 */
+	if (svd->tr_state != SEGVN_TR_OFF ||
+	    svd->type != MAP_PRIVATE ||
+	    svd->vp != NULL) {
+		ret = EINVAL;
+		goto out;
+	}
+
+	/*
+	 * If the entire segment has been marked as inherit zero, then no reason
+	 * to do anything else.
+	 */
+	if (svd->svn_inz == SEGVN_INZ_ALL) {
+		ret = 0;
+		goto out;
+	}
+
+	/*
+	 * If this applies to the entire segment, simply mark it and we're done.
+	 */
+	if ((addr == seg->s_base) && (len == seg->s_size)) {
+		svd->svn_inz = SEGVN_INZ_ALL;
+		ret = 0;
+		goto out;
+	}
+
+	/*
+	 * We've been asked to mark a subset of this segment as inherit zero,
+	 * therefore we need to mainpulate its vpages.
+	 */
+	if (svd->vpage == NULL) {
+		segvn_vpage(seg);
+		if (svd->vpage == NULL) {
+			ret = ENOMEM;
+			goto out;
+		}
+	}
+
+	svd->svn_inz = SEGVN_INZ_VPP;
+	page = seg_page(seg, addr);
+	bvpp = &svd->vpage[page];
+	evpp = &svd->vpage[page + (len >> PAGESHIFT)];
+	for (; bvpp < evpp; bvpp++)
+		VPP_SETINHZERO(bvpp);
+	ret = 0;
+
+out:
+	SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
+	return (ret);
+}
+
+/*
  * Create a vpage structure for this seg.
  */
 static void
@@ -8470,6 +8647,7 @@ segvn_vpage(struct seg *seg)
 {
 	struct segvn_data *svd = (struct segvn_data *)seg->s_data;
 	struct vpage *vp, *evp;
+	static pgcnt_t page_limit = 0;
 
 	ASSERT(SEGVN_WRITE_HELD(seg->s_as, &svd->lock));
 
@@ -8478,9 +8656,32 @@ segvn_vpage(struct seg *seg)
 	 * and the advice from the segment itself to the individual pages.
 	 */
 	if (svd->vpage == NULL) {
+		/*
+		 * Start by calculating the number of pages we must allocate to
+		 * track the per-page vpage structs needs for this entire
+		 * segment. If we know now that it will require more than our
+		 * heuristic for the maximum amount of kmem we can consume then
+		 * fail. We do this here, instead of trying to detect this deep
+		 * in page_resv and propagating the error up, since the entire
+		 * memory allocation stack is not amenable to passing this
+		 * back. Instead, it wants to keep trying.
+		 *
+		 * As a heuristic we set a page limit of 5/8s of total_pages
+		 * for this allocation. We use shifts so that no floating
+		 * point conversion takes place and only need to do the
+		 * calculation once.
+		 */
+		ulong_t mem_needed = seg_pages(seg) * sizeof (struct vpage);
+		pgcnt_t npages = mem_needed >> PAGESHIFT;
+
+		if (page_limit == 0)
+			page_limit = (total_pages >> 1) + (total_pages >> 3);
+
+		if (npages > page_limit)
+			return;
+
 		svd->pageadvice = 1;
-		svd->vpage = kmem_zalloc(seg_pages(seg) * sizeof (struct vpage),
-		    KM_SLEEP);
+		svd->vpage = kmem_zalloc(mem_needed, KM_SLEEP);
 		evp = &svd->vpage[seg_page(seg, seg->s_base + seg->s_size)];
 		for (vp = svd->vpage; vp < evp; vp++) {
 			VPP_SETPROT(vp, svd->prot);
@@ -8645,7 +8846,7 @@ segvn_pagelock(struct seg *seg, caddr_t addr, size_t len, struct page ***ppp,
 	TRACE_2(TR_FAC_PHYSIO, TR_PHYSIO_SEGVN_START,
 	    "segvn_pagelock: start seg %p addr %p", seg, addr);
 
-	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(seg->s_as && AS_LOCK_HELD(seg->s_as));
 	ASSERT(type == L_PAGELOCK || type == L_PAGEUNLOCK);
 
 	SEGVN_LOCK_ENTER(seg->s_as, &svd->lock, RW_READER);
@@ -8892,11 +9093,11 @@ segvn_pagelock(struct seg *seg, caddr_t addr, size_t len, struct page ***ppp,
 
 		if (sftlck_sbase) {
 			ASSERT(svd->softlockcnt_sbase > 0);
-			atomic_add_long((ulong_t *)&svd->softlockcnt_sbase, -1);
+			atomic_dec_ulong((ulong_t *)&svd->softlockcnt_sbase);
 		}
 		if (sftlck_send) {
 			ASSERT(svd->softlockcnt_send > 0);
-			atomic_add_long((ulong_t *)&svd->softlockcnt_send, -1);
+			atomic_dec_ulong((ulong_t *)&svd->softlockcnt_send);
 		}
 
 		/*
@@ -8993,10 +9194,10 @@ segvn_pagelock(struct seg *seg, caddr_t addr, size_t len, struct page ***ppp,
 			    npages);
 		}
 		if (sftlck_sbase) {
-			atomic_add_long((ulong_t *)&svd->softlockcnt_sbase, 1);
+			atomic_inc_ulong((ulong_t *)&svd->softlockcnt_sbase);
 		}
 		if (sftlck_send) {
-			atomic_add_long((ulong_t *)&svd->softlockcnt_send, 1);
+			atomic_inc_ulong((ulong_t *)&svd->softlockcnt_send);
 		}
 		SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
 		*ppp = pplist + adjustpages;
@@ -9186,10 +9387,10 @@ segvn_pagelock(struct seg *seg, caddr_t addr, size_t len, struct page ***ppp,
 			wlen = len;
 		}
 		if (sftlck_sbase) {
-			atomic_add_long((ulong_t *)&svd->softlockcnt_sbase, 1);
+			atomic_inc_ulong((ulong_t *)&svd->softlockcnt_sbase);
 		}
 		if (sftlck_send) {
-			atomic_add_long((ulong_t *)&svd->softlockcnt_send, 1);
+			atomic_inc_ulong((ulong_t *)&svd->softlockcnt_send);
 		}
 		if (use_pcache) {
 			(void) seg_pinsert(seg, pamp, paddr, len, wlen, pl,
@@ -9267,7 +9468,7 @@ segvn_reclaim(void *ptag, caddr_t addr, size_t len, struct page **pplist,
 
 	ASSERT(svd->vp == NULL && svd->amp != NULL);
 	ASSERT(svd->softlockcnt >= npages);
-	ASSERT(async || AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(async || AS_LOCK_HELD(seg->s_as));
 
 	pl = pplist;
 
@@ -9545,7 +9746,7 @@ segvn_textrepl(struct seg *seg)
 	int			first;
 	struct anon_map		*amp;
 
-	ASSERT(AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
+	ASSERT(AS_LOCK_HELD(seg->s_as));
 	ASSERT(SEGVN_WRITE_HELD(seg->s_as, &svd->lock));
 	ASSERT(p != NULL);
 	ASSERT(svd->tr_state == SEGVN_TR_INIT);
@@ -9711,17 +9912,18 @@ again:
 	 * replication and T1 new home is different from lgrp used for text
 	 * replication. When this happens asyncronous segvn thread rechecks if
 	 * segments should change lgrps used for text replication.  If we fail
-	 * to set p_tr_lgrpid with cas32 then set it to NLGRPS_MAX without cas
-	 * if it's not already NLGRPS_MAX and not equal lgrp_id we want to
-	 * use.  We don't need to use cas in this case because another thread
-	 * that races in between our non atomic check and set may only change
-	 * p_tr_lgrpid to NLGRPS_MAX at this point.
+	 * to set p_tr_lgrpid with atomic_cas_32 then set it to NLGRPS_MAX
+	 * without cas if it's not already NLGRPS_MAX and not equal lgrp_id
+	 * we want to use.  We don't need to use cas in this case because
+	 * another thread that races in between our non atomic check and set
+	 * may only change p_tr_lgrpid to NLGRPS_MAX at this point.
 	 */
 	ASSERT(lgrp_id != LGRP_NONE && lgrp_id < NLGRPS_MAX);
 	olid = p->p_tr_lgrpid;
 	if (lgrp_id != olid && olid != NLGRPS_MAX) {
 		lgrp_id_t nlid = (olid == LGRP_NONE) ? lgrp_id : NLGRPS_MAX;
-		if (cas32((uint32_t *)&p->p_tr_lgrpid, olid, nlid) != olid) {
+		if (atomic_cas_32((uint32_t *)&p->p_tr_lgrpid, olid, nlid) !=
+		    olid) {
 			olid = p->p_tr_lgrpid;
 			ASSERT(olid != LGRP_NONE);
 			if (olid != lgrp_id && olid != NLGRPS_MAX) {
@@ -9825,8 +10027,8 @@ segvn_textunrepl(struct seg *seg, int unload_unmap)
 	lgrp_id_t		lgrp_id = svd->tr_policy_info.mem_lgrpid;
 	lgrp_id_t		i;
 
-	ASSERT(AS_LOCK_HELD(seg->s_as, &seg->s_as->a_lock));
-	ASSERT(AS_WRITE_HELD(seg->s_as, &seg->s_as->a_lock) ||
+	ASSERT(AS_LOCK_HELD(seg->s_as));
+	ASSERT(AS_WRITE_HELD(seg->s_as) ||
 	    SEGVN_WRITE_HELD(seg->s_as, &svd->lock));
 	ASSERT(svd->tr_state == SEGVN_TR_ON);
 	ASSERT(!HAT_IS_REGION_COOKIE_VALID(svd->rcookie));
@@ -10051,7 +10253,7 @@ segvn_trupdate_seg(struct seg *seg,
 	 * Use tryenter locking since we are locking as/seg and svntr hash
 	 * lock in reverse from syncrounous thread order.
 	 */
-	if (!AS_LOCK_TRYENTER(as, &as->a_lock, RW_READER)) {
+	if (!AS_LOCK_TRYENTER(as, RW_READER)) {
 		SEGVN_TR_ADDSTAT(nolock);
 		if (segvn_lgrp_trthr_migrs_snpsht) {
 			segvn_lgrp_trthr_migrs_snpsht = 0;
@@ -10059,7 +10261,7 @@ segvn_trupdate_seg(struct seg *seg,
 		return;
 	}
 	if (!SEGVN_LOCK_TRYENTER(seg->s_as, &svd->lock, RW_WRITER)) {
-		AS_LOCK_EXIT(as, &as->a_lock);
+		AS_LOCK_EXIT(as);
 		SEGVN_TR_ADDSTAT(nolock);
 		if (segvn_lgrp_trthr_migrs_snpsht) {
 			segvn_lgrp_trthr_migrs_snpsht = 0;
@@ -10071,14 +10273,14 @@ segvn_trupdate_seg(struct seg *seg,
 		size_t trmem = atomic_add_long_nv(&segvn_textrepl_bytes, size);
 		if (trmem > segvn_textrepl_max_bytes) {
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			atomic_add_long(&segvn_textrepl_bytes, -size);
 			SEGVN_TR_ADDSTAT(normem);
 			return;
 		}
 		if (anon_try_resv_zone(size, NULL) == 0) {
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			atomic_add_long(&segvn_textrepl_bytes, -size);
 			SEGVN_TR_ADDSTAT(noanon);
 			return;
@@ -10086,7 +10288,7 @@ segvn_trupdate_seg(struct seg *seg,
 		amp = anonmap_alloc(size, size, KM_NOSLEEP);
 		if (amp == NULL) {
 			SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
-			AS_LOCK_EXIT(as, &as->a_lock);
+			AS_LOCK_EXIT(as);
 			atomic_add_long(&segvn_textrepl_bytes, -size);
 			anon_unresv_zone(size, NULL);
 			SEGVN_TR_ADDSTAT(nokmem);
@@ -10118,7 +10320,7 @@ segvn_trupdate_seg(struct seg *seg,
 	svd->amp = svntrp->tr_amp[lgrp_id];
 	p->p_tr_lgrpid = NLGRPS_MAX;
 	SEGVN_LOCK_EXIT(seg->s_as, &svd->lock);
-	AS_LOCK_EXIT(as, &as->a_lock);
+	AS_LOCK_EXIT(as);
 
 	ASSERT(svntrp->tr_refcnt != 0);
 	ASSERT(svd->vp == svntrp->tr_vp);

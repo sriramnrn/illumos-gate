@@ -27,6 +27,7 @@
  */
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014, 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -259,7 +260,7 @@ hat_alloc(struct as *as)
 	if (can_steal_post_boot == 0)
 		can_steal_post_boot = 1;
 
-	ASSERT(AS_WRITE_HELD(as, &as->a_lock));
+	ASSERT(AS_WRITE_HELD(as));
 	hat = kmem_cache_alloc(hat_cache, KM_SLEEP);
 	hat->hat_as = as;
 	mutex_init(&hat->hat_mutex, NULL, MUTEX_DEFAULT, NULL);
@@ -392,7 +393,7 @@ init_done:
 void
 hat_free_start(hat_t *hat)
 {
-	ASSERT(AS_WRITE_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(AS_WRITE_HELD(hat->hat_as));
 
 	/*
 	 * If the hat is currently a stealing victim, wait for the stealing
@@ -725,12 +726,12 @@ hat_init()
 	/*
 	 * Set up the kernel's hat
 	 */
-	AS_LOCK_ENTER(&kas, &kas.a_lock, RW_WRITER);
+	AS_LOCK_ENTER(&kas, RW_WRITER);
 	kas.a_hat = kmem_cache_alloc(hat_cache, KM_NOSLEEP);
 	mutex_init(&kas.a_hat->hat_mutex, NULL, MUTEX_DEFAULT, NULL);
 	kas.a_hat->hat_as = &kas;
 	kas.a_hat->hat_flags = 0;
-	AS_LOCK_EXIT(&kas, &kas.a_lock);
+	AS_LOCK_EXIT(&kas);
 
 	CPUSET_ZERO(khat_cpuset);
 	CPUSET_ADD(khat_cpuset, CPU->cpu_id);
@@ -944,7 +945,7 @@ hat_init_finish(void)
 
 /*
  * On 32 bit PAE mode, PTE's are 64 bits, but ordinary atomic memory references
- * are 32 bit, so for safety we must use cas64() to install these.
+ * are 32 bit, so for safety we must use atomic_cas_64() to install these.
  */
 #ifdef __i386
 static void
@@ -967,7 +968,7 @@ reload_pae32(hat_t *hat, cpu_t *cpu)
 			pte = dest[i];
 			if (pte == src[i])
 				break;
-			if (cas64(dest + i, pte, src[i]) != src[i])
+			if (atomic_cas_64(dest + i, pte, src[i]) != src[i])
 				break;
 		}
 	}
@@ -1156,7 +1157,7 @@ hat_swapout(hat_t *hat)
 	 */
 	ASSERT(IS_PAGEALIGNED(vaddr));
 	ASSERT(IS_PAGEALIGNED(eaddr));
-	ASSERT(AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(AS_LOCK_HELD(hat->hat_as));
 	if ((uintptr_t)hat->hat_as->a_userlimit < eaddr)
 		eaddr = (uintptr_t)hat->hat_as->a_userlimit;
 
@@ -1227,14 +1228,14 @@ hat_get_mapped_size(hat_t *hat)
 int
 hat_stats_enable(hat_t *hat)
 {
-	atomic_add_32(&hat->hat_stats, 1);
+	atomic_inc_32(&hat->hat_stats);
 	return (1);
 }
 
 void
 hat_stats_disable(hat_t *hat)
 {
-	atomic_add_32(&hat->hat_stats, -1);
+	atomic_dec_32(&hat->hat_stats);
 }
 
 /*
@@ -1437,8 +1438,7 @@ hati_load_common(
 	++curthread->t_hatdepth;
 	ASSERT(curthread->t_hatdepth < 16);
 
-	ASSERT(hat == kas.a_hat ||
-	    AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
 
 	if (flags & HAT_LOAD_SHARE)
 		hat->hat_flags |= HAT_SHARED;
@@ -1586,8 +1586,7 @@ hat_memload(
 	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(hat == kas.a_hat || va < _userlimit);
-	ASSERT(hat == kas.a_hat ||
-	    AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
 	ASSERT((flags & supported_memload_flags) == flags);
 
 	ASSERT(!IN_VA_HOLE(va));
@@ -1644,8 +1643,7 @@ hat_memload_array(
 	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(hat == kas.a_hat || va + len <= _userlimit);
-	ASSERT(hat == kas.a_hat ||
-	    AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
 	ASSERT((flags & supported_memload_flags) == flags);
 
 	/*
@@ -1780,8 +1778,7 @@ hat_devload(
 	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(va));
 	ASSERT(hat == kas.a_hat || eva <= _userlimit);
-	ASSERT(hat == kas.a_hat ||
-	    AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
 	ASSERT((flags & supported_devload_flags) == flags);
 
 	/*
@@ -1889,7 +1886,7 @@ hat_unlock(hat_t *hat, caddr_t addr, size_t len)
 		panic("hat_unlock() address out of range - above _userlimit");
 
 	XPV_DISALLOW_MIGRATE();
-	ASSERT(AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(AS_LOCK_HELD(hat->hat_as));
 	while (vaddr < eaddr) {
 		(void) htable_walk(hat, &ht, &vaddr, eaddr);
 		if (ht == NULL)
@@ -1928,6 +1925,7 @@ hati_demap_func(xc_arg_t a1, xc_arg_t a2, xc_arg_t a3)
 {
 	hat_t	*hat = (hat_t *)a1;
 	caddr_t	addr = (caddr_t)a2;
+	size_t len = (size_t)a3;
 
 	/*
 	 * If the target hat isn't the kernel and this CPU isn't operating
@@ -1937,10 +1935,11 @@ hati_demap_func(xc_arg_t a1, xc_arg_t a2, xc_arg_t a3)
 		return (0);
 
 	/*
-	 * For a normal address, we just flush one page mapping
+	 * For a normal address, we flush a range of contiguous mappings
 	 */
 	if ((uintptr_t)addr != DEMAP_ALL_ADDR) {
-		mmu_tlbflush_entry(addr);
+		for (size_t i = 0; i < len; i += MMU_PAGESIZE)
+			mmu_tlbflush_entry(addr + i);
 		return (0);
 	}
 
@@ -1988,7 +1987,7 @@ flush_all_tlb_entries(void)
 #define	TLB_CPU_HALTED	(01ul)
 #define	TLB_INVAL_ALL	(02ul)
 #define	CAS_TLB_INFO(cpu, old, new)	\
-	caslong((ulong_t *)&(cpu)->cpu_m.mcpu_tlb_info, (old), (new))
+	atomic_cas_ulong((ulong_t *)&(cpu)->cpu_m.mcpu_tlb_info, (old), (new))
 
 /*
  * Record that a CPU is going idle
@@ -1996,7 +1995,7 @@ flush_all_tlb_entries(void)
 void
 tlb_going_idle(void)
 {
-	atomic_or_long((ulong_t *)&CPU->cpu_m.mcpu_tlb_info, TLB_CPU_HALTED);
+	atomic_or_ulong((ulong_t *)&CPU->cpu_m.mcpu_tlb_info, TLB_CPU_HALTED);
 }
 
 /*
@@ -2035,7 +2034,7 @@ tlb_service(void)
  * all CPUs using a given hat.
  */
 void
-hat_tlb_inval(hat_t *hat, uintptr_t va)
+hat_tlb_inval_range(hat_t *hat, uintptr_t va, size_t len)
 {
 	extern int	flushes_require_xcalls;	/* from mp_startup.c */
 	cpuset_t	justme;
@@ -2068,12 +2067,15 @@ hat_tlb_inval(hat_t *hat, uintptr_t va)
 	 */
 	if (panicstr || !flushes_require_xcalls) {
 #ifdef __xpv
-		if (va == DEMAP_ALL_ADDR)
+		if (va == DEMAP_ALL_ADDR) {
 			xen_flush_tlb();
-		else
-			xen_flush_va((caddr_t)va);
+		} else {
+			for (size_t i = 0; i < len; i += MMU_PAGESIZE)
+				xen_flush_va((caddr_t)(va + i));
+		}
 #else
-		(void) hati_demap_func((xc_arg_t)hat, (xc_arg_t)va, NULL);
+		(void) hati_demap_func((xc_arg_t)hat,
+		    (xc_arg_t)va, (xc_arg_t)len);
 #endif
 		return;
 	}
@@ -2124,29 +2126,42 @@ hat_tlb_inval(hat_t *hat, uintptr_t va)
 	    CPUSET_ISEQUAL(cpus_to_shootdown, justme)) {
 
 #ifdef __xpv
-		if (va == DEMAP_ALL_ADDR)
+		if (va == DEMAP_ALL_ADDR) {
 			xen_flush_tlb();
-		else
-			xen_flush_va((caddr_t)va);
+		} else {
+			for (size_t i = 0; i < len; i += MMU_PAGESIZE)
+				xen_flush_va((caddr_t)(va + i));
+		}
 #else
-		(void) hati_demap_func((xc_arg_t)hat, (xc_arg_t)va, NULL);
+		(void) hati_demap_func((xc_arg_t)hat,
+		    (xc_arg_t)va, (xc_arg_t)len);
 #endif
 
 	} else {
 
 		CPUSET_ADD(cpus_to_shootdown, CPU->cpu_id);
 #ifdef __xpv
-		if (va == DEMAP_ALL_ADDR)
+		if (va == DEMAP_ALL_ADDR) {
 			xen_gflush_tlb(cpus_to_shootdown);
-		else
-			xen_gflush_va((caddr_t)va, cpus_to_shootdown);
+		} else {
+			for (size_t i = 0; i < len; i += MMU_PAGESIZE) {
+				xen_gflush_va((caddr_t)(va + i),
+				    cpus_to_shootdown);
+			}
+		}
 #else
-		xc_call((xc_arg_t)hat, (xc_arg_t)va, NULL,
+		xc_call((xc_arg_t)hat, (xc_arg_t)va, (xc_arg_t)len,
 		    CPUSET2BV(cpus_to_shootdown), hati_demap_func);
 #endif
 
 	}
 	kpreempt_enable();
+}
+
+void
+hat_tlb_inval(hat_t *hat, uintptr_t va)
+{
+	hat_tlb_inval_range(hat, va, MMU_PAGESIZE);
 }
 
 /*
@@ -2160,7 +2175,8 @@ hat_pte_unmap(
 	uint_t		entry,
 	uint_t		flags,
 	x86pte_t	old_pte,
-	void		*pte_ptr)
+	void		*pte_ptr,
+	boolean_t	tlb)
 {
 	hat_t		*hat = ht->ht_hat;
 	hment_t		*hm = NULL;
@@ -2202,7 +2218,7 @@ hat_pte_unmap(
 			x86_hm_enter(pp);
 		}
 
-		old_pte = x86pte_inval(ht, entry, old_pte, pte_ptr);
+		old_pte = x86pte_inval(ht, entry, old_pte, pte_ptr, tlb);
 
 		/*
 		 * If the page hadn't changed we've unmapped it and can proceed
@@ -2283,7 +2299,7 @@ hat_kmap_unload(caddr_t addr, size_t len, uint_t flags)
 		/*
 		 * use mostly common code to unmap it.
 		 */
-		hat_pte_unmap(ht, entry, flags, old_pte, pte_ptr);
+		hat_pte_unmap(ht, entry, flags, old_pte, pte_ptr, B_TRUE);
 	}
 }
 
@@ -2320,19 +2336,26 @@ typedef struct range_info {
 	level_t		rng_level;
 } range_info_t;
 
+/*
+ * Invalidate the TLB, and perform the callback to the upper level VM system,
+ * for the specified ranges of contiguous pages.
+ */
 static void
-handle_ranges(hat_callback_t *cb, uint_t cnt, range_info_t *range)
+handle_ranges(hat_t *hat, hat_callback_t *cb, uint_t cnt, range_info_t *range)
 {
-	/*
-	 * do callbacks to upper level VM system
-	 */
-	while (cb != NULL && cnt > 0) {
+	while (cnt > 0) {
+		size_t len;
+
 		--cnt;
-		cb->hcb_start_addr = (caddr_t)range[cnt].rng_va;
-		cb->hcb_end_addr = cb->hcb_start_addr;
-		cb->hcb_end_addr +=
-		    range[cnt].rng_cnt << LEVEL_SIZE(range[cnt].rng_level);
-		cb->hcb_function(cb);
+		len = range[cnt].rng_cnt << LEVEL_SHIFT(range[cnt].rng_level);
+		hat_tlb_inval_range(hat, (uintptr_t)range[cnt].rng_va, len);
+
+		if (cb != NULL) {
+			cb->hcb_start_addr = (caddr_t)range[cnt].rng_va;
+			cb->hcb_end_addr = cb->hcb_start_addr;
+			cb->hcb_end_addr += len;
+			cb->hcb_function(cb);
+		}
 	}
 }
 
@@ -2376,8 +2399,10 @@ hat_unload_callback(
 	if (cb == NULL && len == MMU_PAGESIZE) {
 		ht = htable_getpte(hat, vaddr, &entry, &old_pte, 0);
 		if (ht != NULL) {
-			if (PTE_ISVALID(old_pte))
-				hat_pte_unmap(ht, entry, flags, old_pte, NULL);
+			if (PTE_ISVALID(old_pte)) {
+				hat_pte_unmap(ht, entry, flags, old_pte,
+				    NULL, B_TRUE);
+			}
 			htable_release(ht);
 		}
 		XPV_ALLOW_MIGRATE();
@@ -2400,7 +2425,7 @@ hat_unload_callback(
 		if (vaddr != contig_va ||
 		    (r_cnt > 0 && r[r_cnt - 1].rng_level != ht->ht_level)) {
 			if (r_cnt == MAX_UNLOAD_CNT) {
-				handle_ranges(cb, r_cnt, r);
+				handle_ranges(hat, cb, r_cnt, r);
 				r_cnt = 0;
 			}
 			r[r_cnt].rng_va = vaddr;
@@ -2410,10 +2435,16 @@ hat_unload_callback(
 		}
 
 		/*
-		 * Unload one mapping from the page tables.
+		 * Unload one mapping (for a single page) from the page tables.
+		 * Note that we do not remove the mapping from the TLB yet,
+		 * as indicated by the tlb=FALSE argument to hat_pte_unmap().
+		 * handle_ranges() will clear the TLB entries with one call to
+		 * hat_tlb_inval_range() per contiguous range.  This is
+		 * safe because the page can not be reused until the
+		 * callback is made (or we return).
 		 */
 		entry = htable_va2entry(vaddr, ht);
-		hat_pte_unmap(ht, entry, flags, old_pte, NULL);
+		hat_pte_unmap(ht, entry, flags, old_pte, NULL, B_FALSE);
 		ASSERT(ht->ht_level <= mmu.max_page_level);
 		vaddr += LEVEL_SIZE(ht->ht_level);
 		contig_va = vaddr;
@@ -2426,7 +2457,7 @@ hat_unload_callback(
 	 * handle last range for callbacks
 	 */
 	if (r_cnt > 0)
-		handle_ranges(cb, r_cnt, r);
+		handle_ranges(hat, cb, r_cnt, r);
 	XPV_ALLOW_MIGRATE();
 }
 
@@ -2610,8 +2641,7 @@ hat_updateattr(hat_t *hat, caddr_t addr, size_t len, uint_t attr, int what)
 	XPV_DISALLOW_MIGRATE();
 	ASSERT(IS_PAGEALIGNED(vaddr));
 	ASSERT(IS_PAGEALIGNED(eaddr));
-	ASSERT(hat == kas.a_hat ||
-	    AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
 	for (; vaddr < eaddr; vaddr += LEVEL_SIZE(ht->ht_level)) {
 try_again:
 		oldpte = htable_walk(hat, &ht, &vaddr, eaddr);
@@ -2821,8 +2851,7 @@ hat_probe(hat_t *hat, caddr_t addr)
 	pgcnt_t		pg_off;
 
 	ASSERT(hat == kas.a_hat || vaddr <= _userlimit);
-	ASSERT(hat == kas.a_hat ||
-	    AS_LOCK_HELD(hat->hat_as, &hat->hat_as->a_lock));
+	ASSERT(hat == kas.a_hat || AS_LOCK_HELD(hat->hat_as));
 	if (IN_VA_HOLE(vaddr))
 		return (0);
 
@@ -3314,7 +3343,7 @@ hati_page_unmap(page_t *pp, htable_t *ht, uint_t entry)
 	/*
 	 * Invalidate the PTE and remove the hment.
 	 */
-	old_pte = x86pte_inval(ht, entry, 0, NULL);
+	old_pte = x86pte_inval(ht, entry, 0, NULL, B_TRUE);
 	if (PTE2PFN(old_pte, ht->ht_level) != pfn) {
 		panic("x86pte_inval() failure found PTE = " FMT_PTE
 		    " pfn being unmapped is %lx ht=0x%lx entry=0x%x",
@@ -4048,7 +4077,7 @@ clear_boot_mappings(uintptr_t low, uintptr_t high)
 		/*
 		 * Unload the mapping from the page tables.
 		 */
-		(void) x86pte_inval(ht, entry, 0, NULL);
+		(void) x86pte_inval(ht, entry, 0, NULL, B_TRUE);
 		ASSERT(ht->ht_valid_cnt > 0);
 		HTABLE_DEC(ht->ht_valid_cnt);
 		PGCNT_DEC(ht->ht_hat, ht->ht_level);

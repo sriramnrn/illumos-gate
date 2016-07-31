@@ -19,10 +19,11 @@
 # CDDL HEADER END
 #
 
+# Copyright 2014 Gary Mills
 #
 # Copyright (c) 2001, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
-
 #
 # open-tree exception list
 #
@@ -44,7 +45,6 @@
 ./usr/src/cmd/sqlite
 ./usr/src/lib/libsqlite
 ./usr/src/cmd/tcpd
-./usr/src/common/openssl
 ./usr/src/grub
 ./usr/src/uts/intel/sys/acpi
 
@@ -132,6 +132,7 @@
 ./usr/src/lib/crypt_modules/sha256/test.c
 ./usr/src/lib/efcode/fcode_test
 ./usr/src/lib/libkvm/common/test.c
+./usr/src/lib/libsaveargs/tests/
 
 #
 # Ignore debugging code.
@@ -157,24 +158,10 @@
 #
 # Ignore files that get used during a EXPORT_SRC or CRYPT_SRC build only.
 #
-./usr/src/common/crypto/aes/Makefile
-./usr/src/common/crypto/arcfour/Makefile
-./usr/src/common/crypto/blowfish/Makefile
-./usr/src/common/crypto/des/Makefile
-./usr/src/common/crypto/rsa/Makefile
 ./usr/src/lib/gss_mechs/mech_dh/backend/mapfile-vers
 ./usr/src/lib/gss_mechs/mech_dh/dh1024/mapfile-vers
 ./usr/src/lib/gss_mechs/mech_dh/dh192/mapfile-vers
 ./usr/src/lib/gss_mechs/mech_dh/dh640/mapfile-vers
-./usr/src/lib/gss_mechs/mech_krb5/mapfile-vers-clean
-./usr/src/lib/gss_mechs/mech_spnego/mapfile-vers-clean
-./usr/src/lib/pkcs11/pkcs11_softtoken/common/Makefile
-./usr/src/uts/common/Makefile
-./usr/src/uts/common/crypto/io/Makefile
-./usr/src/uts/common/gssapi/include/Makefile
-./usr/src/uts/common/gssapi/mechs/dummy/Makefile
-./usr/src/uts/common/gssapi/mechs/krb5/Makefile
-./usr/src/xmod
 
 #
 # Ignore Makefiles which are used by developers but not used by nightly
@@ -195,7 +182,6 @@
 # Ignore sample source code.
 #
 ./usr/src/cmd/sendmail/libmilter/example.c
-./usr/src/lib/libdhcpsvc/modules/templates
 
 #
 # Ignore .xcl files that aren't used because the program is statically linked.
@@ -272,3 +258,9 @@
 # This covers header files that are not delivered.
 #
 ./usr/src/uts/common/xen/public/COPYING
+
+#
+# ld tests which are not currently delivered
+#
+./usr/src/cmd/sgs/test
+./usr/src/cmd/mdb/test

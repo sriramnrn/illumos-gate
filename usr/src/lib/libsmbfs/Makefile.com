@@ -22,6 +22,9 @@
 #
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
+#
+# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
 #
 
 #
@@ -97,8 +100,11 @@ LDLIBS += -lsocket -lnsl -lc -lmd -lpkcs11 -lkrb5 -lsec -lidmap
 # normal warnings...
 CFLAGS	+=	$(CCVERBOSE) 
 
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-variable
+
 CPPFLAGS += -D__EXTENSIONS__ -D_REENTRANT -DMIA \
-	-I$(SRCDIR) -I.. \
+	-I$(SRCDIR) -I.. -I../netsmb \
 	-I$(SRC)/uts/common \
 	-I$(SRC)/common/smbclnt
 
@@ -113,7 +119,7 @@ ${NOT_RELEASE_BUILD} CPPFLAGS += -DDEBUG
 
 # Filter out the less important lint.
 # See lgrep.awk
-LGREP =	nawk -f $(SRCDIR)/lgrep.awk
+LGREP =	$(AWK) -f $(SRCDIR)/lgrep.awk
 LTAIL	+=	2>&1 | $(LGREP)
 
 all:	$(LIBS)

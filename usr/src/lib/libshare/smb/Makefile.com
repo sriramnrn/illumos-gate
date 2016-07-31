@@ -22,6 +22,8 @@
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+#
 
 LIBRARY =	libshare_smb.a
 VERS =		.1
@@ -43,12 +45,14 @@ LIBSRCS = $(LIBOBJS:%.o=$(SRCDIR)/%.c)
 lintcheck := SRCS = $(LIBSRCS)
 
 LIBS =		$(DYNLIB)
-LDLIBS +=	-lshare -ldlpi -lnsl -lnvpair -lscf -lumem -lc
-all install := LDLIBS += -lxml2
+LDLIBS +=	-lshare -lscf -luuid -ldlpi -lnsl -lnvpair -lxml2 -lumem -lc
 
 CFLAGS +=	$(CCVERBOSE)
-CPPFLAGS +=	-D_REENTRANT -I/usr/include/libxml2 \
-		-I$(SRCDIR)/../common
+CERRWARN +=	-_gcc=-Wno-char-subscripts
+CERRWARN +=	-_gcc=-Wno-switch
+CPPFLAGS +=	-D_REENTRANT -I$(ADJUNCT_PROTO)/usr/include/libxml2 \
+  		-I$(SRCDIR)/../common
+$(ENABLE_SMB_PRINTING) CPPFLAGS += -DHAVE_CUPS
 
 .KEEP_STATE:
 

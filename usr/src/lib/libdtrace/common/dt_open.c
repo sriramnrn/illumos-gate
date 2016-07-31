@@ -21,8 +21,8 @@
 
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2011, Joyent, Inc. All rights reserved.
- * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -81,7 +81,7 @@
 
 /*
  * The version number should be increased for every customer visible release
- * of Solaris. The major number should be incremented when a fundamental
+ * of DTrace. The major number should be incremented when a fundamental
  * change has been made that would affect all consumers, and would reflect
  * sweeping changes to DTrace or the D language. The minor number should be
  * incremented when a change is introduced that could break scripts that had
@@ -110,8 +110,13 @@
 #define	DT_VERS_1_8	DT_VERSION_NUMBER(1, 8, 0)
 #define	DT_VERS_1_8_1	DT_VERSION_NUMBER(1, 8, 1)
 #define	DT_VERS_1_9	DT_VERSION_NUMBER(1, 9, 0)
-#define	DT_VERS_LATEST	DT_VERS_1_9
-#define	DT_VERS_STRING	"Sun D 1.9"
+#define	DT_VERS_1_9_1	DT_VERSION_NUMBER(1, 9, 1)
+#define	DT_VERS_1_10	DT_VERSION_NUMBER(1, 10, 0)
+#define	DT_VERS_1_11	DT_VERSION_NUMBER(1, 11, 0)
+#define	DT_VERS_1_12	DT_VERSION_NUMBER(1, 12, 0)
+#define	DT_VERS_1_12_1	DT_VERSION_NUMBER(1, 12, 1)
+#define	DT_VERS_LATEST	DT_VERS_1_12_1
+#define	DT_VERS_STRING	"Sun D 1.12.1"
 
 const dt_version_t _dtrace_versions[] = {
 	DT_VERS_1_0,	/* D API 1.0.0 (PSARC 2001/466) Solaris 10 FCS */
@@ -132,6 +137,11 @@ const dt_version_t _dtrace_versions[] = {
 	DT_VERS_1_8,	/* D API 1.8 */
 	DT_VERS_1_8_1,	/* D API 1.8.1 */
 	DT_VERS_1_9,	/* D API 1.9 */
+	DT_VERS_1_9_1,	/* D API 1.9.1 */
+	DT_VERS_1_10,	/* D API 1.10 */
+	DT_VERS_1_11,	/* D API 1.11 */
+	DT_VERS_1_12,	/* D API 1.12 */
+	DT_VERS_1_12_1,	/* D API 1.12.1 */
 	0
 };
 
@@ -245,6 +255,8 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_func, "uint64_t(uint64_t)" },
 { "htons", DT_IDENT_FUNC, 0, DIF_SUBR_HTONS, DT_ATTR_EVOLCMN, DT_VERS_1_3,
 	&dt_idops_func, "uint16_t(uint16_t)" },
+{ "getf", DT_IDENT_FUNC, 0, DIF_SUBR_GETF, DT_ATTR_STABCMN, DT_VERS_1_10,
+	&dt_idops_func, "file_t *(int)" },
 { "gid", DT_IDENT_SCALAR, 0, DIF_VAR_GID, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_type, "gid_t" },
 { "id", DT_IDENT_SCALAR, 0, DIF_VAR_ID, DT_ATTR_STABCMN, DT_VERS_1_0,
@@ -259,6 +271,8 @@ static const dt_ident_t _dtrace_globals[] = {
 	DT_VERS_1_5, &dt_idops_func, "string(int, void *)" },
 { "ipl", DT_IDENT_SCALAR, 0, DIF_VAR_IPL, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_type, "uint_t" },
+{ "json", DT_IDENT_FUNC, 0, DIF_SUBR_JSON, DT_ATTR_STABCMN, DT_VERS_1_11,
+	&dt_idops_func, "string(const char *, const char *)" },
 { "jstack", DT_IDENT_ACTFUNC, 0, DT_ACT_JSTACK, DT_ATTR_STABCMN, DT_VERS_1_0,
 	&dt_idops_func, "stack(...)" },
 { "lltostr", DT_IDENT_FUNC, 0, DIF_SUBR_LLTOSTR, DT_ATTR_STABCMN, DT_VERS_1_0,
@@ -373,6 +387,8 @@ static const dt_ident_t _dtrace_globals[] = {
 	&dt_idops_func, "string(const char *, const char *)" },
 { "strtok", DT_IDENT_FUNC, 0, DIF_SUBR_STRTOK, DT_ATTR_STABCMN, DT_VERS_1_1,
 	&dt_idops_func, "string(const char *, const char *)" },
+{ "strtoll", DT_IDENT_FUNC, 0, DIF_SUBR_STRTOLL, DT_ATTR_STABCMN, DT_VERS_1_11,
+	&dt_idops_func, "int64_t(const char *, [int])" },
 { "substr", DT_IDENT_FUNC, 0, DIF_SUBR_SUBSTR, DT_ATTR_STABCMN, DT_VERS_1_1,
 	&dt_idops_func, "string(const char *, int, [int])" },
 { "sum", DT_IDENT_AGGFUNC, 0, DTRACEAGG_SUM, DT_ATTR_STABCMN, DT_VERS_1_0,
@@ -926,6 +942,7 @@ alloc:
 	dtp->dt_linktype = DT_LTYP_ELF;
 	dtp->dt_xlatemode = DT_XL_STATIC;
 	dtp->dt_stdcmode = DT_STDC_XA;
+	dtp->dt_encoding = DT_ENCODING_UNSET;
 	dtp->dt_version = version;
 	dtp->dt_fd = dtfd;
 	dtp->dt_ftfd = ftfd;
@@ -937,7 +954,7 @@ alloc:
 	dtp->dt_mods = calloc(dtp->dt_modbuckets, sizeof (dt_module_t *));
 	dtp->dt_provbuckets = _dtrace_strbuckets;
 	dtp->dt_provs = calloc(dtp->dt_provbuckets, sizeof (dt_provider_t *));
-	dt_proc_hash_create(dtp);
+	dt_proc_init(dtp);
 	dtp->dt_vmax = DT_VERS_LATEST;
 	dtp->dt_cpp_path = strdup(_dtrace_defcpp);
 	dtp->dt_cpp_argv = malloc(sizeof (char *));
@@ -951,8 +968,9 @@ alloc:
 	(void) uname(&dtp->dt_uts);
 
 	if (dtp->dt_mods == NULL || dtp->dt_provs == NULL ||
-	    dtp->dt_procs == NULL || dtp->dt_ld_path == NULL ||
-	    dtp->dt_cpp_path == NULL || dtp->dt_cpp_argv == NULL)
+	    dtp->dt_procs == NULL || dtp->dt_proc_env == NULL ||
+	    dtp->dt_ld_path == NULL || dtp->dt_cpp_path == NULL ||
+	    dtp->dt_cpp_argv == NULL)
 		return (set_open_errno(dtp, errp, EDT_NOMEM));
 
 	for (i = 0; i < DTRACEOPT_MAX; i++)
@@ -1318,7 +1336,7 @@ dtrace_close(dtrace_hdl_t *dtp)
 	int i;
 
 	if (dtp->dt_procs != NULL)
-		dt_proc_hash_destroy(dtp);
+		dt_proc_fini(dtp);
 
 	while ((pgp = dt_list_next(&dtp->dt_programs)) != NULL)
 		dt_program_destroy(dtp, pgp);
@@ -1365,7 +1383,6 @@ dtrace_close(dtrace_hdl_t *dtp)
 	dt_strdata_destroy(dtp);
 	dt_buffered_destroy(dtp);
 	dt_aggregate_destroy(dtp);
-	free(dtp->dt_buf.dtbd_data);
 	dt_pfdict_destroy(dtp);
 	dt_provmod_destroy(&dtp->dt_provmod);
 	dt_dof_fini(dtp);

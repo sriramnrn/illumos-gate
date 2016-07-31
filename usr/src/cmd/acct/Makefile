@@ -19,6 +19,7 @@
 # CDDL HEADER END
 #
 #
+# Copyright 2015 Gary Mills
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -36,8 +37,6 @@ ALL=		$(PROG) $(SHFILE1) $(SHFILE2) holidays
 
 SRCS=		$(PROG:%=%.c)
 SHFILE1SRCS=	$(SHFILE1:%=%.sh)
-
-TXTS=		diskusg.c
 
 BINPROG=	acctcom
 LIBPROG=	acctcms acctcon acctcon1 acctcon2 acctdisk \
@@ -88,11 +87,16 @@ $(LIBACCTD)/accton :=	FILEMODE=	04755
 $(ETCINITPROG) :=	FILEMODE=	0744
 $(ETCACCTPROG) :=	FILEMODE=	0644
 
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-address
+
 .KEEP_STATE:
 
 .PARALLEL: $(ALL)
 
-all: $(SUBDIRS) .WAIT $(ALL) $(TXTS)
+all: $(SUBDIRS) .WAIT $(ALL)
 
 install: all .WAIT $(DIRS) .WAIT $(USRBINPROG) $(LIBACCTPROG) $(ETCACCTPROG) \
 	$(ETCINITPROG)

@@ -21,13 +21,17 @@
 /*
  * Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  */
 /*
  * Copyright (c) 2010, Intel Corporation.
  * All rights reserved.
  */
 /*
- * Copyright (c) 2011, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2015, Joyent, Inc.
+ * Copyright 2012 Jens Elkner <jel+illumos@cs.uni-magdeburg.de>
+ * Copyright 2012 Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+ * Copyright 2014 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
  */
 
 #ifndef _SYS_X86_ARCHEXT_H
@@ -81,13 +85,6 @@ extern "C" {
 #define	CPUID_INTC_EDX_IA64	0x40000000	/* Itanium emulating IA32 */
 #define	CPUID_INTC_EDX_PBE	0x80000000	/* Pending Break Enable */
 
-#define	FMT_CPUID_INTC_EDX					\
-	"\20"							\
-	"\40pbe\37ia64\36tm\35htt\34ss\33sse2\32sse\31fxsr"	\
-	"\30mmx\27acpi\26ds\24clfsh\23psn\22pse36\21pat"	\
-	"\20cmov\17mca\16pge\15mtrr\14sep\12apic\11cx8"		\
-	"\10mce\7pae\6msr\5tsc\4pse\3de\2vme\1fpu"
-
 /*
  * cpuid instruction feature flags in %ecx (standard function 1)
  */
@@ -104,7 +101,7 @@ extern "C" {
 #define	CPUID_INTC_ECX_SSSE3	0x00000200	/* Supplemental SSE3 insns */
 #define	CPUID_INTC_ECX_CID	0x00000400	/* L1 context ID */
 						/* 0x00000800 - reserved */
-						/* 0x00001000 - reserved */
+#define	CPUID_INTC_ECX_FMA	0x00001000	/* Fused Multiply Add */
 #define	CPUID_INTC_ECX_CX16	0x00002000	/* cmpxchg16 */
 #define	CPUID_INTC_ECX_ETPRD	0x00004000	/* extended task pri messages */
 						/* 0x00008000 - reserved */
@@ -113,20 +110,16 @@ extern "C" {
 #define	CPUID_INTC_ECX_DCA	0x00040000	/* direct cache access */
 #define	CPUID_INTC_ECX_SSE4_1	0x00080000	/* SSE4.1 insns */
 #define	CPUID_INTC_ECX_SSE4_2	0x00100000	/* SSE4.2 insns */
+#define	CPUID_INTC_ECX_X2APIC	0x00200000	/* x2APIC */
 #define	CPUID_INTC_ECX_MOVBE	0x00400000	/* MOVBE insn */
 #define	CPUID_INTC_ECX_POPCNT	0x00800000	/* POPCNT insn */
 #define	CPUID_INTC_ECX_AES	0x02000000	/* AES insns */
 #define	CPUID_INTC_ECX_XSAVE	0x04000000	/* XSAVE/XRESTOR insns */
 #define	CPUID_INTC_ECX_OSXSAVE	0x08000000	/* OS supports XSAVE insns */
 #define	CPUID_INTC_ECX_AVX	0x10000000	/* AVX supported */
-
-#define	FMT_CPUID_INTC_ECX					\
-	"\20"							\
-	"\35avx\34osxsav\33xsave"				\
-	"\32aes"						\
-	"\30popcnt\27movbe\25sse4.2\24sse4.1\23dca"		\
-	"\20\17etprd\16cx16\13cid\12ssse3\11tm2"		\
-	"\10est\7smx\6vmx\5dscpl\4mon\2pclmulqdq\1sse3"
+#define	CPUID_INTC_ECX_F16C	0x20000000	/* F16C supported */
+#define	CPUID_INTC_ECX_RDRAND	0x40000000	/* RDRAND supported */
+#define	CPUID_INTC_ECX_HV	0x80000000	/* Hypervisor */
 
 /*
  * cpuid instruction feature flags in %edx (extended function 0x80000001)
@@ -166,13 +159,6 @@ extern "C" {
 #define	CPUID_AMD_EDX_3DNowx	0x40000000	/* AMD: extensions to 3DNow! */
 #define	CPUID_AMD_EDX_3DNow	0x80000000	/* AMD: 3DNow! instructions */
 
-#define	FMT_CPUID_AMD_EDX					\
-	"\20"							\
-	"\40a3d\37a3d+\36lm\34tscp\32ffxsr\31fxsr"		\
-	"\30mmx\27mmxext\25nx\22pse\21pat"			\
-	"\20cmov\17mca\16pge\15mtrr\14syscall\12apic\11cx8"	\
-	"\10mce\7pae\6msr\5tsc\4pse\3de\2vme\1fpu"
-
 #define	CPUID_AMD_ECX_AHF64	0x00000001	/* LAHF and SAHF in long mode */
 #define	CPUID_AMD_ECX_CMP_LGCY	0x00000002	/* AMD: multicore chip */
 #define	CPUID_AMD_ECX_SVM	0x00000004	/* AMD: secure VM */
@@ -189,12 +175,6 @@ extern "C" {
 #define	CPUID_AMD_ECX_WDT	0x00002000	/* AMD: WDT */
 #define	CPUID_AMD_ECX_TOPOEXT	0x00400000	/* AMD: Topology Extensions */
 
-#define	FMT_CPUID_AMD_ECX					\
-	"\20"							\
-	"\22topoext"						\
-	"\14wdt\13skinit\12sse5\11ibs\10osvw\93dnp\8mas"	\
-	"\7sse4a\6lzcnt\5cr8d\3svm\2lcmplgcy\1ahf64"
-
 /*
  * Intel now seems to have claimed part of the "extended" function
  * space that we previously for non-Intel implementors to use.
@@ -204,6 +184,18 @@ extern "C" {
  */
 #define	CPUID_INTC_ECX_AHF64	0x00100000	/* LAHF and SAHF in long mode */
 
+/*
+ * Intel also uses cpuid leaf 7 to have additional instructions and features.
+ * Like some other leaves, but unlike the current ones we care about, it
+ * requires us to specify both a leaf in %eax and a sub-leaf in %ecx. To deal
+ * with the potential use of additional sub-leaves in the future, we now
+ * specifically label the EBX features with their leaf and sub-leaf.
+ */
+#define	CPUID_INTC_EBX_7_0_BMI1		0x00000008	/* BMI1 instrs */
+#define	CPUID_INTC_EBX_7_0_AVX2		0x00000020	/* AVX2 supported */
+#define	CPUID_INTC_EBX_7_0_SMEP		0x00000080	/* SMEP in CR4 */
+#define	CPUID_INTC_EBX_7_0_BMI2		0x00000100	/* BMI2 Instrs */
+#define	CPUID_INTC_EBX_7_0_SMAP		0x00100000	/* SMAP in CR 4 */
 
 #define	P5_MCHADDR	0x0
 #define	P5_CESR		0x11
@@ -340,7 +332,7 @@ extern "C" {
 #define	X86FSET_PGE		4
 #define	X86FSET_DE		5
 #define	X86FSET_CMOV		6
-#define	X86FSET_MMX 		7
+#define	X86FSET_MMX		7
 #define	X86FSET_MCA		8
 #define	X86FSET_PAE		9
 #define	X86FSET_CX8		10
@@ -371,6 +363,15 @@ extern "C" {
 #define	X86FSET_VMX		35
 #define	X86FSET_SVM		36
 #define	X86FSET_TOPOEXT		37
+#define	X86FSET_F16C		38
+#define	X86FSET_RDRAND		39
+#define	X86FSET_X2APIC		40
+#define	X86FSET_AVX2		41
+#define	X86FSET_BMI1		42
+#define	X86FSET_BMI2		43
+#define	X86FSET_FMA		44
+#define	X86FSET_SMEP		45
+#define	X86FSET_SMAP		46
 
 /*
  * flags to patch tsc_read routine.
@@ -527,17 +528,45 @@ extern "C" {
 	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0001)
 #define	X86_CHIPREV_AMD_10_REV_B \
 	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0002)
-#define	X86_CHIPREV_AMD_10_REV_C \
+#define	X86_CHIPREV_AMD_10_REV_C2 \
 	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0004)
-#define	X86_CHIPREV_AMD_10_REV_D \
+#define	X86_CHIPREV_AMD_10_REV_C3 \
 	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0008)
+#define	X86_CHIPREV_AMD_10_REV_D0 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0010)
+#define	X86_CHIPREV_AMD_10_REV_D1 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0020)
+#define	X86_CHIPREV_AMD_10_REV_E \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x10, 0x0040)
 
 /*
  * Definitions for AMD Family 0x11.
  */
-#define	X86_CHIPREV_AMD_11 \
-	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x11, 0x0001)
+#define	X86_CHIPREV_AMD_11_REV_B \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x11, 0x0002)
 
+/*
+ * Definitions for AMD Family 0x12.
+ */
+#define	X86_CHIPREV_AMD_12_REV_B \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x12, 0x0002)
+
+/*
+ * Definitions for AMD Family 0x14.
+ */
+#define	X86_CHIPREV_AMD_14_REV_B \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x14, 0x0002)
+#define	X86_CHIPREV_AMD_14_REV_C \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x14, 0x0004)
+
+/*
+ * Definitions for AMD Family 0x15
+ */
+#define	X86_CHIPREV_AMD_15OR_REV_B2 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x15, 0x0001)
+
+#define	X86_CHIPREV_AMD_15TN_REV_A1 \
+	_X86_CHIPREV_MKREV(X86_VENDOR_AMD, 0x15, 0x0002)
 
 /*
  * Various socket/package types, extended as the need to distinguish
@@ -575,6 +604,14 @@ extern "C" {
 #define	X86_SOCKET_G34		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x000800)
 #define	X86_SOCKET_ASB2		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x001000)
 #define	X86_SOCKET_C32		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x002000)
+#define	X86_SOCKET_S1g4		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x004000)
+#define	X86_SOCKET_FT1		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x008000)
+#define	X86_SOCKET_FM1		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x010000)
+#define	X86_SOCKET_FS1		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x020000)
+#define	X86_SOCKET_AM3R2	_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x040000)
+#define	X86_SOCKET_FP2		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x080000)
+#define	X86_SOCKET_FS1R2	_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x100000)
+#define	X86_SOCKET_FM2		_X86_SOCKET_MKVAL(X86_VENDOR_AMD, 0x200000)
 
 /*
  * xgetbv/xsetbv support
@@ -588,13 +625,14 @@ extern "C" {
 #define	XFEATURE_SSE		0x2
 #define	XFEATURE_AVX		0x4
 #define	XFEATURE_MAX		XFEATURE_AVX
-#define	XFEATURE_FP_ALL		(XFEATURE_LEGACY_FP|XFEATURE_SSE|XFEATURE_AVX)
+#define	XFEATURE_FP_ALL	\
+	(XFEATURE_LEGACY_FP|XFEATURE_SSE|XFEATURE_AVX)
 
 #if !defined(_ASM)
 
 #if defined(_KERNEL) || defined(_KMEMUSER)
 
-#define	NUM_X86_FEATURES	38
+#define	NUM_X86_FEATURES	47
 extern uchar_t x86_featureset[];
 
 extern void free_x86_featureset(void *featureset);
@@ -610,9 +648,6 @@ extern uint_t x86_vendor;
 extern uint_t x86_clflush_size;
 
 extern uint_t pentiumpro_bug4046376;
-extern uint_t pentiumpro_bug4064495;
-
-extern uint_t enable486;
 
 extern const char CyrixInstead[];
 
@@ -702,7 +737,7 @@ extern void cpuid_free_space(struct cpu *);
 extern void cpuid_pass1(struct cpu *, uchar_t *);
 extern void cpuid_pass2(struct cpu *);
 extern void cpuid_pass3(struct cpu *);
-extern uint_t cpuid_pass4(struct cpu *);
+extern void cpuid_pass4(struct cpu *, uint_t *);
 extern void cpuid_set_cpu_properties(void *, processorid_t,
     struct cpuid_info *);
 
@@ -716,7 +751,7 @@ extern int cpuid_deep_cstates_supported(void);
 extern int cpuid_arat_supported(void);
 extern int cpuid_iepb_supported(struct cpu *);
 extern int cpuid_deadline_tsc_supported(void);
-extern int vmware_platform(void);
+extern void vmware_port(int, uint32_t *);
 #endif
 
 struct cpu_ucode_info;
@@ -777,16 +812,37 @@ extern int is_controldom(void);
 extern void xsave_setup_msr(struct cpu *);
 
 /*
+ * Hypervisor signatures
+ */
+#define	HVSIG_XEN_HVM	"XenVMMXenVMM"
+#define	HVSIG_VMWARE	"VMwareVMware"
+#define	HVSIG_KVM	"KVMKVMKVM"
+#define	HVSIG_MICROSOFT	"Microsoft Hv"
+
+/*
  * Defined hardware environments
  */
-#define	HW_NATIVE	0x00	/* Running on bare metal */
-#define	HW_XEN_PV	0x01	/* Running on Xen Hypervisor paravirutualized */
-#define	HW_XEN_HVM	0x02	/* Running on Xen hypervisor HVM */
-#define	HW_VMWARE	0x03	/* Running on VMware hypervisor */
+#define	HW_NATIVE	(1 << 0)	/* Running on bare metal */
+#define	HW_XEN_PV	(1 << 1)	/* Running on Xen PVM */
+
+#define	HW_XEN_HVM	(1 << 2)	/* Running on Xen HVM */
+#define	HW_VMWARE	(1 << 3)	/* Running on VMware hypervisor */
+#define	HW_KVM		(1 << 4)	/* Running on KVM hypervisor */
+#define	HW_MICROSOFT	(1 << 5)	/* Running on Microsoft hypervisor */
+
+#define	HW_VIRTUAL	(HW_XEN_HVM | HW_VMWARE | HW_KVM | HW_MICROSOFT)
 
 #endif	/* _KERNEL */
 
-#endif
+#endif	/* !_ASM */
+
+/*
+ * VMware hypervisor related defines
+ */
+#define	VMWARE_HVMAGIC		0x564d5868
+#define	VMWARE_HVPORT		0x5658
+#define	VMWARE_HVCMD_GETVERSION	0x0a
+#define	VMWARE_HVCMD_GETTSCFREQ	0x2d
 
 #ifdef	__cplusplus
 }

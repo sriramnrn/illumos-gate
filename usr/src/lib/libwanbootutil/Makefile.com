@@ -22,7 +22,7 @@
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright (c) 2012 by Delphix. All rights reserved.
 #
 
 LIBRARY	=	libwanbootutil.a
@@ -62,9 +62,14 @@ $(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 # Library includes sources created via rpcgen. And rpcgen unfortunately
 # created unused function variables.
-LINTFLAGS +=	-erroff=E_FUNC_VAR_UNUSED
+LINTFLAGS   +=	-erroff=E_FUNC_VAR_UNUSED
+LINTFLAGS64 +=	-erroff=E_FUNC_VAR_UNUSED
 
 CPPFLAGS +=	-I$(CRYPTO_DIR)
+
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-type-limits
+CERRWARN +=	-_gcc=-Wno-uninitialized
 
 install:	all
 

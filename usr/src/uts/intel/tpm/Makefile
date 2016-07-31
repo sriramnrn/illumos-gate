@@ -61,7 +61,9 @@ CFLAGS		+= -xCC
 CPPFLAGS	+= -I$(ROOT)/usr/include
 
 # This is for /usr/include/tss/, which is not built in the ON consolidation
-CPPFLAGS	+= -I/usr/include
+CPPFLAGS	+= -I$(ADJUNCT_PROTO)/usr/include
+
+CERRWARN	+= -_gcc=-Wno-parentheses
 
 #
 #	Default build targets.

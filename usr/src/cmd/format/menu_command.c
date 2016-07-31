@@ -21,6 +21,9 @@
 /*
  * Copyright (c) 1993, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2014 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>
  */
 
 /*
@@ -79,6 +82,8 @@ slist_t	ptag_choices[] = {
 	{ "home",	"",	V_HOME		},
 	{ "alternates",	"",	V_ALTSCTR	},
 	{ "reserved",	"",	V_RESERVED	},
+	{ "system",	"",	V_SYSTEM	},
+	{ "BIOS_boot",	"",	V_BIOS_BOOT	},
 	{ NULL }
 };
 
@@ -1563,20 +1568,24 @@ c_label()
 		fmt_print("[1] EFI Label\n");
 		ioparam.io_bounds.lower = 0;
 		ioparam.io_bounds.upper = 1;
-		if (cur_label == L_TYPE_SOLARIS)
-			deflt = 0;
+		if ((cur_label == L_TYPE_SOLARIS) &&
+		    (cur_disk->fdisk_part.systid != EFI_PMBR))
+			deflt = L_TYPE_SOLARIS;
 		else
-			deflt = 1;
+			deflt = L_TYPE_EFI;
 		defltptr = &deflt;
 		choice = input(FIO_INT, "Specify Label type", ':',
 		    &ioparam, defltptr, DATA_INPUT);
-		if ((choice == 0) && (cur_label == L_TYPE_SOLARIS)) {
+		if ((choice == L_TYPE_SOLARIS) &&
+		    (cur_label == L_TYPE_SOLARIS) &&
+		    (cur_disk->fdisk_part.systid != EFI_PMBR)) {
 			goto expert_end;
-		} else if ((choice == 1) && (cur_label == L_TYPE_EFI)) {
+		} else if ((choice == L_TYPE_EFI) &&
+		    (cur_label == L_TYPE_EFI)) {
 			goto expert_end;
 		}
 		switch (choice) {
-		case 0:
+		case L_TYPE_SOLARIS:
 		/*
 		 * EFI label to SMI label
 		 */
@@ -1613,7 +1622,8 @@ c_label()
 		(void) memset((char *)&label, 0, sizeof (struct dk_label));
 
 		(void) strcpy(x86_devname, cur_disk->disk_name);
-		if (cur_ctype->ctype_ctype == DKC_DIRECT)
+		if (cur_ctype->ctype_ctype == DKC_DIRECT ||
+		    cur_ctype->ctype_ctype == DKC_BLKDEV)
 			dptr = auto_direct_get_geom_label(cur_file,  &label);
 		else
 			dptr = auto_sense(cur_file, 1, &label);
@@ -1648,20 +1658,22 @@ c_label()
 		}
 
 
-		case 1:
+		case L_TYPE_EFI:
 		/*
 		 * SMI label to EFI label
 		 */
 
-
-		fmt_print("Warning: This disk has an SMI label. Changing to "
-		    "EFI label will erase all\ncurrent partitions.\n");
-
-		if (check("Continue")) {
-			return (-1);
+		if ((cur_disk->fdisk_part.systid == SUNIXOS) ||
+		    (cur_disk->fdisk_part.systid == SUNIXOS2)) {
+			fmt_print("Warning: This disk has an SMI label. "
+			    "Changing to EFI label will erase all\ncurrent "
+			    "partitions.\n");
+			if (check("Continue")) {
+				return (-1);
+			}
 		}
 
-		if (get_disk_info(cur_file, &efinfo) != 0) {
+		if (get_disk_info(cur_file, &efinfo, cur_disk) != 0) {
 			return (-1);
 		}
 		(void) memset((char *)&label, 0, sizeof (struct dk_label));
@@ -2047,7 +2059,7 @@ c_verify_efi()
 	struct	partition_info	tmp_pinfo;
 	int status;
 
-	status = read_efi_label(cur_file, &efi_info);
+	status = read_efi_label(cur_file, &efi_info, cur_disk);
 	if (status != 0) {
 		err_print("Warning: Could not read label.\n");
 		return (-1);
@@ -2077,6 +2089,10 @@ c_verify_efi()
 	    cur_parts->etoc->efi_last_u_lba);
 
 	print_map(&tmp_pinfo);
+
+	free(efi_info.vendor);
+	free(efi_info.product);
+	free(efi_info.revision);
 	return (0);
 }
 

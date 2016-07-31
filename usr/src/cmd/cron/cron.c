@@ -21,6 +21,10 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ *
+ * Copyright 2013 Joshua M. Clulow <josh@sysmgr.org>
+ *
+ * Copyright (c) 2014 Gary Mills
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -145,7 +149,6 @@ error for each of your commands."
 #define	CLOCK_DRIFT	"clock time drifted backwards after event!\n"
 #define	PIDERR		"unexpected pid returned %d (ignored)"
 #define	CRONTABERR	"Subject: Your crontab file has an error in it\n\n"
-#define	CRONOUT		"Subject: Output from \"cron\" command\n\n"
 #define	MALLOCERR	"out of space, cannot create new string\n"
 
 #define	DIDFORK didfork
@@ -548,7 +551,7 @@ begin:
 		} else {
 			ne_time = next_event->time - t;
 #ifdef DEBUG
-			cftime(timebuf, "%C", &next_event->time);
+			cftime(timebuf, "%+", &next_event->time);
 			(void) fprintf(stderr, "next_time=%ld %s\n",
 			    next_event->time, timebuf);
 #endif
@@ -622,7 +625,7 @@ begin:
 				    next_time(next_event, (time_t)0);
 			}
 #ifdef DEBUG
-			cftime(timebuf, "%C", &next_event->time);
+			cftime(timebuf, "%+", &next_event->time);
 			(void) fprintf(stderr,
 			    "pushing back cron event %s at %ld (%s)\n",
 			    next_event->cmd, next_event->time, timebuf);
@@ -1270,7 +1273,7 @@ again:
 		}
 		cte_valid();
 #ifdef DEBUG
-		cftime(timebuf, "%C", &e->time);
+		cftime(timebuf, "%+", &e->time);
 		(void) fprintf(stderr, "inserting cron event %s at %ld (%s)\n",
 		    e->cmd, e->time, timebuf);
 #endif
@@ -2711,6 +2714,7 @@ mail_result(struct usr *p, struct runinfo *pr, size_t filesize)
 	int	nbytes;
 	char	iobuf[BUFSIZ];
 	char	*cmd;
+	char	*lowname = (pr->jobtype == CRONEVENT ? "cron" : "at");
 
 	(void) uname(&name);
 	if ((ruser_ids = getpwnam(p->name)) == NULL)
@@ -2724,31 +2728,40 @@ mail_result(struct usr *p, struct runinfo *pr, size_t filesize)
 	if (mailpipe == NULL)
 		exit(127);
 	(void) fprintf(mailpipe, "To: %s\n", p->name);
-	if (pr->jobtype == CRONEVENT) {
-		(void) fprintf(mailpipe, CRONOUT);
-		(void) fprintf(mailpipe, "Your \"cron\" job on %s\n",
-		    name.nodename);
-		if (pr->jobname != NULL) {
-			(void) fprintf(mailpipe, "%s\n\n", pr->jobname);
-		}
-	} else {
-		(void) fprintf(mailpipe, "Subject: Output from \"at\" job\n\n");
-		(void) fprintf(mailpipe, "Your \"at\" job on %s\n",
-		    name.nodename);
-		if (pr->jobname != NULL) {
-			(void) fprintf(mailpipe, "\"%s\"\n\n", pr->jobname);
-		}
-	}
-	/* Tmp. file is fopen'ed w/ "r",  secure open */
+	(void) fprintf(mailpipe, "Subject: %s <%s@%s> %s\n",
+	    (pr->jobtype == CRONEVENT ? "Cron" : "At"),
+	    p->name, name.nodename, pr->jobname);
+
+	/*
+	 * RFC3834 (Section 5) defines the Auto-Submitted header to prevent
+	 * vacation replies, et al, from being sent in response to
+	 * machine-generated mail.
+	 */
+	(void) fprintf(mailpipe, "Auto-Submitted: auto-generated\n");
+
+	/*
+	 * Additional headers for mail filtering and diagnostics:
+	 */
+	(void) fprintf(mailpipe, "X-Mailer: cron (%s %s)\n", name.sysname,
+	    name.release);
+	(void) fprintf(mailpipe, "X-Cron-User: %s\n", p->name);
+	(void) fprintf(mailpipe, "X-Cron-Host: %s\n", name.nodename);
+	(void) fprintf(mailpipe, "X-Cron-Job-Name: %s\n", pr->jobname);
+	(void) fprintf(mailpipe, "X-Cron-Job-Type: %s\n", lowname);
+
+	/*
+	 * Message Body:
+	 *
+	 * (Temporary file is fopen'ed with "r", secure open.)
+	 */
+	(void) fprintf(mailpipe, "\n");
 	if (filesize > 0 &&
 	    (st = fopen(pr->outfile, "r")) != NULL) {
-		(void) fprintf(mailpipe,
-		    "produced the following output:\n\n");
 		while ((nbytes = fread(iobuf, sizeof (char), BUFSIZ, st)) != 0)
 			(void) fwrite(iobuf, sizeof (char), nbytes, mailpipe);
 		(void) fclose(st);
 	} else {
-		(void) fprintf(mailpipe, "completed.\n");
+		(void) fprintf(mailpipe, "Job completed with no output.\n");
 	}
 	(void) pclose(mailpipe);
 	exit(0);
@@ -3025,7 +3038,7 @@ logit(int cc, struct runinfo *rp, int rc)
 	if (cc == BCHAR)
 		(void) printf("%c  CMD: %s\n", cc, next_event->cmd);
 	(void) strftime(timebuf, sizeof (timebuf), FORMAT, localtime(&t));
-	(void) printf("%c  %.8s %u %c %s",
+	(void) printf("%c  %s %u %c %s",
 	    cc, (rp->rusr)->name, rp->pid, QUE(rp->que), timebuf);
 	if ((ret = TSTAT(rc)) != 0)
 		(void) printf(" ts=%d", ret);

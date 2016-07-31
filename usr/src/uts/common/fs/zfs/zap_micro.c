@@ -20,7 +20,9 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2011, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Spectra Logic Corporation, All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #include <sys/zio.h>
@@ -33,10 +35,13 @@
 #include <sys/zap_leaf.h>
 #include <sys/avl.h>
 #include <sys/arc.h>
+#include <sys/dmu_objset.h>
 
 #ifdef _KERNEL
 #include <sys/sunddi.h>
 #endif
+
+extern inline mzap_phys_t *zap_m_phys(zap_t *zap);
 
 static int mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags);
 
@@ -45,7 +50,7 @@ zap_getflags(zap_t *zap)
 {
 	if (zap->zap_ismicro)
 		return (0);
-	return (zap->zap_u.zap_fat.zap_phys->zap_flags);
+	return (zap_f_phys(zap)->zap_flags);
 }
 
 int
@@ -362,6 +367,9 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 	zap_t *winner;
 	zap_t *zap;
 	int i;
+	uint64_t *zap_hdr = (uint64_t *)db->db_data;
+	uint64_t zap_block_type = zap_hdr[0];
+	uint64_t zap_magic = zap_hdr[1];
 
 	ASSERT3U(MZAP_ENT_LEN, ==, sizeof (mzap_ent_phys_t));
 
@@ -372,9 +380,13 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 	zap->zap_object = obj;
 	zap->zap_dbuf = db;
 
-	if (*(uint64_t *)db->db_data != ZBT_MICRO) {
+	if (zap_block_type != ZBT_MICRO) {
 		mutex_init(&zap->zap_f.zap_num_entries_mtx, 0, 0, 0);
-		zap->zap_f.zap_block_shift = highbit(db->db_size) - 1;
+		zap->zap_f.zap_block_shift = highbit64(db->db_size) - 1;
+		if (zap_block_type != ZBT_HEADER || zap_magic != ZAP_MAGIC) {
+			winner = NULL;	/* No actual winner here... */
+			goto handle_winner;
+		}
 	} else {
 		zap->zap_ismicro = TRUE;
 	}
@@ -384,27 +396,22 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 	 * it, because zap_lockdir() checks zap_ismicro without the lock
 	 * held.
 	 */
-	winner = dmu_buf_set_user(db, zap, &zap->zap_m.zap_phys, zap_evict);
+	dmu_buf_init_user(&zap->zap_dbu, zap_evict, &zap->zap_dbuf);
+	winner = dmu_buf_set_user(db, &zap->zap_dbu);
 
-	if (winner != NULL) {
-		rw_exit(&zap->zap_rwlock);
-		rw_destroy(&zap->zap_rwlock);
-		if (!zap->zap_ismicro)
-			mutex_destroy(&zap->zap_f.zap_num_entries_mtx);
-		kmem_free(zap, sizeof (zap_t));
-		return (winner);
-	}
+	if (winner != NULL)
+		goto handle_winner;
 
 	if (zap->zap_ismicro) {
-		zap->zap_salt = zap->zap_m.zap_phys->mz_salt;
-		zap->zap_normflags = zap->zap_m.zap_phys->mz_normflags;
+		zap->zap_salt = zap_m_phys(zap)->mz_salt;
+		zap->zap_normflags = zap_m_phys(zap)->mz_normflags;
 		zap->zap_m.zap_num_chunks = db->db_size / MZAP_ENT_LEN - 1;
 		avl_create(&zap->zap_m.zap_avl, mze_compare,
 		    sizeof (mzap_ent_t), offsetof(mzap_ent_t, mze_node));
 
 		for (i = 0; i < zap->zap_m.zap_num_chunks; i++) {
 			mzap_ent_phys_t *mze =
-			    &zap->zap_m.zap_phys->mz_chunk[i];
+			    &zap_m_phys(zap)->mz_chunk[i];
 			if (mze->mze_name[0]) {
 				zap_name_t *zn;
 
@@ -416,8 +423,8 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 			}
 		}
 	} else {
-		zap->zap_salt = zap->zap_f.zap_phys->zap_salt;
-		zap->zap_normflags = zap->zap_f.zap_phys->zap_normflags;
+		zap->zap_salt = zap_f_phys(zap)->zap_salt;
+		zap->zap_normflags = zap_f_phys(zap)->zap_normflags;
 
 		ASSERT3U(sizeof (struct zap_leaf_header), ==,
 		    2*ZAP_LEAF_CHUNKSIZE);
@@ -427,7 +434,7 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 		 * other members.
 		 */
 		ASSERT3P(&ZAP_EMBEDDED_PTRTBL_ENT(zap, 0), >,
-		    &zap->zap_f.zap_phys->zap_salt);
+		    &zap_f_phys(zap)->zap_salt);
 
 		/*
 		 * The embedded pointer table should end at the end of
@@ -435,11 +442,19 @@ mzap_open(objset_t *os, uint64_t obj, dmu_buf_t *db)
 		 */
 		ASSERT3U((uintptr_t)&ZAP_EMBEDDED_PTRTBL_ENT(zap,
 		    1<<ZAP_EMBEDDED_PTRTBL_SHIFT(zap)) -
-		    (uintptr_t)zap->zap_f.zap_phys, ==,
+		    (uintptr_t)zap_f_phys(zap), ==,
 		    zap->zap_dbuf->db_size);
 	}
 	rw_exit(&zap->zap_rwlock);
 	return (zap);
+
+handle_winner:
+	rw_exit(&zap->zap_rwlock);
+	rw_destroy(&zap->zap_rwlock);
+	if (!zap->zap_ismicro)
+		mutex_destroy(&zap->zap_f.zap_num_entries_mtx);
+	kmem_free(zap, sizeof (zap_t));
+	return (winner);
 }
 
 int
@@ -466,8 +481,17 @@ zap_lockdir(objset_t *os, uint64_t obj, dmu_tx_t *tx,
 #endif
 
 	zap = dmu_buf_get_user(db);
-	if (zap == NULL)
+	if (zap == NULL) {
 		zap = mzap_open(os, obj, db);
+		if (zap == NULL) {
+			/*
+			 * mzap_open() didn't like what it saw on-disk.
+			 * Check for corruption!
+			 */
+			dmu_buf_rele(db, NULL);
+			return (SET_ERROR(EIO));
+		}
+	}
 
 	/*
 	 * We're checking zap_ismicro without the lock held, in order to
@@ -506,7 +530,7 @@ zap_lockdir(objset_t *os, uint64_t obj, dmu_tx_t *tx,
 			return (mzap_upgrade(zapp, tx, 0));
 		}
 		err = dmu_object_set_blocksize(os, obj, newsz, 0, tx);
-		ASSERT3U(err, ==, 0);
+		ASSERT0(err);
 		zap->zap_m.zap_num_chunks =
 		    db->db_size / MZAP_ENT_LEN - 1;
 	}
@@ -533,7 +557,7 @@ mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags)
 	ASSERT(RW_WRITE_HELD(&zap->zap_rwlock));
 
 	sz = zap->zap_dbuf->db_size;
-	mzp = kmem_alloc(sz, KM_SLEEP);
+	mzp = zio_buf_alloc(sz);
 	bcopy(zap->zap_dbuf->db_data, mzp, sz);
 	nchunks = zap->zap_m.zap_num_chunks;
 
@@ -541,7 +565,7 @@ mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags)
 		err = dmu_object_set_blocksize(zap->zap_objset, zap->zap_object,
 		    1ULL << fzap_default_block_shift, 0, tx);
 		if (err) {
-			kmem_free(mzp, sz);
+			zio_buf_free(mzp, sz);
 			return (err);
 		}
 	}
@@ -567,12 +591,12 @@ mzap_upgrade(zap_t **zapp, dmu_tx_t *tx, zap_flags_t flags)
 		if (err)
 			break;
 	}
-	kmem_free(mzp, sz);
+	zio_buf_free(mzp, sz);
 	*zapp = zap;
 	return (err);
 }
 
-static void
+void
 mzap_create_impl(objset_t *os, uint64_t obj, int normflags, zap_flags_t flags,
     dmu_tx_t *tx)
 {
@@ -653,9 +677,9 @@ zap_create_flags(objset_t *os, int normflags, zap_flags_t flags,
 	uint64_t obj = dmu_object_alloc(os, ot, 0, bonustype, bonuslen, tx);
 
 	ASSERT(leaf_blockshift >= SPA_MINBLOCKSHIFT &&
-	    leaf_blockshift <= SPA_MAXBLOCKSHIFT &&
+	    leaf_blockshift <= SPA_OLD_MAXBLOCKSHIFT &&
 	    indirect_blockshift >= SPA_MINBLOCKSHIFT &&
-	    indirect_blockshift <= SPA_MAXBLOCKSHIFT);
+	    indirect_blockshift <= SPA_OLD_MAXBLOCKSHIFT);
 
 	VERIFY(dmu_object_set_blocksize(os, obj,
 	    1ULL << leaf_blockshift, indirect_blockshift, tx) == 0);
@@ -676,11 +700,10 @@ zap_destroy(objset_t *os, uint64_t zapobj, dmu_tx_t *tx)
 	return (dmu_object_free(os, zapobj, tx));
 }
 
-_NOTE(ARGSUSED(0))
 void
-zap_evict(dmu_buf_t *db, void *vzap)
+zap_evict(void *dbu)
 {
-	zap_t *zap = vzap;
+	zap_t *zap = dbu;
 
 	rw_destroy(&zap->zap_rwlock);
 
@@ -780,7 +803,7 @@ zap_lookup_norm(objset_t *os, uint64_t zapobj, const char *name,
 	zn = zap_name_alloc(zap, name, mt);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 
 	if (!zap->zap_ismicro) {
@@ -789,12 +812,12 @@ zap_lookup_norm(objset_t *os, uint64_t zapobj, const char *name,
 	} else {
 		mze = mze_find(zn);
 		if (mze == NULL) {
-			err = ENOENT;
+			err = SET_ERROR(ENOENT);
 		} else {
 			if (num_integers < 1) {
-				err = EOVERFLOW;
+				err = SET_ERROR(EOVERFLOW);
 			} else if (integer_size != 8) {
-				err = EINVAL;
+				err = SET_ERROR(EINVAL);
 			} else {
 				*(uint64_t *)buf =
 				    MZE_PHYS(zap, mze)->mze_value;
@@ -826,7 +849,7 @@ zap_prefetch_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 	zn = zap_name_alloc_uint64(zap, key, key_numints);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 
 	fzap_prefetch(zn);
@@ -849,7 +872,7 @@ zap_lookup_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 	zn = zap_name_alloc_uint64(zap, key, key_numints);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 
 	err = fzap_lookup(zn, integer_size, num_integers, buf,
@@ -862,8 +885,8 @@ zap_lookup_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 int
 zap_contains(objset_t *os, uint64_t zapobj, const char *name)
 {
-	int err = (zap_lookup_norm(os, zapobj, name, 0,
-	    0, NULL, MT_EXACT, NULL, 0, NULL));
+	int err = zap_lookup_norm(os, zapobj, name, 0,
+	    0, NULL, MT_EXACT, NULL, 0, NULL);
 	if (err == EOVERFLOW || err == EINVAL)
 		err = 0; /* found, but skipped reading the value */
 	return (err);
@@ -884,14 +907,14 @@ zap_length(objset_t *os, uint64_t zapobj, const char *name,
 	zn = zap_name_alloc(zap, name, MT_EXACT);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	if (!zap->zap_ismicro) {
 		err = fzap_length(zn, integer_size, num_integers);
 	} else {
 		mze = mze_find(zn);
 		if (mze == NULL) {
-			err = ENOENT;
+			err = SET_ERROR(ENOENT);
 		} else {
 			if (integer_size)
 				*integer_size = 8;
@@ -918,7 +941,7 @@ zap_length_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 	zn = zap_name_alloc_uint64(zap, key, key_numints);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	err = fzap_length(zn, integer_size, num_integers);
 	zap_name_free(zn);
@@ -938,7 +961,7 @@ mzap_addent(zap_name_t *zn, uint64_t value)
 
 #ifdef ZFS_DEBUG
 	for (i = 0; i < zap->zap_m.zap_num_chunks; i++) {
-		mzap_ent_phys_t *mze = &zap->zap_m.zap_phys->mz_chunk[i];
+		mzap_ent_phys_t *mze = &zap_m_phys(zap)->mz_chunk[i];
 		ASSERT(strcmp(zn->zn_key_orig, mze->mze_name) != 0);
 	}
 #endif
@@ -949,7 +972,7 @@ mzap_addent(zap_name_t *zn, uint64_t value)
 
 again:
 	for (i = start; i < zap->zap_m.zap_num_chunks; i++) {
-		mzap_ent_phys_t *mze = &zap->zap_m.zap_phys->mz_chunk[i];
+		mzap_ent_phys_t *mze = &zap_m_phys(zap)->mz_chunk[i];
 		if (mze->mze_name[0] == 0) {
 			mze->mze_value = value;
 			mze->mze_cd = cd;
@@ -987,7 +1010,7 @@ zap_add(objset_t *os, uint64_t zapobj, const char *key,
 	zn = zap_name_alloc(zap, key, MT_EXACT);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	if (!zap->zap_ismicro) {
 		err = fzap_add(zn, integer_size, num_integers, val, tx);
@@ -1001,7 +1024,7 @@ zap_add(objset_t *os, uint64_t zapobj, const char *key,
 	} else {
 		mze = mze_find(zn);
 		if (mze != NULL) {
-			err = EEXIST;
+			err = SET_ERROR(EEXIST);
 		} else {
 			mzap_addent(zn, *intval);
 		}
@@ -1028,7 +1051,7 @@ zap_add_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 	zn = zap_name_alloc_uint64(zap, key, key_numints);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	err = fzap_add(zn, integer_size, num_integers, val, tx);
 	zap = zn->zn_zap;	/* fzap_add() may change zap */
@@ -1064,7 +1087,7 @@ zap_update(objset_t *os, uint64_t zapobj, const char *name,
 	zn = zap_name_alloc(zap, name, MT_EXACT);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	if (!zap->zap_ismicro) {
 		err = fzap_update(zn, integer_size, num_integers, val, tx);
@@ -1109,7 +1132,7 @@ zap_update_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 	zn = zap_name_alloc_uint64(zap, key, key_numints);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	err = fzap_update(zn, integer_size, num_integers, val, tx);
 	zap = zn->zn_zap;	/* fzap_update() may change zap */
@@ -1140,17 +1163,17 @@ zap_remove_norm(objset_t *os, uint64_t zapobj, const char *name,
 	zn = zap_name_alloc(zap, name, mt);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	if (!zap->zap_ismicro) {
 		err = fzap_remove(zn, tx);
 	} else {
 		mze = mze_find(zn);
 		if (mze == NULL) {
-			err = ENOENT;
+			err = SET_ERROR(ENOENT);
 		} else {
 			zap->zap_m.zap_num_entries--;
-			bzero(&zap->zap_m.zap_phys->mz_chunk[mze->mze_chunkid],
+			bzero(&zap_m_phys(zap)->mz_chunk[mze->mze_chunkid],
 			    sizeof (mzap_ent_phys_t));
 			mze_remove(zap, mze);
 		}
@@ -1174,7 +1197,7 @@ zap_remove_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
 	zn = zap_name_alloc_uint64(zap, key, key_numints);
 	if (zn == NULL) {
 		zap_unlockdir(zap);
-		return (ENOTSUP);
+		return (SET_ERROR(ENOTSUP));
 	}
 	err = fzap_remove(zn, tx);
 	zap_name_free(zn);
@@ -1252,7 +1275,7 @@ zap_cursor_retrieve(zap_cursor_t *zc, zap_attribute_t *za)
 	mzap_ent_t *mze;
 
 	if (zc->zc_hash == -1ULL)
-		return (ENOENT);
+		return (SET_ERROR(ENOENT));
 
 	if (zc->zc_zap == NULL) {
 		int hb;
@@ -1278,8 +1301,6 @@ zap_cursor_retrieve(zap_cursor_t *zc, zap_attribute_t *za)
 	if (!zc->zc_zap->zap_ismicro) {
 		err = fzap_cursor_retrieve(zc->zc_zap, zc, za);
 	} else {
-		err = ENOENT;
-
 		mze_tofind.mze_hash = zc->zc_hash;
 		mze_tofind.mze_cd = zc->zc_cd;
 
@@ -1302,6 +1323,7 @@ zap_cursor_retrieve(zap_cursor_t *zc, zap_attribute_t *za)
 			err = 0;
 		} else {
 			zc->zc_hash = -1ULL;
+			err = SET_ERROR(ENOENT);
 		}
 	}
 	rw_exit(&zc->zc_zap->zap_rwlock);
@@ -1314,46 +1336,6 @@ zap_cursor_advance(zap_cursor_t *zc)
 	if (zc->zc_hash == -1ULL)
 		return;
 	zc->zc_cd++;
-}
-
-int
-zap_cursor_move_to_key(zap_cursor_t *zc, const char *name, matchtype_t mt)
-{
-	int err = 0;
-	mzap_ent_t *mze;
-	zap_name_t *zn;
-
-	if (zc->zc_zap == NULL) {
-		err = zap_lockdir(zc->zc_objset, zc->zc_zapobj, NULL,
-		    RW_READER, TRUE, FALSE, &zc->zc_zap);
-		if (err)
-			return (err);
-	} else {
-		rw_enter(&zc->zc_zap->zap_rwlock, RW_READER);
-	}
-
-	zn = zap_name_alloc(zc->zc_zap, name, mt);
-	if (zn == NULL) {
-		rw_exit(&zc->zc_zap->zap_rwlock);
-		return (ENOTSUP);
-	}
-
-	if (!zc->zc_zap->zap_ismicro) {
-		err = fzap_cursor_move_to_key(zc, zn);
-	} else {
-		mze = mze_find(zn);
-		if (mze == NULL) {
-			err = ENOENT;
-			goto out;
-		}
-		zc->zc_hash = mze->mze_hash;
-		zc->zc_cd = mze->mze_cd;
-	}
-
-out:
-	zap_name_free(zn);
-	rw_exit(&zc->zc_zap->zap_rwlock);
-	return (err);
 }
 
 int
@@ -1381,25 +1363,25 @@ zap_get_stats(objset_t *os, uint64_t zapobj, zap_stats_t *zs)
 
 int
 zap_count_write(objset_t *os, uint64_t zapobj, const char *name, int add,
-    uint64_t *towrite, uint64_t *tooverwrite)
+    refcount_t *towrite, refcount_t *tooverwrite)
 {
 	zap_t *zap;
 	int err = 0;
-
 
 	/*
 	 * Since, we don't have a name, we cannot figure out which blocks will
 	 * be affected in this operation. So, account for the worst case :
 	 * - 3 blocks overwritten: target leaf, ptrtbl block, header block
 	 * - 4 new blocks written if adding:
-	 * 	- 2 blocks for possibly split leaves,
-	 * 	- 2 grown ptrtbl blocks
+	 *    - 2 blocks for possibly split leaves,
+	 *    - 2 grown ptrtbl blocks
 	 *
 	 * This also accomodates the case where an add operation to a fairly
 	 * large microzap results in a promotion to fatzap.
 	 */
 	if (name == NULL) {
-		*towrite += (3 + (add ? 4 : 0)) * SPA_MAXBLOCKSIZE;
+		(void) refcount_add_many(towrite,
+		    (3 + (add ? 4 : 0)) * SPA_OLD_MAXBLOCKSIZE, FTAG);
 		return (err);
 	}
 
@@ -1423,7 +1405,8 @@ zap_count_write(objset_t *os, uint64_t zapobj, const char *name, int add,
 			/*
 			 * We treat this case as similar to (name == NULL)
 			 */
-			*towrite += (3 + (add ? 4 : 0)) * SPA_MAXBLOCKSIZE;
+			(void) refcount_add_many(towrite,
+			    (3 + (add ? 4 : 0)) * SPA_OLD_MAXBLOCKSIZE, FTAG);
 		}
 	} else {
 		/*
@@ -1441,13 +1424,17 @@ zap_count_write(objset_t *os, uint64_t zapobj, const char *name, int add,
 		 * 4 new blocks written : 2 new split leaf, 2 grown
 		 *			ptrtbl blocks
 		 */
-		if (dmu_buf_freeable(zap->zap_dbuf))
-			*tooverwrite += SPA_MAXBLOCKSIZE;
-		else
-			*towrite += SPA_MAXBLOCKSIZE;
+		if (dmu_buf_freeable(zap->zap_dbuf)) {
+			(void) refcount_add_many(tooverwrite,
+			    MZAP_MAX_BLKSZ, FTAG);
+		} else {
+			(void) refcount_add_many(towrite,
+			    MZAP_MAX_BLKSZ, FTAG);
+		}
 
 		if (add) {
-			*towrite += 4 * SPA_MAXBLOCKSIZE;
+			(void) refcount_add_many(towrite,
+			    4 * MZAP_MAX_BLKSZ, FTAG);
 		}
 	}
 

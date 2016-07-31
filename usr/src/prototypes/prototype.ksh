@@ -12,6 +12,6 @@
 #
 
 #
-# Copyright 2011 <contributor>.  All rights reserved.
+# Copyright 2016 <contributor>
 #
 

@@ -21,8 +21,9 @@
 
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2010 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2012 Pawel Jakub Dawidek. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
  */
 
 #include <stdio.h>
@@ -137,24 +138,30 @@ zfs_iter_filesystems(zfs_handle_t *zhp, zfs_iter_f func, void *data)
  * Iterate over all snapshots
  */
 int
-zfs_iter_snapshots(zfs_handle_t *zhp, zfs_iter_f func, void *data)
+zfs_iter_snapshots(zfs_handle_t *zhp, boolean_t simple, zfs_iter_f func,
+    void *data)
 {
 	zfs_cmd_t zc = { 0 };
 	zfs_handle_t *nzhp;
 	int ret;
 
-	if (zhp->zfs_type == ZFS_TYPE_SNAPSHOT)
+	if (zhp->zfs_type == ZFS_TYPE_SNAPSHOT ||
+	    zhp->zfs_type == ZFS_TYPE_BOOKMARK)
 		return (0);
+
+	zc.zc_simple = simple;
 
 	if (zcmd_alloc_dst_nvlist(zhp->zfs_hdl, &zc, 0) != 0)
 		return (-1);
 	while ((ret = zfs_do_list_ioctl(zhp, ZFS_IOC_SNAPSHOT_LIST_NEXT,
 	    &zc)) == 0) {
 
-		if ((nzhp = make_dataset_handle_zc(zhp->zfs_hdl,
-		    &zc)) == NULL) {
+		if (simple)
+			nzhp = make_dataset_simple_handle_zc(zhp, &zc);
+		else
+			nzhp = make_dataset_handle_zc(zhp->zfs_hdl, &zc);
+		if (nzhp == NULL)
 			continue;
-		}
 
 		if ((ret = func(nzhp, data)) != 0) {
 			zcmd_free_nvlists(&zc);
@@ -163,6 +170,56 @@ zfs_iter_snapshots(zfs_handle_t *zhp, zfs_iter_f func, void *data)
 	}
 	zcmd_free_nvlists(&zc);
 	return ((ret < 0) ? ret : 0);
+}
+
+/*
+ * Iterate over all bookmarks
+ */
+int
+zfs_iter_bookmarks(zfs_handle_t *zhp, zfs_iter_f func, void *data)
+{
+	zfs_handle_t *nzhp;
+	nvlist_t *props = NULL;
+	nvlist_t *bmarks = NULL;
+	int err;
+
+	if ((zfs_get_type(zhp) & (ZFS_TYPE_SNAPSHOT | ZFS_TYPE_BOOKMARK)) != 0)
+		return (0);
+
+	/* Setup the requested properties nvlist. */
+	props = fnvlist_alloc();
+	fnvlist_add_boolean(props, zfs_prop_to_name(ZFS_PROP_GUID));
+	fnvlist_add_boolean(props, zfs_prop_to_name(ZFS_PROP_CREATETXG));
+	fnvlist_add_boolean(props, zfs_prop_to_name(ZFS_PROP_CREATION));
+
+	if ((err = lzc_get_bookmarks(zhp->zfs_name, props, &bmarks)) != 0)
+		goto out;
+
+	for (nvpair_t *pair = nvlist_next_nvpair(bmarks, NULL);
+	    pair != NULL; pair = nvlist_next_nvpair(bmarks, pair)) {
+		char name[ZFS_MAX_DATASET_NAME_LEN];
+		char *bmark_name;
+		nvlist_t *bmark_props;
+
+		bmark_name = nvpair_name(pair);
+		bmark_props = fnvpair_value_nvlist(pair);
+
+		(void) snprintf(name, sizeof (name), "%s#%s", zhp->zfs_name,
+		    bmark_name);
+
+		nzhp = make_bookmark_handle(zhp, name, bmark_props);
+		if (nzhp == NULL)
+			continue;
+
+		if ((err = func(nzhp, data)) != 0)
+			goto out;
+	}
+
+out:
+	fnvlist_free(props);
+	fnvlist_free(bmarks);
+
+	return (err);
 }
 
 /*
@@ -234,7 +291,7 @@ zfs_iter_snapshots_sorted(zfs_handle_t *zhp, zfs_iter_f callback, void *data)
 	avl_create(&avl, zfs_snapshot_compare,
 	    sizeof (zfs_node_t), offsetof(zfs_node_t, zn_avlnode));
 
-	ret = zfs_iter_snapshots(zhp, zfs_sort_snaps, &avl);
+	ret = zfs_iter_snapshots(zhp, B_FALSE, zfs_sort_snaps, &avl);
 
 	for (node = avl_first(&avl); node != NULL; node = AVL_NEXT(&avl, node))
 		ret |= callback(node->zn_handle, data);
@@ -257,7 +314,8 @@ typedef struct {
 } snapspec_arg_t;
 
 static int
-snapspec_cb(zfs_handle_t *zhp, void *arg) {
+snapspec_cb(zfs_handle_t *zhp, void *arg)
+{
 	snapspec_arg_t *ssa = arg;
 	char *shortsnapname;
 	int err = 0;
@@ -301,12 +359,11 @@ int
 zfs_iter_snapspec(zfs_handle_t *fs_zhp, const char *spec_orig,
     zfs_iter_f func, void *arg)
 {
-	char buf[ZFS_MAXNAMELEN];
-	char *comma_separated, *cp;
+	char *buf, *comma_separated, *cp;
 	int err = 0;
 	int ret = 0;
 
-	(void) strlcpy(buf, spec_orig, sizeof (buf));
+	buf = zfs_strdup(fs_zhp->zfs_hdl, spec_orig);
 	cp = buf;
 
 	while ((comma_separated = strsep(&cp, ",")) != NULL) {
@@ -328,7 +385,7 @@ zfs_iter_snapspec(zfs_handle_t *fs_zhp, const char *spec_orig,
 			 * exists.
 			 */
 			if (ssa.ssa_last[0] != '\0') {
-				char snapname[ZFS_MAXNAMELEN];
+				char snapname[ZFS_MAX_DATASET_NAME_LEN];
 				(void) snprintf(snapname, sizeof (snapname),
 				    "%s@%s", zfs_get_name(fs_zhp),
 				    ssa.ssa_last);
@@ -348,7 +405,7 @@ zfs_iter_snapspec(zfs_handle_t *fs_zhp, const char *spec_orig,
 				ret = ENOENT;
 			}
 		} else {
-			char snapname[ZFS_MAXNAMELEN];
+			char snapname[ZFS_MAX_DATASET_NAME_LEN];
 			zfs_handle_t *snap_zhp;
 			(void) snprintf(snapname, sizeof (snapname), "%s@%s",
 			    zfs_get_name(fs_zhp), comma_separated);
@@ -364,6 +421,7 @@ zfs_iter_snapspec(zfs_handle_t *fs_zhp, const char *spec_orig,
 		}
 	}
 
+	free(buf);
 	return (ret);
 }
 
@@ -378,7 +436,7 @@ zfs_iter_children(zfs_handle_t *zhp, zfs_iter_f func, void *data)
 	if ((ret = zfs_iter_filesystems(zhp, func, data)) != 0)
 		return (ret);
 
-	return (zfs_iter_snapshots(zhp, func, data));
+	return (zfs_iter_snapshots(zhp, B_FALSE, func, data));
 }
 
 
@@ -399,13 +457,13 @@ static int
 iter_dependents_cb(zfs_handle_t *zhp, void *arg)
 {
 	iter_dependents_arg_t *ida = arg;
-	int err;
+	int err = 0;
 	boolean_t first = ida->first;
 	ida->first = B_FALSE;
 
 	if (zhp->zfs_type == ZFS_TYPE_SNAPSHOT) {
 		err = zfs_iter_clones(zhp, iter_dependents_cb, ida);
-	} else {
+	} else if (zhp->zfs_type != ZFS_TYPE_BOOKMARK) {
 		iter_stack_frame_t isf;
 		iter_stack_frame_t *f;
 
@@ -439,12 +497,18 @@ iter_dependents_cb(zfs_handle_t *zhp, void *arg)
 		isf.next = ida->stack;
 		ida->stack = &isf;
 		err = zfs_iter_filesystems(zhp, iter_dependents_cb, ida);
-		if (err == 0)
-			err = zfs_iter_snapshots(zhp, iter_dependents_cb, ida);
+		if (err == 0) {
+			err = zfs_iter_snapshots(zhp, B_FALSE,
+			    iter_dependents_cb, ida);
+		}
 		ida->stack = isf.next;
 	}
+
 	if (!first && err == 0)
 		err = ida->func(zhp, ida->data);
+	else
+		zfs_close(zhp);
+
 	return (err);
 }
 

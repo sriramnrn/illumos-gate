@@ -22,6 +22,8 @@
 /*
  * Copyright 2012 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -1871,6 +1873,11 @@ show_fcntl(private_t *pri)
 	case F_FREESP:
 	case F_ALLOCSP:
 	case F_SETLK_NBMAND:
+	case F_OFD_GETLK:
+	case F_OFD_SETLK:
+	case F_OFD_SETLKW:
+	case F_FLOCK:
+	case F_FLOCKW:
 		if (data_model == PR_MODEL_LP64)
 			show_flock64(pri, offset);
 		else
@@ -1882,6 +1889,11 @@ show_fcntl(private_t *pri)
 	case 27:	/* F_FREESP64 */
 	case 28:	/* F_ALLOCSP64 */
 	case 44:	/* F_SETLK64_NBMAND */
+	case 50:	/* F_OFD_GETLK64 */
+	case 51:	/* F_OFD_SETLK64 */
+	case 52:	/* F_OFD_SETLKW64 */
+	case 55:	/* F_FLOCK64 */
+	case 56:	/* F_FLOCKW64 */
 		show_flock64(pri, offset);
 		break;
 #else	/* _LP64 */
@@ -1899,6 +1911,11 @@ show_fcntl(private_t *pri)
 	case F_FREESP64:
 	case F_ALLOCSP64:
 	case F_SETLK64_NBMAND:
+	case F_OFD_GETLK64:
+	case F_OFD_SETLK64:
+	case F_OFD_SETLKW64:
+	case F_FLOCK64:
+	case F_FLOCKW64:
 		show_flock64(pri, offset);
 		break;
 #endif	/* _LP64 */
@@ -4876,9 +4893,7 @@ show_zfs_ioc(private_t *pri, long addr)
 	if (zc.zc_value[0])
 		(void) printf("    zc_value=%s\n", zc.zc_value);
 	if (zc.zc_string[0])
-		(void) printf("    zc_strign=%s\n", zc.zc_string);
-	if (zc.zc_top_ds[0])
-		(void) printf("    zc_top_ds=%s\n", zc.zc_top_ds);
+		(void) printf("    zc_string=%s\n", zc.zc_string);
 	if (zc.zc_guid != 0) {
 		(void) printf("    zc_guid=%llu\n",
 		    (u_longlong_t)zc.zc_guid);
@@ -4977,7 +4992,7 @@ show_zfs_ioc(private_t *pri, long addr)
 
 	if (memcmp(&zc.zc_begin_record, &zero_drrbegin,
 	    sizeof (zc.zc_begin_record))) {
-		struct drr_begin *drr = &zc.zc_begin_record;
+		struct drr_begin *drr = &zc.zc_begin_record.drr_u.drr_begin;
 		(void) printf("    zc_begin_record:\n");
 		if (drr->drr_magic) {
 			(void) printf("\tdrr_magic=%llu\n",
@@ -5072,9 +5087,9 @@ show_zfs_ioc(private_t *pri, long addr)
 		(void) printf("    zc_defer_destroy=%d\n",
 		    (int)zc.zc_defer_destroy);
 	}
-	if (zc.zc_temphold) {
-		(void) printf("    zc_temphold=%d\n",
-		    (int)zc.zc_temphold);
+	if (zc.zc_flags) {
+		(void) printf("    zc_flags=0x%x\n",
+		    zc.zc_flags);
 	}
 	if (zc.zc_action_handle) {
 		(void) printf("    zc_action_handle=%llu\n",

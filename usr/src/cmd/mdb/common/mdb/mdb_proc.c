@@ -23,6 +23,10 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2015 Joyent, Inc.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
+ */
 
 /*
  * User Process Target
@@ -101,6 +105,7 @@
 #include <string.h>
 
 #define	PC_FAKE		-1UL			/* illegal pc value unequal 0 */
+#define	PANIC_BUFSIZE	1024
 
 static const char PT_EXEC_PATH[] = "a.out";	/* Default executable */
 static const char PT_CORE_PATH[] = "core";	/* Default core file */
@@ -120,6 +125,13 @@ static int pt_lookup_by_name_thr(mdb_tgt_t *, const char *,
     const char *, GElf_Sym *, mdb_syminfo_t *, mdb_tgt_tid_t);
 static int tlsbase(mdb_tgt_t *, mdb_tgt_tid_t, Lmid_t, const char *,
     psaddr_t *);
+
+/*
+ * When debugging postmortem, we don't resolve names as we may very well not
+ * be on a system on which those names resolve.
+ */
+#define	PT_LIBPROC_RESOLVE(P) \
+	(!(mdb.m_flags & MDB_FL_LMRAW) && Pstate(P) != PS_DEAD)
 
 /*
  * The Perror_printf() function interposes on the default, empty libproc
@@ -1378,6 +1390,13 @@ pt_gcore(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	(void) mdb_snprintf(fname, size, "%s.%d", prefix, (int)pid);
 
 	if (Pgcore(t->t_pshandle, fname, content) != 0) {
+		/*
+		 * Short writes during dumping are specifically described by
+		 * EBADE, just as ZFS uses this otherwise-unused code for
+		 * checksum errors.  Translate to and mdb errno.
+		 */
+		if (errno == EBADE)
+			(void) set_errno(EMDB_SHORTWRITE);
 		mdb_warn("couldn't dump core");
 		return (DCMD_ERR);
 	}
@@ -1549,7 +1568,7 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		int state;
 		GElf_Sym sym;
 		uintptr_t panicstr;
-		char panicbuf[128];
+		char *panicbuf = mdb_alloc(PANIC_BUFSIZE, UM_SLEEP);
 		const siginfo_t *sip = &(psp->pr_lwp.pr_info);
 
 		char execname[MAXPATHLEN], buf[BUFSIZ];
@@ -1706,7 +1725,7 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 			    Pread(t->t_pshandle, &panicstr, sizeof (panicstr),
 			    sym.st_value) == sizeof (panicstr) &&
 			    Pread_string(t->t_pshandle, panicbuf,
-			    sizeof (panicbuf), panicstr) > 0) {
+			    PANIC_BUFSIZE, panicstr) > 0) {
 				mdb_printf("panic message: %s",
 				    panicbuf);
 			}
@@ -1721,6 +1740,7 @@ pt_status_dcmd(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		default:
 			mdb_printf("unknown libproc Pstate: %d\n", Pstate(P));
 		}
+		mdb_free(panicbuf, PANIC_BUFSIZE);
 
 	} else if (pt->p_file != NULL) {
 		const GElf_Ehdr *ehp = &pt->p_file->gf_ehdr;
@@ -2092,7 +2112,7 @@ static const mdb_dcmd_t pt_dcmds[] = {
 	{ "$i", NULL, "print signals that are ignored", pt_ignored },
 	{ "$l", NULL, "print the representative thread's lwp id", pt_lwpid },
 	{ "$L", NULL, "print list of the active lwp ids", pt_lwpids },
-	{ "$r", "?", "print general-purpose registers", pt_regs },
+	{ "$r", "?[-u]", "print general-purpose registers", pt_regs },
 	{ "$x", "?", "print floating point registers", pt_fpregs },
 	{ "$X", "?", "print floating point registers", pt_fpregs },
 	{ "$y", "?", "print floating point registers", pt_fpregs },
@@ -2112,7 +2132,7 @@ static const mdb_dcmd_t pt_dcmds[] = {
 	{ "kill", NULL, "forcibly kill and release target", pt_kill },
 	{ "release", "[-a]",
 	    "release the previously attached process", pt_detach },
-	{ "regs", "?", "print general-purpose registers", pt_regs },
+	{ "regs", "?[-u]", "print general-purpose registers", pt_regs },
 	{ "fpregs", "?[-dqs]", "print floating point registers", pt_fpregs },
 	{ "setenv", "name=value", "set an environment variable", pt_setenv },
 	{ "stack", "?[cnt]", "print stack backtrace", pt_stack },
@@ -2163,11 +2183,20 @@ static const mdb_walker_t pt_walkers[] = {
 	{ NULL }
 };
 
+static int
+pt_agent_check(boolean_t *agent, const lwpstatus_t *psp)
+{
+	if (psp->pr_flags & PR_AGENT)
+		*agent = B_TRUE;
+
+	return (0);
+}
 
 static void
 pt_activate_common(mdb_tgt_t *t)
 {
 	pt_data_t *pt = t->t_data;
+	boolean_t hasagent = B_FALSE;
 	GElf_Sym sym;
 
 	/*
@@ -2181,13 +2210,23 @@ pt_activate_common(mdb_tgt_t *t)
 		    "library information will not be available\n");
 	}
 
-	/*
-	 * If we have a libproc handle and libthread is loaded, attempt to load
-	 * and initialize the corresponding libthread_db.  If this fails, fall
-	 * back to our native LWP implementation and issue a warning.
-	 */
-	if (t->t_pshandle != NULL && Pstate(t->t_pshandle) != PS_IDLE)
+	if (t->t_pshandle != NULL) {
+		(void) Plwp_iter(t->t_pshandle,
+		    (proc_lwp_f *)pt_agent_check, &hasagent);
+	}
+
+	if (hasagent) {
+		mdb_warn("agent lwp detected; forcing "
+		    "lwp thread model (use ::tmodel to change)\n");
+	} else if (t->t_pshandle != NULL && Pstate(t->t_pshandle) != PS_IDLE) {
+		/*
+		 * If we have a libproc handle and we do not have an agent LWP,
+		 * look for the correct thread debugging library.  (If we have
+		 * an agent LWP, we leave the model as the raw LWP model to
+		 * allow the agent LWP to be visible to the debugger.)
+		 */
 		(void) Pobject_iter(t->t_pshandle, (proc_map_f *)thr_check, t);
+	}
 
 	/*
 	 * If there's a global object named '_mdb_abort_info', assuming we're
@@ -2805,7 +2844,7 @@ pt_lookup_by_addr(mdb_tgt_t *t, uintptr_t addr, uint_t flags,
 	 * Once we get the closest symbol, we perform the EXACT match or
 	 * smart-mode or absolute distance check ourself:
 	 */
-	if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+	if (PT_LIBPROC_RESOLVE(P)) {
 		rv = Pxlookup_by_addr_resolved(P, addr, buf, nbytes,
 		    symp, &si);
 	} else {
@@ -2850,7 +2889,7 @@ found:
 		const char *prefix = pmp->pr_mapname;
 		Lmid_t lmid;
 
-		if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+		if (PT_LIBPROC_RESOLVE(P)) {
 			if (Pobjname_resolved(P, addr, pt->p_objname,
 			    MDB_TGT_MAPSZ))
 				prefix = pt->p_objname;
@@ -2952,7 +2991,7 @@ pt_symbol_iter(mdb_tgt_t *t, const char *object, uint_t which,
 			    which, type, pt_symbol_iter_cb, &ps);
 			return (0);
 		} else if (Prd_agent(t->t_pshandle) != NULL) {
-			if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+			if (PT_LIBPROC_RESOLVE(t->t_pshandle)) {
 				(void) Pobject_iter_resolved(t->t_pshandle,
 				    pt_objsym_iter, &ps);
 			} else {
@@ -2991,7 +3030,7 @@ pt_prmap_to_mdbmap(mdb_tgt_t *t, const prmap_t *prp, mdb_map_t *mp)
 	char *rv, name[MAXPATHLEN];
 	Lmid_t lmid;
 
-	if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+	if (PT_LIBPROC_RESOLVE(P)) {
 		rv = Pobjname_resolved(P, prp->pr_vaddr, name, sizeof (name));
 	} else {
 		rv = Pobjname(P, prp->pr_vaddr, name, sizeof (name));
@@ -3057,7 +3096,7 @@ pt_mapping_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 		pm.pmap_func = func;
 		pm.pmap_private = private;
 
-		if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+		if (PT_LIBPROC_RESOLVE(t->t_pshandle)) {
 			(void) Pmapping_iter_resolved(t->t_pshandle,
 			    pt_map_apply, &pm);
 		} else {
@@ -3086,7 +3125,7 @@ pt_object_iter(mdb_tgt_t *t, mdb_tgt_map_f *func, void *private)
 		pm.pmap_func = func;
 		pm.pmap_private = private;
 
-		if ((mdb.m_flags & MDB_FL_LMRAW) == 0) {
+		if (PT_LIBPROC_RESOLVE(t->t_pshandle)) {
 			(void) Pobject_iter_resolved(t->t_pshandle,
 			    pt_map_apply, &pm);
 		} else {
@@ -4495,6 +4534,14 @@ pt_getareg(mdb_tgt_t *t, mdb_tgt_tid_t tid,
 			 */
 			if (PTL_GETREGS(t, tid, grs) == 0) {
 				*rp = r | (ulong_t)grs[rd_num];
+				if (rd_flags & MDB_TGT_R_32)
+					*rp &= 0xffffffffULL;
+				else if (rd_flags & MDB_TGT_R_16)
+					*rp &= 0xffffULL;
+				else if (rd_flags & MDB_TGT_R_8H)
+					*rp = (*rp & 0xff00ULL) >> 8;
+				else if (rd_flags & MDB_TGT_R_8L)
+					*rp &= 0xffULL;
 				return (0);
 			}
 			return (-1);
@@ -4521,6 +4568,16 @@ pt_putareg(mdb_tgt_t *t, mdb_tgt_tid_t tid, const char *rname, mdb_tgt_reg_t r)
 		ushort_t rd_flags = MDB_TGT_R_FLAGS(rd_nval);
 
 		if (!MDB_TGT_R_IS_FP(rd_flags)) {
+
+			if (rd_flags & MDB_TGT_R_32)
+				r &= 0xffffffffULL;
+			else if (rd_flags & MDB_TGT_R_16)
+				r &= 0xffffULL;
+			else if (rd_flags & MDB_TGT_R_8H)
+				r = (r & 0xffULL) << 8;
+			else if (rd_flags & MDB_TGT_R_8L)
+				r &= 0xffULL;
+
 #if defined(__sparc) && defined(_ILP32)
 			/*
 			 * If we are debugging on 32-bit SPARC, the globals and

@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2014 Joyent, Inc.
+#
 # cmd/mailx/Makefile
 
 PROG= mailx
@@ -62,9 +64,15 @@ $(ROOTMAILXRC) :=	FILEMODE =	0644
 $(ROOTUCBMAILRC) :=	FILEMODE =	0644
 
 CPPFLAGS=	-Ihdr -DUSG -DOPTIM $(CPPFLAGS.master)
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-clobbered
 LINTFLAGS= 	-hb
-LDLIBS +=	-lmail
+LDLIBS +=	-lmail -lcmdutils
 LDFLAGS +=	$(MAPFILE.NGB:%=-M%)
+
+CLOBBERFILES += $(MAILXHELP)
 
 # install rules
 $(ROOTMAILXD)/% : %

@@ -24,6 +24,10 @@
  */
 
 /*
+ * Copyright 2016 Joyent, Inc.
+ */
+
+/*
  * **********************************************************************
  *									*
  * Module Name:								*
@@ -610,6 +614,7 @@ e1000g_fill_tx_ring(e1000g_tx_ring_t *tx_ring, LIST_DESCRIBER *pending_list,
 	struct e1000_tx_desc *first_data_desc;
 	struct e1000_tx_desc *next_desc;
 	struct e1000_tx_desc *descriptor;
+	struct e1000_data_desc zeroed;
 	int desc_count;
 	boolean_t buff_overrun_flag;
 	int i;
@@ -624,6 +629,7 @@ e1000g_fill_tx_ring(e1000g_tx_ring_t *tx_ring, LIST_DESCRIBER *pending_list,
 	first_packet = NULL;
 	packet = NULL;
 	buff_overrun_flag = B_FALSE;
+	zeroed.upper.data = 0;
 
 	next_desc = tx_ring->tbd_next;
 
@@ -649,6 +655,32 @@ e1000g_fill_tx_ring(e1000g_tx_ring_t *tx_ring, LIST_DESCRIBER *pending_list,
 
 	first_data_desc = next_desc;
 
+	/*
+	 * According to the documentation, the packet options field (POPTS) is
+	 * "ignored except on the first data descriptor of a packet."  However,
+	 * there is a bug in QEMU (638955) whereby the POPTS field within a
+	 * given data descriptor is used to interpret that data descriptor --
+	 * regardless of whether or not the descriptor is the first in a packet
+	 * or not.  For a packet that spans multiple descriptors, the (virtual)
+	 * HW checksum (either TCP/UDP or IP or both) will therefore _not_ be
+	 * performed on descriptors after the first, resulting in incorrect
+	 * checksums and mysteriously dropped/retransmitted packets.  Other
+	 * drivers do not have this issue because they (harmlessly) set the
+	 * POPTS field on every data descriptor to be the intended options for
+	 * the entire packet.  To circumvent this QEMU bug, we engage in this
+	 * same behavior iff the subsystem vendor and device IDs indicate that
+	 * this is an emulated QEMU device (1af4,1100).
+	 */
+	if (hw->subsystem_vendor_id == 0x1af4 &&
+	    hw->subsystem_device_id == 0x1100 &&
+	    cur_context->cksum_flags) {
+		if (cur_context->cksum_flags & HCK_IPV4_HDRCKSUM)
+			zeroed.upper.fields.popts |= E1000_TXD_POPTS_IXSM;
+
+		if (cur_context->cksum_flags & HCK_PARTIALCKSUM)
+			zeroed.upper.fields.popts |= E1000_TXD_POPTS_TXSM;
+	}
+
 	packet = (p_tx_sw_packet_t)QUEUE_GET_HEAD(pending_list);
 	while (packet) {
 		ASSERT(packet->num_desc);
@@ -663,7 +695,7 @@ e1000g_fill_tx_ring(e1000g_tx_ring_t *tx_ring, LIST_DESCRIBER *pending_list,
 			    packet->desc[i].length;
 
 			/* Zero out status */
-			descriptor->upper.data = 0;
+			descriptor->upper.data = zeroed.upper.data;
 
 			descriptor->lower.data |=
 			    E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
@@ -708,7 +740,7 @@ e1000g_fill_tx_ring(e1000g_tx_ring_t *tx_ring, LIST_DESCRIBER *pending_list,
 				    E1000_TX_BUFFER_OEVRRUN_THRESHOLD;
 
 				/* Zero out status */
-				next_desc->upper.data = 0;
+				next_desc->upper.data = zeroed.upper.data;
 
 				next_desc->lower.data |=
 				    E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D;
@@ -771,7 +803,7 @@ e1000g_fill_tx_ring(e1000g_tx_ring_t *tx_ring, LIST_DESCRIBER *pending_list,
 		next_desc->lower.data = 4;
 
 		/* Zero out status */
-		next_desc->upper.data = 0;
+		next_desc->upper.data = zeroed.upper.data;
 		/* It must be part of a LSO packet */
 		next_desc->lower.data |=
 		    E1000_TXD_CMD_DEXT | E1000_TXD_DTYP_D |
@@ -1690,4 +1722,43 @@ e1000g_82547_tx_move_tail(e1000g_tx_ring_t *tx_ring)
 	}
 	tx_ring->timer_enable_82547 = B_TRUE;
 	e1000g_82547_tx_move_tail_work(tx_ring);
+}
+
+/*
+ * This is part of a workaround for the I219, see e1000g_flush_desc_rings() for
+ * more information.
+ *
+ * We need to clear any potential pending descriptors from the tx_ring.  As
+ * we're about to reset the device, we don't care about the data that we give it
+ * itself.
+ */
+void
+e1000g_flush_tx_ring(struct e1000g *Adapter)
+{
+	struct e1000_hw *hw = &Adapter->shared;
+	e1000g_tx_ring_t *tx_ring = &Adapter->tx_ring[0];
+	uint32_t tctl, txd_lower = E1000_TXD_CMD_IFCS;
+	uint16_t size = 512;
+	struct e1000_tx_desc *desc;
+
+	tctl = E1000_READ_REG(hw, E1000_TCTL);
+	E1000_WRITE_REG(hw, E1000_TCTL, tctl | E1000_TCTL_EN);
+
+	desc = tx_ring->tbd_next;
+	if (tx_ring->tbd_next == tx_ring->tbd_last)
+		tx_ring->tbd_next = tx_ring->tbd_first;
+	else
+		tx_ring->tbd_next++;
+
+	/* We just need to set any valid address, so we use the ring itself */
+	desc->buffer_addr = tx_ring->tbd_dma_addr;
+	desc->lower.data = LE_32(txd_lower | size);
+	desc->upper.data = 0;
+
+	(void) ddi_dma_sync(tx_ring->tbd_dma_handle,
+	    0, 0, DDI_DMA_SYNC_FORDEV);
+	E1000_WRITE_REG(hw, E1000_TDT(0),
+	    (uint32_t)(tx_ring->tbd_next - tx_ring->tbd_first));
+	(void) E1000_READ_REG(hw, E1000_STATUS);
+	usec_delay(250);
 }

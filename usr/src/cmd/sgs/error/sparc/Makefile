@@ -19,7 +19,7 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright (c) 2013 Gary Mills
 #
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
@@ -39,6 +39,8 @@ INCLIST=	-I../common
 DEFLIST=	-DELF
 CPPFLAGS=	$(INCLIST) $(DEFLIST) $(CPPFLAGS.master)
 CFLAGS +=	$(CCVERBOSE)
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-parentheses
 C99MODE=	$(C99_ENABLE)
 
 CLEANFILES +=	$(LINTOUT)
@@ -63,6 +65,6 @@ lint:		$(LINTOUT)
 
 $(LINTOUT):	$(SRCS)
 		perl ../../tools/lint_hdr.pl $(PROG)	> $(LINTOUT)
-		$(LINT.c) $(SRCS)			2>&1 | tee -a $(LINTOUT)
+		$(LINT.c) $(SRCS) $(LDLIBS)		2>&1 | tee -a $(LINTOUT)
 
 include		../../../Makefile.targ

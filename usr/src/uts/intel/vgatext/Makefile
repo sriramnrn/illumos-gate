@@ -22,8 +22,9 @@
 # uts/intel/vgatext/Makefile
 # Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
+# Copyright 2015 Igor Kozhukhov <ikozhukhov@gmail.com>
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+
 #
 #	This makefile drives the production of the VGA text driver
 #
@@ -66,6 +67,9 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 LINTTAGS	+= -erroff=E_STATIC_UNUSED
 
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-unused-variable
+
 #
 #	Default build targets.
 #
@@ -89,8 +93,9 @@ install:	$(INSTALL_DEPS)
 
 # Custom targets and rules
 
-$(OBJS_DIR)/$(VGATEXT_FONT).c:	$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf
-	awk -f $(VGATEXT_SRC)/bdf_to_c.awk	\
+$(OBJS_DIR)/$(VGATEXT_FONT).c:	$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf \
+	$(VGATEXT_SRC)/bdf_to_c.awk
+	$(AWK) -f $(VGATEXT_SRC)/bdf_to_c.awk	\
 		$(VGATEXT_SRC)/$(VGATEXT_FONT).bdf > $@
 
 $(OBJS_DIR)/$(VGATEXT_FONT).o:	$(OBJS_DIR)/$(VGATEXT_FONT).c

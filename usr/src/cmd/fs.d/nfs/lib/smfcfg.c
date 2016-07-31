@@ -18,9 +18,12 @@
  *
  * CDDL HEADER END
  */
+
 /*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2010, Oracle and/or its affiliates. All rights reserved.
  */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <syslog.h>
@@ -104,16 +107,15 @@ int
 fs_smf_set_prop(smf_fstype_t fstype, char *prop_name, char *valbuf,
     char *instance, scf_type_t sctype, char *fmri)
 {
-	fs_smfhandle_t *phandle;
+	fs_smfhandle_t *phandle = NULL;
 	scf_handle_t *handle;
 	scf_propertygroup_t *pg;
 	scf_property_t *prop;
-	scf_transaction_t *tran;
-	scf_transaction_entry_t *entry;
+	scf_transaction_t *tran = NULL;
+	scf_transaction_entry_t *entry = NULL;
 	scf_instance_t *inst;
 	scf_value_t *val;
 	int valint;
-	int index = 0;
 	int ret = 0;
 	char *p = NULL;
 	char *svcname, srv[MAXPATHLEN];
@@ -238,7 +240,7 @@ int
 fs_smf_get_prop(smf_fstype_t fstype, char *prop_name, char *cbuf,
     char *instance, scf_type_t sctype, char *fmri, int *bufsz)
 {
-	fs_smfhandle_t *phandle;
+	fs_smfhandle_t *phandle = NULL;
 	scf_handle_t *handle;
 	scf_propertygroup_t *pg;
 	scf_property_t *prop;
@@ -356,6 +358,27 @@ nfs_smf_get_prop(char *prop_name, char *propbuf, char *instance,
 {
 	return (fs_smf_get_prop(NFS_SMF, prop_name, propbuf,
 	    instance, sctype, svc_name, bufsz));
+}
+
+/* Get an integer (base 10) property */
+int
+nfs_smf_get_iprop(char *prop_name, int *rvp, char *instance,
+    scf_type_t sctype, char *svc_name)
+{
+	char propbuf[32];
+	int bufsz, rc, val;
+
+	bufsz = sizeof (propbuf);
+	rc = fs_smf_get_prop(NFS_SMF, prop_name, propbuf,
+	    instance, sctype, svc_name, &bufsz);
+	if (rc != SA_OK)
+		return (rc);
+	errno = 0;
+	val = strtol(propbuf, NULL, 10);
+	if (errno != 0)
+		return (SA_BAD_VALUE);
+	*rvp = val;
+	return (SA_OK);
 }
 
 int

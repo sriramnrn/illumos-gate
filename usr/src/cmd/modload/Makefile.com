@@ -59,6 +59,8 @@ CLOBBERFILES = $(PROG)
 LINT_PROG= $(PROG:%=lint_%.c)
 LINTFLAGS += -erroff=E_NAME_DEF_NOT_USED2
 
+CERRWARN += -_gcc=-Wno-parentheses
+
 # install specifics
 
 $(ROOTDRVPROG) := FILEMODE = 0555
@@ -103,7 +105,7 @@ modinfo:	modinfo.o $(MODCOMMONOBJ)
 	$(POST_PROCESS)
 
 clean:
-	$(RM) $(OBJECTS) core
+	$(RM) $(OBJECTS)
 
 lint_%.c:
 	$(LINT.c) $(@:lint_%.c=../%.c) $(COMMONSRC) $(LDLIBS)

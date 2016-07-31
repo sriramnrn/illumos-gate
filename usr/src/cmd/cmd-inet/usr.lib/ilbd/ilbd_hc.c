@@ -285,6 +285,7 @@ ilbd_create_hc(const ilb_hc_info_t *hc_info, int ev_port,
 		    ILB_STATUS_OK) {
 			ilbd_audit_hc_event(NULL, hc_info, ILBD_CREATE_HC,
 			    ret, ucredp);
+			list_destroy(&hc->ihc_rules);
 			free(hc);
 			return (ret);
 		}
@@ -345,6 +346,7 @@ ilbd_destroy_hc(const char *hc_name, const struct passwd *ps,
 	}
 
 	list_remove(&ilbd_hc_list, hc);
+	list_destroy(&hc->ihc_rules);
 	free(hc);
 	ilbd_audit_hc_event(hc_name, NULL, ILBD_DESTROY_HC, ret, ucredp);
 	return (ret);
@@ -845,6 +847,7 @@ ilbd_hc_associate_rule(const ilbd_rule_t *rule, int ev_port)
 		    ev_port)) != ILB_STATUS_OK) {
 			/* Remove all previously added servers */
 			ilbd_hc_srv_rem_all(hc_rule);
+			list_destroy(&hc_rule->hcr_servers);
 			free(hc_rule);
 			return (ret);
 		}
@@ -881,6 +884,8 @@ ilbd_hc_dissociate_rule(const ilbd_rule_t *rule)
 	ilbd_hc_srv_rem_all(hc_rule);
 	list_remove(&hc->ihc_rules, hc_rule);
 	hc->ihc_rule_cnt--;
+	list_destroy(&hc_rule->hcr_servers);
+	free(hc_rule);
 	return (ILB_STATUS_OK);
 }
 
@@ -1259,7 +1264,9 @@ static boolean_t
 ilbd_run_probe(ilbd_hc_srv_t *srv)
 {
 	posix_spawn_file_actions_t	fd_actions;
+	boolean_t			init_fd_actions = B_FALSE;
 	posix_spawnattr_t		attr;
+	boolean_t			init_attr = B_FALSE;
 	sigset_t			child_sigset;
 	int				fds[2];
 	int				fdflags;
@@ -1294,10 +1301,12 @@ ilbd_run_probe(ilbd_hc_srv_t *srv)
 		logdebug("ilbd_run_probe: posix_spawn_file_actions_init");
 		goto cleanup;
 	}
+	init_fd_actions = B_TRUE;
 	if (posix_spawnattr_init(&attr) != 0) {
 		logdebug("ilbd_run_probe: posix_spawnattr_init");
 		goto cleanup;
 	}
+	init_attr = B_TRUE;
 	if (posix_spawn_file_actions_addclose(&fd_actions, fds[0]) != 0) {
 		logdebug("ilbd_run_probe: posix_spawn_file_actions_addclose");
 		goto cleanup;
@@ -1351,7 +1360,6 @@ ilbd_run_probe(ilbd_hc_srv_t *srv)
 	}
 
 	(void) close(fds[1]);
-	destroy_argv(child_argv);
 	srv->shc_child_pid = pid;
 	srv->shc_child_fd = fds[0];
 	srv->shc_ev = probe_ev;
@@ -1370,12 +1378,19 @@ ilbd_run_probe(ilbd_hc_srv_t *srv)
 		goto cleanup;
 	}
 
+	destroy_argv(child_argv);
+	(void) posix_spawn_file_actions_destroy(&fd_actions);
+	(void) posix_spawnattr_destroy(&attr);
 	return (B_TRUE);
 
 cleanup:
+	destroy_argv(child_argv);
+	if (init_fd_actions == B_TRUE)
+		(void) posix_spawn_file_actions_destroy(&fd_actions);
+	if (init_attr == B_TRUE)
+		(void) posix_spawnattr_destroy(&attr);
 	(void) close(fds[0]);
 	(void) close(fds[1]);
-	destroy_argv(child_argv);
 	if (probe_ev != NULL)
 		free(probe_ev);
 	return (B_FALSE);

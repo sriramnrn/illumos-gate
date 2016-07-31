@@ -21,10 +21,10 @@
 
 /*
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
- */
-
-/*
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2013 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2015 Toomas Soome <tsoome@me.com>
+ * Copyright 2015 Gary Mills
+ * Copyright (c) 2015 by Delphix. All rights reserved.
  */
 
 /*
@@ -123,21 +123,22 @@ usage(void)
 	    "\n"
 	    "\tsubcommands:\n"
 	    "\n"
-	    "\tbeadm activate beName\n"
-	    "\tbeadm create [-d BE_desc]\n"
+	    "\tbeadm activate [-v] beName\n"
+	    "\tbeadm create [-a] [-d BE_desc]\n"
 	    "\t\t[-o property=value] ... [-p zpool] \n"
-	    "\t\t[-e nonActiveBe | beName@snapshot] beName\n"
+	    "\t\t[-e nonActiveBe | beName@snapshot] [-v] beName\n"
 	    "\tbeadm create [-d BE_desc]\n"
-	    "\t\t[-o property=value] ... [-p zpool] beName@snapshot\n"
-	    "\tbeadm destroy [-Ffs] beName \n"
-	    "\tbeadm destroy [-F] beName@snapshot \n"
-	    "\tbeadm list [[-a] | [-d] [-s]] [-H] [beName]\n"
-	    "\tbeadm mount [-s ro|rw] beName [mountpoint]\n"
-	    "\tbeadm unmount [-f] beName | mountpoint\n"
-	    "\tbeadm umount [-f] beName | mountpoint\n"
-	    "\tbeadm rename origBeName newBeName\n"
-	    "\tbeadm rollback beName snapshot\n"
-	    "\tbeadm rollback beName@snapshot\n"));
+	    "\t\t[-o property=value] ... [-p zpool] [-v] beName@snapshot\n"
+	    "\tbeadm destroy [-Ffsv] beName \n"
+	    "\tbeadm destroy [-Fv] beName@snapshot \n"
+	    "\tbeadm list [[-a] | [-d] [-s]] [-H]\n"
+	    "\t\t[-k|-K date | name | space] [-v] [beName]\n"
+	    "\tbeadm mount [-s ro|rw] [-v] beName [mountpoint]\n"
+	    "\tbeadm unmount [-fv] beName | mountpoint\n"
+	    "\tbeadm umount [-fv] beName | mountpoint\n"
+	    "\tbeadm rename [-v] origBeName newBeName\n"
+	    "\tbeadm rollback [-v] beName snapshot\n"
+	    "\tbeadm rollback [-v] beName@snapshot\n"));
 }
 
 static int
@@ -285,7 +286,7 @@ count_widths(enum be_fmt be_fmt, struct hdr_info *hdr, be_node_list_t *be_nodes)
 		len[i] = hdr->cols[i].width;
 
 	for (cur_be = be_nodes; cur_be != NULL; cur_be = cur_be->be_next_node) {
-		char name[ZFS_MAXNAMELEN+1];
+		char name[ZFS_MAX_DATASET_NAME_LEN + 1];
 		const char *be_name = cur_be->be_node_name;
 		const char *root_ds = cur_be->be_root_ds;
 		char *pos;
@@ -386,10 +387,17 @@ print_be_nodes(const char *be_name, boolean_t parsable, struct hdr_info *hdr,
 		    snap = snap->be_next_snapshot)
 			used += snap->be_snapshot_space_used;
 
+		if (!cur_be->be_global_active)
+			active[ai++] = 'x';
+
 		if (cur_be->be_active)
 			active[ai++] = 'N';
-		if (cur_be->be_active_on_boot)
-			active[ai] = 'R';
+		if (cur_be->be_active_on_boot) {
+			if (!cur_be->be_global_active)
+				active[ai] = 'b';
+			else
+				active[ai] = 'R';
+		}
 
 		nicenum(used, buf, sizeof (buf));
 		if (parsable)
@@ -422,7 +430,7 @@ print_be_snapshots(be_node_list_t *be, struct hdr_info *hdr, boolean_t parsable)
 
 	for (snap = be->be_node_snapshots; snap != NULL;
 	    snap = snap->be_next_snapshot) {
-		char name[ZFS_MAXNAMELEN+1];
+		char name[ZFS_MAX_DATASET_NAME_LEN + 1];
 		const char *datetime_fmt = "%F %R";
 		const char *be_name = be->be_node_name;
 		const char *root_ds = be->be_root_ds;
@@ -664,7 +672,19 @@ be_do_activate(int argc, char **argv)
 {
 	nvlist_t	*be_attrs;
 	int		err = 1;
+	int		c;
 	char		*obe_name;
+
+	while ((c = getopt(argc, argv, "v")) != -1) {
+		switch (c) {
+		case 'v':
+			libbe_print_errors(B_TRUE);
+			break;
+		default:
+			usage();
+			return (1);
+		}
+	}
 
 	argc -= optind;
 	argv += optind;
@@ -728,7 +748,7 @@ be_do_create(int argc, char **argv)
 	char		*propval = NULL;
 	char		*strval = NULL;
 
-	while ((c = getopt(argc, argv, "ad:e:io:p:")) != -1) {
+	while ((c = getopt(argc, argv, "ad:e:io:p:v")) != -1) {
 		switch (c) {
 		case 'a':
 			activate = B_TRUE;
@@ -765,6 +785,9 @@ be_do_create(int argc, char **argv)
 			break;
 		case 'p':
 			nbe_zpool = optarg;
+			break;
+		case 'v':
+			libbe_print_errors(B_TRUE);
 			break;
 		default:
 			usage();
@@ -921,8 +944,7 @@ be_do_create(int argc, char **argv)
 out:
 	nvlist_free(be_attrs);
 out2:
-	if (zfs_props != NULL)
-		nvlist_free(zfs_props);
+	nvlist_free(zfs_props);
 
 	return (err);
 }
@@ -939,13 +961,16 @@ be_do_destroy(int argc, char **argv)
 	char		*snap_name;
 	char		*be_name;
 
-	while ((c = getopt(argc, argv, "fFs")) != -1) {
+	while ((c = getopt(argc, argv, "fFsv")) != -1) {
 		switch (c) {
 		case 'f':
 			destroy_flags |= BE_DESTROY_FLAG_FORCE_UNMOUNT;
 			break;
 		case 's':
 			destroy_flags |= BE_DESTROY_FLAG_SNAPSHOTS;
+			break;
+		case 'v':
+			libbe_print_errors(B_TRUE);
 			break;
 		case 'F':
 			suppress_prompt = B_TRUE;
@@ -1060,8 +1085,9 @@ be_do_list(int argc, char **argv)
 	int		err = 1;
 	int		c = 0;
 	char		*be_name = NULL;
+	be_sort_t	order = BE_SORT_UNSPECIFIED;
 
-	while ((c = getopt(argc, argv, "nadsH")) != -1) {
+	while ((c = getopt(argc, argv, "adk:svHK:")) != -1) {
 		switch (c) {
 		case 'a':
 			all = B_TRUE;
@@ -1069,8 +1095,44 @@ be_do_list(int argc, char **argv)
 		case 'd':
 			dsets = B_TRUE;
 			break;
+		case 'k':
+		case 'K':
+			if (order != BE_SORT_UNSPECIFIED) {
+				(void) fprintf(stderr, _("Sort key can be "
+				    "specified only once.\n"));
+				usage();
+				return (1);
+			}
+			if (strcmp(optarg, "date") == 0) {
+				if (c == 'k')
+					order = BE_SORT_DATE;
+				else
+					order = BE_SORT_DATE_REV;
+				break;
+			}
+			if (strcmp(optarg, "name") == 0) {
+				if (c == 'k')
+					order = BE_SORT_NAME;
+				else
+					order = BE_SORT_NAME_REV;
+				break;
+			}
+			if (strcmp(optarg, "space") == 0) {
+				if (c == 'k')
+					order = BE_SORT_SPACE;
+				else
+					order = BE_SORT_SPACE_REV;
+				break;
+			}
+			(void) fprintf(stderr, _("Unknown sort key: %s\n"),
+			    optarg);
+			usage();
+			return (1);
 		case 's':
 			snaps = B_TRUE;
+			break;
+		case 'v':
+			libbe_print_errors(B_TRUE);
 			break;
 		case 'H':
 			parsable = B_TRUE;
@@ -1110,6 +1172,21 @@ be_do_list(int argc, char **argv)
 
 	switch (err) {
 	case BE_SUCCESS:
+		/* the default sort is ascending date, no need to sort twice */
+		if (order == BE_SORT_UNSPECIFIED)
+			order = BE_SORT_DATE;
+
+		if (order != BE_SORT_DATE) {
+			err = be_sort(&be_nodes, order);
+			if (err != BE_SUCCESS) {
+				(void) fprintf(stderr, _("Unable to sort Boot "
+				    "Environment\n"));
+				(void) fprintf(stderr, "%s\n",
+				    be_err_to_str(err));
+				break;
+			}
+		}
+
 		print_nodes(be_name, dsets, snaps, parsable, be_nodes);
 		break;
 	case BE_ERR_BE_NOENT:
@@ -1145,7 +1222,7 @@ be_do_mount(int argc, char **argv)
 	char		*mountpoint;
 	char		*tmp_mp = NULL;
 
-	while ((c = getopt(argc, argv, "s:")) != -1) {
+	while ((c = getopt(argc, argv, "s:v")) != -1) {
 		switch (c) {
 		case 's':
 			shared_fs = B_TRUE;
@@ -1161,6 +1238,9 @@ be_do_mount(int argc, char **argv)
 				return (1);
 			}
 
+			break;
+		case 'v':
+			libbe_print_errors(B_TRUE);
 			break;
 		default:
 			usage();
@@ -1223,7 +1303,6 @@ be_do_mount(int argc, char **argv)
 		(void) printf(_("Mounted successfully on: '%s'\n"), mountpoint);
 		break;
 	case BE_ERR_BE_NOENT:
-		err = 1;
 		(void) fprintf(stderr, _("%s does not exist or appear "
 		    "to be a valid BE.\nPlease check that the name of "
 		    "the BE provided is correct.\n"), obe_name);
@@ -1235,13 +1314,15 @@ be_do_mount(int argc, char **argv)
 		break;
 	case BE_ERR_PERM:
 	case BE_ERR_ACCESS:
-		err = 1;
 		(void) fprintf(stderr, _("Unable to mount %s.\n"), obe_name);
 		(void) fprintf(stderr, _("You have insufficient privileges to "
 		    "execute this command.\n"));
 		break;
+	case BE_ERR_NO_MOUNTED_ZONE:
+		(void) fprintf(stderr, _("Mounted on '%s'.\nUnable to mount "
+		    "one of %s's zone BE's.\n"), mountpoint, obe_name);
+		break;
 	default:
-		err = 1;
 		(void) fprintf(stderr, _("Unable to mount %s.\n"), obe_name);
 		(void) fprintf(stderr, "%s\n", be_err_to_str(err));
 	}
@@ -1262,10 +1343,13 @@ be_do_unmount(int argc, char **argv)
 	int		c;
 	int		unmount_flags = 0;
 
-	while ((c = getopt(argc, argv, "f")) != -1) {
+	while ((c = getopt(argc, argv, "fv")) != -1) {
 		switch (c) {
 		case 'f':
 			unmount_flags |= BE_UNMOUNT_FLAG_FORCE;
+			break;
+		case 'v':
+			libbe_print_errors(B_TRUE);
 			break;
 		default:
 			usage();
@@ -1337,6 +1421,18 @@ be_do_rename(int argc, char **argv)
 	char		*obe_name;
 	char		*nbe_name;
 	int err = 1;
+	int c;
+
+	while ((c = getopt(argc, argv, "v")) != -1) {
+		switch (c) {
+		case 'v':
+			libbe_print_errors(B_TRUE);
+			break;
+		default:
+			usage();
+			return (1);
+		}
+	}
 
 	argc -= optind;
 	argv += optind;
@@ -1394,6 +1490,18 @@ be_do_rollback(int argc, char **argv)
 	char		*obe_name;
 	char		*snap_name;
 	int		err = 1;
+	int		c;
+
+	while ((c = getopt(argc, argv, "v")) != -1) {
+		switch (c) {
+		case 'v':
+			libbe_print_errors(B_TRUE);
+			break;
+		default:
+			usage();
+			return (1);
+		}
+	}
 
 	argc -= optind;
 	argv += optind;

@@ -46,7 +46,7 @@ WLCMD_DIR       = $(UTSBASE)/common/io/warlock
 #
 #	Kernel Module Dependencies
 #
-LDFLAGS += -dy -Nmisc/scsi -Ndrv/scsi_vhci
+LDFLAGS += -dy -Nmisc/scsi -Ndrv/scsi_vhci -Nmisc/sata
 
 #
 #	Define targets
@@ -59,6 +59,10 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 #	Include common rules.
 #
 include $(UTSBASE)/intel/Makefile.intel
+
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-uninitialized
+CERRWARN	+= -_gcc=-Wno-switch
 
 #
 #	Default build targets.

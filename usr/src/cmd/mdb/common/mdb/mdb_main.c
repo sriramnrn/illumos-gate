@@ -21,6 +21,11 @@
 /*
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2012, Josef 'Jeff' Sipek <jeffpc@31bits.net>. All rights reserved.
+ */
+
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
  */
 
 #include <sys/types.h>
@@ -318,10 +323,12 @@ usage(int status)
 {
 	mdb_iob_printf(mdb.m_err, "Usage: %s [-fkmuwyAFKMSUW] [+/-o option] "
 	    "[-p pid] [-s dist] [-I path] [-L path]\n\t[-P prompt] "
-	    "[-R root] [-V dis-version] [object [core] | core | suffix]\n\n",
+	    "[-R root] [-V dis-version] [-e expr] "
+	    "[object [core] | core | suffix]\n\n",
 	    mdb.m_pname);
 
 	mdb_iob_puts(mdb.m_err,
+	    "\t-e evaluate expr and return status\n"
 	    "\t-f force raw file debugging mode\n"
 	    "\t-k force kernel debugging mode\n"
 	    "\t-m disable demand-loading of module symbols\n"
@@ -402,8 +409,9 @@ int
 main(int argc, char *argv[], char *envp[])
 {
 	extern int mdb_kvm_is_compressed_dump(mdb_io_t *);
+	extern int mdb_kvm_is_dump(mdb_io_t *);
 	mdb_tgt_ctor_f *tgt_ctor = NULL;
-	const char **tgt_argv = alloca(argc * sizeof (char *));
+	const char **tgt_argv = alloca((argc + 2) * sizeof (char *));
 	int tgt_argc = 0;
 	mdb_tgt_t *tgt;
 
@@ -414,6 +422,7 @@ main(int argc, char *argv[], char *envp[])
 	char *p;
 
 	const char *Iflag = NULL, *Lflag = NULL, *Vflag = NULL, *pidarg = NULL;
+	const char *eflag = NULL;
 	int fflag = 0, Kflag = 0, Rflag = 0, Sflag = 0, Oflag = 0, Uflag = 0;
 
 	int ttylike;
@@ -502,8 +511,15 @@ main(int argc, char *argv[], char *envp[])
 
 	while (optind < argc) {
 		while ((c = getopt(argc, argv,
-		    "fkmo:p:s:uwyACD:FI:KL:MOP:R:SUV:W")) != (int)EOF) {
+		    "e:fkmo:p:s:uwyACD:FI:KL:MOP:R:SUV:W")) != (int)EOF) {
 			switch (c) {
+			case 'e':
+				if (eflag != NULL) {
+					warn("-e already specified\n");
+					terminate(2);
+				}
+				eflag = optarg;
+				break;
 			case 'f':
 				fflag++;
 				tgt_ctor = mdb_rawfile_tgt_create;
@@ -685,6 +701,12 @@ main(int argc, char *argv[], char *envp[])
 		/*NOTREACHED*/
 	}
 
+	if (eflag != NULL) {
+		IOP_CLOSE(in_io);
+		in_io = mdb_strio_create(eflag);
+		mdb.m_lastret = 0;
+	}
+
 	/*
 	 * If standard input appears to have tty attributes, attempt to
 	 * initialize a terminal i/o backend on top of stdin and stdout.
@@ -803,6 +825,9 @@ main(int argc, char *argv[], char *envp[])
 			tgt_argc -= c;
 		}
 
+		if (fflag)
+			goto tcreate; /* skip re-exec and just create target */
+
 		/*
 		 * If we just have an object file name, and that file doesn't
 		 * exist, and it's a string of digits, infer it to be a
@@ -814,8 +839,8 @@ main(int argc, char *argv[], char *envp[])
 			size_t len = strlen(tgt_argv[0]) + 8;
 			const char *object = tgt_argv[0];
 
-			tgt_argv[0] = mdb_alloc(len, UM_SLEEP);
-			tgt_argv[1] = mdb_alloc(len, UM_SLEEP);
+			tgt_argv[0] = alloca(len);
+			tgt_argv[1] = alloca(len);
 
 			(void) strcpy((char *)tgt_argv[0], "unix.");
 			(void) strcat((char *)tgt_argv[0], object);
@@ -823,6 +848,14 @@ main(int argc, char *argv[], char *envp[])
 			(void) strcat((char *)tgt_argv[1], object);
 
 			if (access(tgt_argv[0], F_OK) == -1 &&
+			    access(tgt_argv[1], F_OK) != -1) {
+				/*
+				 * If we have a vmcore but not a unix file,
+				 * set the symbol table to be the vmcore to
+				 * force libkvm to extract it out of the dump.
+				 */
+				tgt_argv[0] = tgt_argv[1];
+			} else if (access(tgt_argv[0], F_OK) == -1 &&
 			    access(tgt_argv[1], F_OK) == -1) {
 				(void) strcpy((char *)tgt_argv[1], "vmdump.");
 				(void) strcat((char *)tgt_argv[1], object);
@@ -846,17 +879,25 @@ main(int argc, char *argv[], char *envp[])
 		    O_RDONLY, 0)) == NULL)
 			die("failed to open %s", tgt_argv[0]);
 
-		/*
-		 * Check for a single vmdump.N compressed dump file,
-		 * and give a helpful message.
-		 */
 		if (tgt_argc == 1) {
 			if (mdb_kvm_is_compressed_dump(io)) {
+				/*
+				 * We have a single vmdump.N compressed dump
+				 * file; give a helpful message.
+				 */
 				mdb_iob_printf(mdb.m_err,
 				    "cannot open compressed dump; "
 				    "decompress using savecore -f %s\n",
 				    tgt_argv[0]);
 				terminate(0);
+			} else if (mdb_kvm_is_dump(io)) {
+				/*
+				 * We have an uncompressed dump as our only
+				 * argument; specify the dump as the symbol
+				 * table to force libkvm to dig it out of the
+				 * dump.
+				 */
+				tgt_argv[tgt_argc++] = tgt_argv[0];
 			}
 		}
 
@@ -866,8 +907,7 @@ main(int argc, char *argv[], char *envp[])
 		 * it is not and the target is unknown, use the rawfile tgt.
 		 * Otherwise an ELF-based target is needed, so we must abort.
 		 */
-		if (tgt_ctor != mdb_rawfile_tgt_create &&
-		    mdb_gelf_check(io, &ehdr, ET_NONE) == -1) {
+		if (mdb_gelf_check(io, &ehdr, ET_NONE) == -1) {
 			if (tgt_ctor != NULL) {
 				(void) mdb_gelf_check(io, &ehdr, ET_EXEC);
 				mdb_io_destroy(io);
@@ -878,8 +918,7 @@ main(int argc, char *argv[], char *envp[])
 
 		mdb_io_destroy(io);
 
-		if (identify_xvm_file(tgt_argv[0], &longmode) == 1 &&
-		    !fflag) {
+		if (identify_xvm_file(tgt_argv[0], &longmode) == 1) {
 #ifdef _LP64
 			if (!longmode)
 				goto reexec;
@@ -890,9 +929,6 @@ main(int argc, char *argv[], char *envp[])
 			tgt_ctor = mdb_kvm_tgt_create;
 			goto tcreate;
 		}
-
-		if (tgt_ctor == mdb_rawfile_tgt_create)
-			goto tcreate; /* skip re-exec and just create target */
 
 		/*
 		 * The object file turned out to be a user core file (ET_CORE),
@@ -1059,7 +1095,8 @@ tcreate:
 		continue;
 	}
 
-	terminate((status == MDB_ERR_QUIT || status == 0) ? 0 : 1);
+	terminate((status == MDB_ERR_QUIT || status == 0) ?
+	    (eflag != NULL && mdb.m_lastret != 0 ? 1 : 0) : 1);
 	/*NOTREACHED*/
 	return (0);
 

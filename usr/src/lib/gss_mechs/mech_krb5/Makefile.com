@@ -152,7 +152,7 @@ K5_OS=	an_to_ln.o def_realm.o ccdefname.o free_krbhs.o free_hstrl.o \
 
 K5_OS_UTS=init_os_ctx.o timeofday.o toffset.o c_ustime.o
 
-K5_POSIX= setenv.o daemon.o
+K5_POSIX= setenv.o
 
 K5_RCACHE=rc_base.o rc_file.o rc_mem.o rc_common.o rc_io.o rcdef.o rc_conv.o \
 	ser_rc.o rcfns.o rc_none.o
@@ -251,12 +251,17 @@ CPPFLAGS += -I$(REL_PATH)/libgss -I../include  \
 
 CPPFLAGS += $(KRB5_DEFS)
 
-MAPFILE_EXPORT = ../mapfile-vers-clean
-$(EXPORT_RELEASE_BUILD)MAPFILE_EXPORT = \
-		$(CLOSED)/lib/gss_mechs/mech_krb5/mapfile-vers-export
-MAPFILES =	../mapfile-vers $(MAPFILE_EXPORT)
+CERRWARN +=	-_gcc=-Wno-unused-function
+CERRWARN +=	-_gcc=-Wno-type-limits
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-unused-variable
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-unused-value
+CERRWARN +=	-_gcc=-Wno-empty-body
+CERRWARN +=	-_gcc=-Wno-address
 
-$(EXPORT_RELEASE_BUILD)include $(CLOSED)/lib/gss_mechs/mech_krb5/Makefile.export
+MAPFILES =	../mapfile-vers
 
 #CPPFLAGS += 	-D_REENTRANT
 $(PICS) :=	CFLAGS += $(XFFLAG)
@@ -558,6 +563,9 @@ kwarnd_clnt_stubs.c: kwarnd.h $(SRC)/cmd/krb5/kwarn/kwarnd_clnt_stubs.c
 kwarnd_handle.c: $(SRC)/cmd/krb5/kwarn/kwarnd_handle.c
 	$(RM) $@
 	$(CP) $(SRC)/cmd/krb5/kwarn/kwarnd_handle.c $@
+
+CLOBBERFILES += kwarnd.h \
+	kwarnd_clnt.c kwarnd_clnt_stubs.c kwarnd_handle.c kwarnd_xdr.c
 
 # So lint.out won't be needlessly recreated
 lint: $(LINTOUT)

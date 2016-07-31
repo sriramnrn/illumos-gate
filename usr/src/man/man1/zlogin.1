@@ -1,20 +1,31 @@
 '\" te
 .\" Copyright (c) 2006, Sun Microsystems, Inc. All Rights Reserved
-.\" The contents of this file are subject to the terms of the Common Development and Distribution License (the "License").  You may not use this file except in compliance with the License.
-.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or http://www.opensolaris.org/os/licensing.  See the License for the specific language governing permissions and limitations under the License.
-.\" When distributing Covered Code, include this CDDL HEADER in each file and include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable, add the following below this CDDL HEADER, with the fields enclosed by brackets "[]" replaced with your own identifying information: Portions Copyright [yyyy] [name of copyright owner]
-.TH ZLOGIN 1 "Dec 18, 2006"
+.\" The contents of this file are subject to the terms of the Common
+.\" Development and Distribution License (the "License").  You may not use this
+.\" file except in compliance with the License.
+.\" You can obtain a copy of the license at usr/src/OPENSOLARIS.LICENSE or
+.\" http://www.opensolaris.org/os/licensing.  See the License for the specific
+.\" language governing permissions and limitations under the License.
+.\" When distributing Covered Code, include this CDDL HEADER in each file and
+.\" include the License file at usr/src/OPENSOLARIS.LICENSE.  If applicable,
+.\" add the following below this CDDL HEADER, with the fields enclosed by
+.\" brackets "[]" replaced with your own identifying information:
+.\" Portions Copyright [yyyy] [name of copyright owner]
+.\" Copyright 2013 DEY Storage Systems, Inc.
+.\" Copyright (c) 2014 Gary Mills
+.\" Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+.TH ZLOGIN 1 "Mar 17, 2015"
 .SH NAME
 zlogin \- enter a zone
 .SH SYNOPSIS
 .LP
 .nf
-\fBzlogin\fR [\fB-CE\fR] [\fB-e\fR \fIc\fR] [\fB-l\fR \fIusername\fR] \fIzonename\fR
+\fBzlogin\fR [\fB-dCEQ\fR] [\fB-e\fR \fIc\fR] [\fB-l\fR \fIusername\fR] \fIzonename\fR
 .fi
 
 .LP
 .nf
-\fBzlogin\fR [\fB-ES\fR] [\fB-e\fR \fIc\fR] [\fB-l\fR \fIusername\fR] \fIzonename\fR \fIutility\fR
+\fBzlogin\fR [\fB-nEQS\fR] [\fB-e\fR \fIc\fR] [\fB-l\fR \fIusername\fR] \fIzonename\fR \fIutility\fR
      [\fIargument\fR]...
 .fi
 
@@ -85,6 +96,16 @@ Connects to the zone console.
 .sp
 .ne 2
 .na
+\fB\fB-d\fR\fR
+.ad
+.RS 15n
+Disconnect from the console when the zone halts. This option may only be used
+if the \fB-C\fR option is specified.
+.RE
+
+.sp
+.ne 2
+.na
 \fB\fB-e\fR \fIc\fR\fR
 .ad
 .RS 15n
@@ -112,6 +133,29 @@ login by using the escape sequence character.
 Specifies a different \fIusername\fR for the zone login. If you do not use this
 option, the zone username used is "root". This option is invalid if the
 \fB-C\fR option is specified.
+.RE
+
+.sp
+.ne 2
+.na
+\fB-n\fR
+.ad
+.RS 15n
+Redirect the input of \fBzlogin\fR to \fB/dev/null\fR.
+This option is useful when the command running in the local zone
+and the shell which invokes \fBzlogin\fR both read from standard input.
+.RE
+
+.sp
+.ne 2
+.na
+\fB-Q\fR
+.ad
+.RS 15n
+Specifies quiet mode operation.  In quiet mode, extra messages indicating the
+the function of \fBzlogin\fR will not be displayed, giving the possibility
+to present the appearance that the command is running locally rather than
+in another zone.
 .RE
 
 .sp

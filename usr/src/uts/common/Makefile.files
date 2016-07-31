@@ -21,8 +21,12 @@
 
 #
 # Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
-# Copyright (c) 2012 by Delphix. All rights reserved.
+# Copyright (c) 2011, 2014 by Delphix. All rights reserved.
+# Copyright (c) 2013 by Saso Kiselkov. All rights reserved.
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2016 Garrett D'Amore <garrett@damore.org>
+# Copyright 2016 Joyent, Inc.
+# Copyright 2016 OmniTI Computer Consulting, Inc.  All rights reserved.
 #
 
 #
@@ -145,7 +149,7 @@ GENUNIX_OBJS +=	\
 		ddi_intr_impl.o	\
 		ddi_intr_irm.o	\
 		ddi_nodeid.o	\
-		ddi_timer.o	\
+		ddi_periodic.o	\
 		devcfg.o	\
 		devcache.o	\
 		device.o	\
@@ -275,6 +279,7 @@ GENUNIX_OBJS +=	\
 		profil.o	\
 		project.o	\
 		qsort.o		\
+		getrandom.o	\
 		rctl.o		\
 		rctlsys.o	\
 		readlink.o	\
@@ -399,7 +404,6 @@ GENUNIX_OBJS +=	\
 		xdr.o		\
 		xdr_array.o	\
 		xdr_refer.o	\
-		xhat.o		\
 		zone.o
 
 #
@@ -505,6 +509,10 @@ MD5_OBJS +=	md5.o md5_mod.o
 SHA1_OBJS +=	sha1.o sha1_mod.o
 
 SHA2_OBJS +=	sha2.o sha2_mod.o
+
+SKEIN_OBJS +=	skein.o skein_block.o skein_iv.o skein_mod.o
+
+EDONR_OBJS +=	edonr.o edonr_mod.o
 
 IPGPC_OBJS +=   classifierddi.o classifier.o filters.o trie.o table.o \
 		ba_table.o
@@ -755,8 +763,6 @@ BOFI_OBJS += bofi.o
 
 HID_OBJS += hid.o
 
-HWA_RC_OBJS += hwarc.o
-
 USBSKEL_OBJS += usbskel.o
 
 USBVC_OBJS += usbvc.o usbvc_v4l2.o
@@ -784,8 +790,6 @@ USBSER_KEYSPAN_OBJS += usbser_keyspan.o keyspan_dsd.o keyspan_pipe.o
 USBS49_FW_OBJS += keyspan_49fw.o
 
 USBSPRL_OBJS += usbser_pl2303.o pl2303_dsd.o
-
-WUSB_CA_OBJS += wusb_ca.o
 
 USBFTDI_OBJS += usbser_uftdi.o uftdi_dsd.o
 
@@ -821,9 +825,6 @@ SMP_OBJS +=	smp.o
 SATA_OBJS +=	sata.o
 
 USBA_OBJS +=	hcdi.o	usba.o	usbai.o hubdi.o parser.o genconsole.o \
-		usbai_pipe_mgmt.o usbai_req.o usbai_util.o usbai_register.o \
-		usba_devdb.o usba10_calls.o usba_ugen.o whcdi.o wa.o
-USBA_WITHOUT_WUSB_OBJS +=	hcdi.o	usba.o	usbai.o hubdi.o parser.o genconsole.o \
 		usbai_pipe_mgmt.o usbai_req.o usbai_util.o usbai_register.o \
 		usba_devdb.o usba10_calls.o usba_ugen.o
 
@@ -991,6 +992,10 @@ DEVPOLL_OBJS += devpoll.o
 
 DEVPOOL_OBJS += devpool.o
 
+EVENTFD_OBJS +=	eventfd.o
+
+SIGNALFD_OBJS += signalfd.o
+
 I8042_OBJS +=	i8042.o
 
 KB8042_OBJS +=	\
@@ -1029,6 +1034,8 @@ PSHOT_OBJS += pshot.o
 GEN_DRV_OBJS += gen_drv.o
 
 TCLIENT_OBJS +=	tclient.o
+
+TIMERFD_OBJS +=	timerfd.o
 
 TPHCI_OBJS += tphci.o
 
@@ -1111,15 +1118,6 @@ JAVAEXEC_OBJS +=java.o
 #
 AUTOFS_OBJS +=	auto_vfsops.o auto_vnops.o auto_subr.o auto_xdr.o auto_sys.o
 
-CACHEFS_OBJS +=	cachefs_cnode.o		cachefs_cod.o \
-		cachefs_dir.o		cachefs_dlog.o	cachefs_filegrp.o \
-		cachefs_fscache.o	cachefs_ioctl.o	cachefs_log.o \
-		cachefs_module.o \
-		cachefs_noopc.o		cachefs_resource.o \
-		cachefs_strict.o \
-		cachefs_subr.o		cachefs_vfsops.o \
-		cachefs_vnops.o
-
 DCFS_OBJS +=	dc_vnops.o
 
 DEVFS_OBJS +=	devfs_subr.o	devfs_vfsops.o	devfs_vnops.o
@@ -1170,40 +1168,49 @@ NFSSRV_OBJS +=	nfs_server.o	nfs_srv.o	nfs3_srv.o \
 		nfs4_deleg_ops.o nfs4_srv_readdir.o nfs4_dispatch.o
 
 SMBSRV_SHARED_OBJS += \
+		smb_door_legacy.o \
 		smb_inet.o \
 		smb_match.o \
 		smb_msgbuf.o \
+		smb_native.o \
+		smb_netbios_util.o \
 		smb_oem.o \
+		smb_sid.o \
+		smb_status2winerr.o \
 		smb_string.o \
-		smb_utf8.o \
-		smb_door_legacy.o \
-		smb_xdr.o \
 		smb_token.o \
 		smb_token_xdr.o \
-		smb_sid.o \
-		smb_native.o \
-		smb_netbios_util.o
+		smb_utf8.o \
+		smb_xdr.o
 
+# See also: $SRC/lib/smbsrv/libfksmbsrv/Makefile.com
 SMBSRV_OBJS +=	$(SMBSRV_SHARED_OBJS)			\
 		smb_acl.o				\
 		smb_alloc.o				\
+		smb_authenticate.o			\
 		smb_close.o				\
+		smb_cmn_rename.o			\
+		smb_cmn_setfile.o			\
 		smb_common_open.o			\
 		smb_common_transact.o			\
 		smb_create.o				\
+		smb_cred.o				\
 		smb_delete.o				\
+		smb_dfs.o				\
 		smb_directory.o				\
 		smb_dispatch.o				\
 		smb_echo.o				\
+		smb_errno.o				\
 		smb_fem.o				\
 		smb_find.o				\
 		smb_flush.o				\
 		smb_fsinfo.o				\
 		smb_fsops.o				\
+		smb_idmap.o				\
 		smb_init.o				\
 		smb_kdoor.o				\
 		smb_kshare.o				\
-                smb_kutil.o				\
+		smb_kutil.o				\
 		smb_lock.o				\
 		smb_lock_byte_range.o			\
 		smb_locking_andx.o			\
@@ -1214,14 +1221,15 @@ SMBSRV_OBJS +=	$(SMBSRV_SHARED_OBJS)			\
 		smb_negotiate.o				\
 		smb_net.o				\
 		smb_node.o				\
-                smb_nt_cancel.o				\
+		smb_notify.o				\
+		smb_nt_cancel.o				\
 		smb_nt_create_andx.o			\
-                smb_nt_transact_create.o		\
+		smb_nt_transact_create.o		\
 		smb_nt_transact_ioctl.o			\
 		smb_nt_transact_notify_change.o		\
 		smb_nt_transact_quota.o			\
 		smb_nt_transact_security.o		\
-                smb_odir.o				\
+		smb_odir.o				\
 		smb_ofile.o				\
 		smb_open_andx.o				\
 		smb_opipe.o				\
@@ -1230,6 +1238,7 @@ SMBSRV_OBJS +=	$(SMBSRV_SHARED_OBJS)			\
 		smb_print.o				\
 		smb_process_exit.o			\
 		smb_query_fileinfo.o			\
+		smb_quota.o				\
 		smb_read.o				\
 		smb_rename.o				\
 		smb_sd.o				\
@@ -1238,8 +1247,10 @@ SMBSRV_OBJS +=	$(SMBSRV_SHARED_OBJS)			\
 		smb_session.o				\
 		smb_session_setup_andx.o		\
 		smb_set_fileinfo.o			\
+		smb_sign_kcf.o				\
 		smb_signing.o				\
-                smb_tree.o				\
+		smb_thread.o				\
+		smb_tree.o				\
 		smb_trans2_create_directory.o		\
 		smb_trans2_dfs.o			\
 		smb_trans2_find.o			\
@@ -1250,7 +1261,37 @@ SMBSRV_OBJS +=	$(SMBSRV_SHARED_OBJS)			\
 		smb_vops.o				\
 		smb_vss.o				\
 		smb_write.o				\
-		smb_write_raw.o
+		\
+		smb2_dispatch.o \
+		smb2_cancel.o \
+		smb2_change_notify.o \
+		smb2_close.o \
+		smb2_create.o \
+		smb2_echo.o \
+		smb2_flush.o \
+		smb2_ioctl.o \
+		smb2_lock.o \
+		smb2_logoff.o \
+		smb2_negotiate.o \
+		smb2_ofile.o \
+		smb2_oplock.o \
+		smb2_qinfo_file.o \
+		smb2_qinfo_fs.o \
+		smb2_qinfo_sec.o \
+		smb2_qinfo_quota.o \
+		smb2_query_dir.o \
+		smb2_query_info.o \
+		smb2_read.o \
+		smb2_session_setup.o \
+		smb2_set_info.o \
+		smb2_setinfo_file.o \
+		smb2_setinfo_fs.o \
+		smb2_setinfo_quota.o \
+		smb2_setinfo_sec.o \
+		smb2_signing.o \
+		smb2_tree_connect.o \
+		smb2_tree_disconn.o \
+		smb2_write.o
 
 PCFS_OBJS +=	pc_alloc.o	pc_dir.o	pc_node.o	pc_subr.o \
 		pc_vfsops.o	pc_vnops.o
@@ -1300,6 +1341,7 @@ SMBFS_OBJS +=	smbfs_vfsops.o	smbfs_vnops.o	smbfs_node.o	\
 		smbfs_rwlock.o	smbfs_xattr.o	\
 		$(SMBFS_COMMON_OBJS)
 
+BOOTFS_OBJS +=	bootfs_construct.o bootfs_vfsops.o bootfs_vnops.o
 
 #
 #			LVM modules
@@ -1327,9 +1369,11 @@ TRANS_OBJS += mdtrans.o trans_ioctl.o trans_log.o
 
 ZFS_COMMON_OBJS +=		\
 	arc.o			\
+	blkptr.o		\
 	bplist.o		\
 	bpobj.o			\
 	bptree.o		\
+	bqueue.o		\
 	dbuf.o			\
 	ddt.o			\
 	ddt_zap.o		\
@@ -1342,28 +1386,38 @@ ZFS_COMMON_OBJS +=		\
 	dmu_tx.o		\
 	dnode.o			\
 	dnode_sync.o		\
+	dsl_bookmark.o		\
 	dsl_dir.o		\
 	dsl_dataset.o		\
 	dsl_deadlist.o		\
+	dsl_destroy.o		\
 	dsl_pool.o		\
 	dsl_synctask.o		\
+	dsl_userhold.o		\
 	dmu_zfetch.o		\
 	dsl_deleg.o		\
 	dsl_prop.o		\
 	dsl_scan.o		\
 	zfeature.o		\
 	gzip.o			\
+	lz4.o			\
 	lzjb.o			\
 	metaslab.o		\
+	multilist.o		\
+	range_tree.o		\
 	refcount.o		\
+	rrwlock.o		\
 	sa.o			\
 	sha256.o		\
+	edonr_zfs.o		\
+	skein_zfs.o		\
 	spa.o			\
 	spa_config.o		\
 	spa_errlog.o		\
 	spa_history.o		\
 	spa_misc.o		\
 	space_map.o		\
+	space_reftree.o		\
 	txg.o			\
 	uberblock.o		\
 	unique.o		\
@@ -1415,7 +1469,6 @@ ZFS_OBJS +=			\
 	zfs_onexit.o		\
 	zfs_replay.o		\
 	zfs_rlock.o		\
-	rrwlock.o		\
 	zfs_vfsops.o		\
 	zfs_vnops.o		\
 	zvol.o
@@ -1462,6 +1515,23 @@ RPCMOD_OBJS +=	rpcmod.o	clnt_cots.o	clnt_clts.o \
 		svc.o		svc_clts.o	svc_gen.o	svc_cots.o \
 		rpcsys.o	xdr_sizeof.o	clnt_rdma.o	svc_rdma.o \
 		xdr_rdma.o	rdma_subr.o	xdrrdma_sizeof.o
+
+KLMMOD_OBJS +=	klmmod.o \
+		nlm_impl.o \
+		nlm_rpc_handle.o \
+		nlm_dispatch.o \
+		nlm_rpc_svc.o \
+		nlm_client.o \
+		nlm_service.o \
+		nlm_prot_clnt.o \
+		nlm_prot_xdr.o \
+		nlm_rpc_clnt.o \
+		nsm_addr_clnt.o \
+		nsm_addr_xdr.o \
+		sm_inter_clnt.o \
+		sm_inter_xdr.o
+
+KLMOPS_OBJS +=	klmops.o
 
 TLIMOD_OBJS +=	tlimod.o	t_kalloc.o	t_kbind.o	t_kclose.o \
 		t_kconnect.o	t_kfree.o	t_kgtstate.o	t_kopen.o \
@@ -1642,10 +1712,7 @@ K5_KRB= kfree.o copy_key.o \
 K5_OS=  timeofday.o toffset.o \
 	init_os_ctx.o c_ustime.o
 
-SEAL=
-# EXPORT DELETE START
 SEAL=	seal.o unseal.o
-# EXPORT DELETE END
 
 MECH=	delete_sec_context.o \
 	import_sec_context.o \
@@ -1704,14 +1771,6 @@ BUSRA_OBJS += busra.o
 
 PCS_OBJS += pcs.o
 
-PCAN_OBJS += pcan.o
-
-PCATA_OBJS += pcide.o pcdisk.o pclabel.o pcata.o
-
-PCSER_OBJS += pcser.o pcser_cis.o
-
-PCWL_OBJS += pcwl.o
-
 PSET_OBJS +=	pset.o
 
 OHCI_OBJS += ohci.o ohci_hub.o ohci_polled.o
@@ -1726,18 +1785,13 @@ USB_MID_OBJS += usb_mid.o
 
 USB_IA_OBJS += usb_ia.o
 
-UWBA_OBJS += uwba.o uwbai.o
-
 SCSA2USB_OBJS += scsa2usb.o usb_ms_bulkonly.o usb_ms_cbi.o
-
-HWAHC_OBJS += hwahc.o hwahc_util.o
-
-WUSB_DF_OBJS += wusb_df.o
-WUSB_FWMOD_OBJS += wusb_fwmod.o
 
 IPF_OBJS += ip_fil_solaris.o fil.o solaris.o ip_state.o ip_frag.o ip_nat.o \
 	    ip_proxy.o ip_auth.o ip_pool.o ip_htable.o ip_lookup.o \
 	    ip_log.o misc.o ip_compat.o ip_nat6.o drand48.o
+
+IPD_OBJS += ipd.o
 
 IBD_OBJS +=	ibd.o ibd_cm.o
 
@@ -1831,7 +1885,8 @@ ZYD_OBJS += zyd.o zyd_usb.o zyd_hw.o zyd_fw.o
 
 MXFE_OBJS += mxfe.o
 
-MPTSAS_OBJS += mptsas.o mptsas_impl.o mptsas_init.o mptsas_raid.o mptsas_smhba.o
+MPTSAS_OBJS += mptsas.o mptsas_hash.o mptsas_impl.o mptsas_init.o \
+		mptsas_raid.o mptsas_smhba.o
 
 SFE_OBJS += sfe.o sfe_util.o
 
@@ -1846,9 +1901,13 @@ IDM_OBJS +=	$(IDM_SHARED_OBJS) \
 
 VR_OBJS += vr.o
 
-ATGE_OBJS += atge_main.o atge_l1e.o atge_mii.o atge_l1.o
+ATGE_OBJS += atge_main.o atge_l1e.o atge_mii.o atge_l1.o atge_l1c.o
 
 YGE_OBJS = yge.o
+
+SKD_OBJS = skd.o
+
+NVME_OBJS = nvme.o
 
 #
 #	Build up defines and paths.
@@ -1876,6 +1935,19 @@ CH_COM_OBJS =	ch_mac.o ch_subr.o cspi.o espi.o ixf1010.o mc3.o mc4.o mc5.o \
 		vsc7321.o vsc7326.o xpak.o
 
 #
+#	Chelsio Terminator 4 10G NIC nexus driver module
+#
+CXGBE_FW_OBJS  =	t4_fw.o t4_cfg.o
+CXGBE_COM_OBJS =	t4_hw.o common.o
+CXGBE_NEX_OBJS =	t4_nexus.o t4_sge.o t4_mac.o t4_ioctl.o shared.o \
+			t4_l2t.o adapter.o osdep.o
+
+#
+#	Chelsio Terminator 4 10G NIC driver module
+#
+CXGBE_OBJS =	cxgbe.o
+
+#
 #	PCI strings file
 #
 PCI_STRING_OBJS = pci_strings.o
@@ -1892,21 +1964,31 @@ XGE_HAL_OBJS =  xgehal-channel.o xgehal-fifo.o xgehal-ring.o  xgehal-config.o \
 		xge-queue.o  xgehal-mgmt.o xgehal-mgmtaux.o
 
 #
+#	e1000/igb common objs
+#
+#	Historically e1000g and igb had separate copies of all of the common
+#	code. At this time while they are now sharing the same copy of it, they
+#	are building it into their own modules which is due to the differences
+#	in the osdep and debug portions of their code.
+#
+E1000API_OBJS += e1000_80003es2lan.o e1000_82540.o e1000_82541.o e1000_82542.o \
+		e1000_82543.o e1000_82571.o e1000_api.o e1000_ich8lan.o \
+		e1000_mac.o e1000_manage.o e1000_nvm.o e1000_phy.o \
+		e1000_82575.o e1000_i210.o e1000_mbx.o e1000_vf.o
+
+#
 #	e1000g module
 #
-E1000G_OBJS +=	e1000_80003es2lan.o e1000_82540.o e1000_82541.o e1000_82542.o \
-		e1000_82543.o e1000_82571.o e1000_api.o e1000_ich8lan.o \
-		e1000_mac.o e1000_manage.o e1000_nvm.o e1000_osdep.o \
-		e1000_phy.o e1000g_debug.o e1000g_main.o e1000g_alloc.o \
-		e1000g_tx.o e1000g_rx.o e1000g_stat.o
+E1000G_OBJS +=	e1000g_debug.o e1000g_main.o e1000g_alloc.o \
+		e1000g_tx.o e1000g_rx.o e1000g_stat.o \
+		e1000g_osdep.o e1000g_workarounds.o
+		
 
 #
 #	Intel 82575 1G NIC driver module
 #
-IGB_OBJS =	igb_82575.o igb_api.o igb_mac.o igb_manage.o \
-		igb_nvm.o igb_osdep.o igb_phy.o igb_buf.o \
-		igb_debug.o igb_gld.o igb_log.o igb_main.o \
-		igb_rx.o igb_stat.o igb_tx.o
+IGB_OBJS =	igb_buf.o igb_debug.o igb_gld.o igb_log.o igb_main.o \
+		igb_rx.o igb_stat.o igb_tx.o igb_osdep.o
 
 #
 #	Intel Pro/100 NIC driver module
@@ -1916,12 +1998,48 @@ IPRB_OBJS =	iprb.o
 #
 #       Intel 10GbE PCIE NIC driver module
 #
-IXGBE_OBJS =    ixgbe_82598.o ixgbe_82599.o ixgbe_api.o		\
-                ixgbe_common.o ixgbe_phy.o			\
-                ixgbe_buf.o ixgbe_debug.o ixgbe_gld.o           \
-                ixgbe_log.o ixgbe_main.o 	                \
-                ixgbe_osdep.o ixgbe_rx.o ixgbe_stat.o           \
-                ixgbe_tx.o
+
+# illumos-written source files
+IXGBE_OBJS =    ixgbe_buf.o ixgbe_debug.o ixgbe_gld.o ixgbe_log.o ixgbe_main.o \
+		ixgbe_osdep.o ixgbe_rx.o ixgbe_stat.o ixgbe_tx.o
+
+# Intel-written source files
+IXGBE_INTC_OBJS	=	ixgbe_82598.o ixgbe_82599.o ixgbe_api.o ixgbe_common.o \
+			ixgbe_phy.o ixgbe_dcb.o ixgbe_dcb_82598.o \
+			ixgbe_dcb_82599.o ixgbe_mbx.o ixgbe_vf.o ixgbe_x540.o \
+			ixgbe_x550.o
+
+#
+#	Intel 40GbE PCIe NIC driver module
+#
+
+# illumos-written ones.
+I40E_OBJS =	i40e_main.o i40e_osdep.o i40e_intr.o i40e_transceiver.o \
+		i40e_stats.o i40e_gld.o 
+# Intel-written ones.
+I40E_INTC_OBJS = i40e_adminq.o i40e_common.o i40e_hmc.o i40e_lan_hmc.o \
+		 i40e_nvm.o
+
+#
+#	Solarflare 1/10/40GbE NIC driver module
+#
+#	NB: The illumos specific sources are listed first, with the
+#	common (OS-independent) sources afterwards.
+#
+SFXGE_OBJS =	sfxge_err.o sfxge_ev.o sfxge_hash.o sfxge_intr.o sfxge_mac.o \
+		sfxge_gld_v3.o sfxge_mon.o sfxge_phy.o \
+		sfxge_sram.o sfxge_bar.o sfxge_pci.o sfxge_nvram.o \
+		sfxge_rx.o sfxge_tcp.o sfxge_tx.o sfxge_mcdi.o sfxge_vpd.o \
+		sfxge.o sfxge_dma.o
+SFXGE_SF_OBJS =	efx_bootcfg.o efx_crc32.o efx_ev.o efx_filter.o \
+		efx_hash.o efx_intr.o efx_mac.o efx_mcdi.o efx_mon.o \
+		efx_nic.o efx_nvram.o efx_phy.o efx_port.o efx_rx.o \
+		efx_sram.o efx_tx.o efx_vpd.o efx_wol.o mcdi_mon.o \
+		siena_mac.o siena_mcdi.o siena_nic.o siena_nvram.o \
+		siena_phy.o siena_sram.o siena_vpd.o \
+		ef10_ev.o ef10_filter.o ef10_intr.o ef10_mac.o ef10_mcdi.o \
+		ef10_nic.o ef10_nvram.o ef10_phy.o ef10_rx.o ef10_tx.o \
+		ef10_vpd.o hunt_nic.o hunt_phy.o
 
 #
 #	NIU 10G/1G driver module
@@ -1942,6 +2060,19 @@ NXGE_NPI_OBJS =	\
 
 NXGE_HCALL_OBJS =	\
 		nxge_hcall.o
+
+#
+# Virtio modules
+#
+
+# Virtio core
+VIRTIO_OBJS = virtio.o
+
+# Virtio block driver
+VIOBLK_OBJS = vioblk.o
+
+# Virtio network driver
+VIOIF_OBJS = vioif.o
 
 #
 #	kiconv modules
@@ -1985,7 +2116,15 @@ MEGA_SAS_OBJS = megaraid_sas.o
 #
 #	MR_SAS module
 #
-MR_SAS_OBJS = mr_sas.o
+MR_SAS_OBJS = ld_pd_map.o mr_sas.o mr_sas_tbolt.o mr_sas_list.o
+
+#
+#	CPQARY3 module
+#
+CPQARY3_OBJS =	cpqary3.o cpqary3_noe.o cpqary3_talk2ctlr.o	\
+		cpqary3_isr.o cpqary3_transport.o cpqary3_mem.o	\
+		cpqary3_scsi.o cpqary3_util.o cpqary3_ioctl.o	\
+		cpqary3_bd.o
 
 #
 #	ISCSI_INITIATOR module
@@ -2016,3 +2155,60 @@ MYRI10GE_OBJS =	myri10ge.o myri10ge_lro.o
 NULLDRIVER_OBJS =	nulldriver.o
 
 TPM_OBJS =	tpm.o tpm_hcall.o
+
+#
+#	BNXE objects
+#
+BNXE_OBJS +=	bnxe_cfg.o		\
+		bnxe_fcoe.o		\
+		bnxe_debug.o		\
+		bnxe_gld.o		\
+		bnxe_hw.o		\
+		bnxe_intr.o		\
+		bnxe_kstat.o		\
+		bnxe_lock.o		\
+		bnxe_main.o		\
+		bnxe_mm.o		\
+		bnxe_mm_l4.o		\
+		bnxe_mm_l5.o		\
+		bnxe_rr.o		\
+		bnxe_rx.o		\
+		bnxe_timer.o		\
+		bnxe_tx.o		\
+		bnxe_workq.o		\
+		bnxe_clc.o		\
+		ecore_sp_verbs.o	\
+		bnxe_context.o		\
+		57710_init_values.o	\
+		57711_init_values.o	\
+		57712_init_values.o	\
+		bnxe_fw_funcs.o		\
+		bnxe_hw_debug.o		\
+		lm_l4fp.o		\
+		lm_l4rx.o		\
+		lm_l4sp.o		\
+		lm_l4tx.o		\
+		lm_l5.o			\
+		lm_l5sp.o		\
+		lm_dcbx.o		\
+		lm_devinfo.o		\
+		lm_dmae.o		\
+		lm_er.o			\
+		lm_hw_access.o		\
+		lm_hw_attn.o		\
+		lm_hw_init_reset.o	\
+		lm_main.o		\
+		lm_mcp.o		\
+		lm_niv.o		\
+		lm_nvram.o		\
+		lm_phy.o		\
+		lm_power.o		\
+		lm_recv.o		\
+		lm_resc.o		\
+		lm_sb.o			\
+		lm_send.o		\
+		lm_sp.o			\
+		lm_dcbx_mp.o		\
+		lm_sp_req_mgr.o		\
+		lm_stats.o		\
+		lm_util.o

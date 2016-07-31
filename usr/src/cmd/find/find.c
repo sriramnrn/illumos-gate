@@ -21,6 +21,7 @@
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright (c) 2013 Andrew Stormont.  All rights reserved.
  */
 
 
@@ -83,10 +84,10 @@ enum Command
 {
 	PRINT,
 	ACL, AMIN, AND, ATIME, CMIN, CPIO, CSIZE, CTIME, DEPTH, EXEC, F_GROUP,
-	F_GROUPACL, F_USER, F_USERACL, FOLLOW, FSTYPE, INAME, INUM, IREGEX,
-	LINKS, LOCAL, LPAREN, LS, MAXDEPTH, MINDEPTH, MMIN, MOUNT, MTIME, NAME,
-	NCPIO, NEWER, NOGRP, NOT, NOUSER, OK, OR, PERM, PRINT0, PRUNE, REGEX,
-	RPAREN, SIZE, TYPE, VARARGS, XATTR
+	F_GROUPACL, F_USER, F_USERACL, FOLLOW, FSTYPE, INAME, INUM, IPATH,
+	IREGEX,	LINKS, LOCAL, LPAREN, LS, MAXDEPTH, MINDEPTH, MMIN, MOUNT,
+	MTIME, NAME, NCPIO, NEWER, NOGRP, NOT, NOUSER, OK, OR, PATH, PERM,
+	PRINT0, PRUNE, REGEX, RPAREN, SIZE, TYPE, VARARGS, XATTR, DELETE
 };
 
 enum Type
@@ -118,6 +119,7 @@ static struct Args commands[] =
 	"-cpio",	CPIO,		Cpio,
 	"-ctime",	CTIME,		Num,
 	"-depth",	DEPTH,		Unary,
+	"-delete",	DELETE,		Unary,
 	"-exec",	EXEC,		Exec,
 	"-follow",	FOLLOW,		Unary,
 	"-fstype",	FSTYPE,		Str,
@@ -125,6 +127,7 @@ static struct Args commands[] =
 	"-groupacl",	F_GROUPACL,	Num,
 	"-iname",	INAME,		Str,
 	"-inum",	INUM,		Num,
+	"-ipath",	IPATH,		Str,
 	"-iregex",	IREGEX,		Str,
 	"-links",	LINKS,		Num,
 	"-local",	LOCAL,		Unary,
@@ -143,6 +146,7 @@ static struct Args commands[] =
 	"-o",		OR,		Op,
 	"-ok",		OK,		Exec,
 	"-or",		OR,		Op,
+	"-path",	PATH,		Str,
 	"-perm",	PERM,		Num,
 	"-print",	PRINT,		Unary,
 	"-print0",	PRINT0,		Unary,
@@ -201,6 +205,7 @@ struct Arglist
 static int		compile();
 static int		execute();
 static int		doexec(char *, char **, int *);
+static int		dodelete(char *, struct stat *, struct FTW *);
 static struct Args	*lookup();
 static int		ok();
 static void		usage(void)	__NORETURN;
@@ -526,6 +531,11 @@ int *actionp;
 		case DEPTH:
 			walkflags |= FTW_DEPTH;
 			break;
+		case DELETE:
+			walkflags |= (FTW_DEPTH | FTW_PHYS);
+			walkflags &= ~FTW_CHDIR;
+			(*actionp)++;
+			break;
 
 		case LOCAL:
 			np->first.l = 0L;
@@ -621,6 +631,8 @@ int *actionp;
 
 		case NAME:
 		case INAME:
+		case PATH:
+		case IPATH:
 			np->first.cp = b;
 			break;
 		case REGEX:
@@ -962,6 +974,9 @@ struct FTW *state;
 		case EXEC:
 			val = doexec(name, np->first.ap, NULL);
 			break;
+		case DELETE:
+			val = dodelete(name, statb, state);
+			break;
 
 		case VARARGS: {
 			struct Arglist *ap = np->first.vp;
@@ -993,16 +1008,20 @@ struct FTW *state;
 			break;
 
 		case NAME:
-		case INAME: {
-			char *name1;
-			int fnmflags = (np->action == INAME) ?
-			    FNM_IGNORECASE : 0;
+		case INAME:
+		case PATH:
+		case IPATH: {
+			char *path;
+			int fnmflags = 0;
+
+			if (np->action == INAME || np->action == IPATH)
+				fnmflags = FNM_IGNORECASE;
 
 			/*
 			 * basename(3c) may modify name, so
 			 * we need to pass another string
 			 */
-			if ((name1 = strdup(name)) == NULL) {
+			if ((path = strdup(name)) == NULL) {
 				(void) fprintf(stderr,
 				    gettext("%s: cannot strdup() %s: %s\n"),
 				    cmdname, name, strerror(errno));
@@ -1018,8 +1037,11 @@ struct FTW *state;
 #ifndef XPG4
 			fnmflags |= FNM_PERIOD;
 #endif
-			val = !fnmatch(np->first.cp, basename(name1), fnmflags);
-			free(name1);
+
+			val = !fnmatch(np->first.cp,
+			    (np->action == NAME || np->action == INAME)
+				? basename(path) : path, fnmflags);
+			free(path);
 			break;
 		}
 
@@ -1306,6 +1328,49 @@ doexec(char *name, char *argv[], int *exitcode)
 	return (!r);
 }
 
+static int
+dodelete(char *name, struct stat *statb, struct FTW *state)
+{
+	char *fn;
+	int rc = 0;
+
+	/* restrict symlinks */
+	if ((walkflags & FTW_PHYS) == 0) {
+		(void) fprintf(stderr,
+		    gettext("-delete is not allowed when symlinks are "
+		    "followed.\n"));
+		return (1);
+	}
+
+	fn = name + state->base;
+	if (strcmp(fn, ".") == 0) {
+		/* nothing to do */
+		return (1);
+	}
+
+	if (strchr(fn, '/') != NULL) {
+		(void) fprintf(stderr,
+		    gettext("-delete with relative path is unsafe."));
+		return (1);
+	}
+
+	if (S_ISDIR(statb->st_mode)) {
+		/* delete directory */
+		rc = rmdir(name);
+	} else {
+		/* delete file */
+		rc = unlink(name);
+	}
+
+	if (rc < 0) {
+		/* operation failed */
+		(void) fprintf(stderr, gettext("delete failed %s: %s\n"),
+		    name, strerror(errno));
+		return (1);
+	}
+
+	return (1);
+}
 
 /*
  *  Table lookup routine

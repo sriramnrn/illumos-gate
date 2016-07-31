@@ -23,6 +23,9 @@
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2013 Nexenta Systems, Inc.  All rights reserved.
+ */
 
 #ifndef _SATA_H
 #define	_SATA_H
@@ -157,6 +160,7 @@ struct sata_cport_info {
 						 * SATA_DTYPE_ATAPIDISK
 						 * SATA_DTYPE_PMULT
 						 * SATA_DTYPE_UNKNOWN
+						 * SATA_DTYPE_ATAPIPROC
 						 */
 	uint32_t		cport_dev_type;
 	union {
@@ -212,6 +216,7 @@ struct sata_drive_info {
 						 * SATA_DTYPE_ATAPICD
 						 * SATA_DTYPE_ATAPITAPE
 						 * SATA_DTYPE_ATAPIDISK
+						 * SATA_DTYPE_ATAPIPROC
 						 */
 	uint32_t	satadrv_type;
 
@@ -304,6 +309,7 @@ struct sata_pmport_info {
 						 * SATA_DTYPE_ATAPITAPE
 						 * SATA_DTYPE_ATAPIDISK
 						 * SATA_DTYPE_UNKNOWN
+						 * SATA_DTYPE_ATAPIPROC
 						 */
 	uint32_t	pmport_dev_type;
 
@@ -370,6 +376,7 @@ typedef	struct sata_pmport_info sata_pmport_info_t;
 #define	SATA_DEV_F_SATA1		0x10
 #define	SATA_DEV_F_SATA2		0x20
 #define	SATA_DEV_F_TCQ			0x40	/* Non NCQ tagged queuing */
+#define	SATA_DEV_F_SATA3		0x80
 
 /*
  * Device features enabled (satadrv_features_enabled)
@@ -514,7 +521,7 @@ struct sata_apt_sense_data {
  * usr/src/uts/common/sys/scsi/generic/sense.h
  */
 #define	SD_SCSI_ASC_NO_ADD_SENSE			0x00
-#define	SD_SCSI_ASC_ATP_INFO_AVAIL			0x00
+#define	SD_SCSI_ASC_APT_INFO_AVAIL			0x00
 #define	SD_SCSI_ASC_LU_NOT_READY			0x04
 #define	SD_SCSI_ASC_LU_NOT_RESPONSE			0x05
 #define	SD_SCSI_ASC_WRITE_ERR				0x0c

@@ -20,6 +20,9 @@
  */
 
 /*
+ * Copyright 2011, Richard Lowe.
+ */
+/*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -33,7 +36,7 @@
  */
 
 /* If you modify this file, you must increment CW_VERSION */
-#define	CW_VERSION	"1.29"
+#define	CW_VERSION	"1.30"
 
 /*
  * -#		Verbose mode
@@ -392,6 +395,8 @@ static const xarch_table_t xtbl[] = {
 	{ "amd64",	(SS11|M64), { "-m64", "-mtune=opteron" } },
 	{ "386",	SS11,	{ "-march=i386" } },
 	{ "pentium_pro", SS11,	{ "-march=pentiumpro" } },
+	{ "sse",	SS11, { "-msse", "-mfpmath=sse" } },
+	{ "sse2",	SS11, { "-msse2", "-mfpmath=sse" } },
 #elif defined(__sparc)
 	{ "generic",	(SS11|M32), { "-m32", "-mcpu=v8" } },
 	{ "generic64",	(SS11|M64), { "-m64", "-mcpu=v9" } },
@@ -526,17 +531,12 @@ warnings(struct aelist *h)
 	if (warningsonce++)
 		return;
 
+	/*
+	 * Enable as many warnings as exist, then disable those that we never
+	 * ever want.
+	 */
 	newae(h, "-Wall");
-	newae(h, "-Wno-unknown-pragmas");
-	newae(h, "-Wno-missing-braces");
-	newae(h, "-Wno-sign-compare");
-	newae(h, "-Wno-parentheses");
-	newae(h, "-Wno-uninitialized");
-	newae(h, "-Wno-implicit-function-declaration");
-	newae(h, "-Wno-unused");
-	newae(h, "-Wno-trigraphs");
-	newae(h, "-Wno-char-subscripts");
-	newae(h, "-Wno-switch");
+	newae(h, "-Wextra");
 }
 
 static void
@@ -655,6 +655,7 @@ do_gcc(cw_ictx_t *ctx)
 	newae(ctx->i_ae, "-fno-inline-functions");
 	newae(ctx->i_ae, "-fno-builtin");
 	newae(ctx->i_ae, "-fno-asm");
+	newae(ctx->i_ae, "-fdiagnostics-show-option");
 	newae(ctx->i_ae, "-nodefaultlibs");
 
 #if defined(__sparc)
@@ -1140,11 +1141,6 @@ do_gcc(cw_ictx_t *ctx)
 				break;
 			}
 #if defined(__x86)
-			if (strcmp(arg, "-Wu,-no_got_reloc") == 0) {
-				newae(ctx->i_ae, "-fno-jump-tables");
-				newae(ctx->i_ae, "-fno-constant-pools");
-				break;
-			}
 			if (strcmp(arg, "-Wu,-xmodel=kernel") == 0) {
 				newae(ctx->i_ae, "-ffreestanding");
 				newae(ctx->i_ae, "-mno-red-zone");
@@ -1842,7 +1838,7 @@ main(int argc, char **argv)
 		    "%s/SUNWspro/SS12/bin", dir);
 	}
 
-	if ((dir = getenv("GNU_ROOT")) != NULL) {
+	if ((dir = getenv("GCC_ROOT")) != NULL) {
 		(void) snprintf(default_dir[CW_C_GCC], MAXPATHLEN,
 		    "%s/bin", dir);
 	}

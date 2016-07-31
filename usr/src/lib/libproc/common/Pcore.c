@@ -22,10 +22,17 @@
  * Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
+/*
+ * Copyright 2012 DEY Storage Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013 by Delphix. All rights reserved.
+ * Copyright 2015 Gary Mills
+ */
 
 #include <sys/types.h>
 #include <sys/utsname.h>
 #include <sys/sysmacros.h>
+#include <sys/proc.h>
 
 #include <alloca.h>
 #include <rtld_db.h>
@@ -37,11 +44,15 @@
 #include <errno.h>
 #include <gelf.h>
 #include <stddef.h>
+#include <signal.h>
 
 #include "libproc.h"
 #include "Pcontrol.h"
 #include "P32ton.h"
 #include "Putil.h"
+#ifdef __x86
+#include "Pcore_linux.h"
+#endif
 
 /*
  * Pcore.c - Code to initialize a ps_prochandle from a core dump.  We
@@ -105,20 +116,202 @@ core_rw(struct ps_prochandle *P, void *buf, size_t n, uintptr_t addr,
 	return (n - resid);
 }
 
+/*ARGSUSED*/
 static ssize_t
-Pread_core(struct ps_prochandle *P, void *buf, size_t n, uintptr_t addr)
+Pread_core(struct ps_prochandle *P, void *buf, size_t n, uintptr_t addr,
+    void *data)
 {
 	return (core_rw(P, buf, n, addr, pread64));
 }
 
+/*ARGSUSED*/
 static ssize_t
-Pwrite_core(struct ps_prochandle *P, const void *buf, size_t n, uintptr_t addr)
+Pwrite_core(struct ps_prochandle *P, const void *buf, size_t n, uintptr_t addr,
+    void *data)
 {
 	return (core_rw(P, (void *)buf, n, addr,
 	    (ssize_t (*)(int, void *, size_t, off64_t)) pwrite64));
 }
 
-static const ps_rwops_t P_core_ops = { Pread_core, Pwrite_core };
+/*ARGSUSED*/
+static int
+Pcred_core(struct ps_prochandle *P, prcred_t *pcrp, int ngroups, void *data)
+{
+	core_info_t *core = data;
+
+	if (core->core_cred != NULL) {
+		/*
+		 * Avoid returning more supplementary group data than the
+		 * caller has allocated in their buffer.  We expect them to
+		 * check pr_ngroups afterward and potentially call us again.
+		 */
+		ngroups = MIN(ngroups, core->core_cred->pr_ngroups);
+
+		(void) memcpy(pcrp, core->core_cred,
+		    sizeof (prcred_t) + (ngroups - 1) * sizeof (gid_t));
+
+		return (0);
+	}
+
+	errno = ENODATA;
+	return (-1);
+}
+
+/*ARGSUSED*/
+static int
+Ppriv_core(struct ps_prochandle *P, prpriv_t **pprv, void *data)
+{
+	core_info_t *core = data;
+
+	if (core->core_priv == NULL) {
+		errno = ENODATA;
+		return (-1);
+	}
+
+	*pprv = malloc(core->core_priv_size);
+	if (*pprv == NULL) {
+		return (-1);
+	}
+
+	(void) memcpy(*pprv, core->core_priv, core->core_priv_size);
+	return (0);
+}
+
+/*ARGSUSED*/
+static const psinfo_t *
+Ppsinfo_core(struct ps_prochandle *P, psinfo_t *psinfo, void *data)
+{
+	return (&P->psinfo);
+}
+
+/*ARGSUSED*/
+static void
+Pfini_core(struct ps_prochandle *P, void *data)
+{
+	core_info_t *core = data;
+
+	if (core != NULL) {
+		extern void __priv_free_info(void *);
+		lwp_info_t *nlwp, *lwp = list_next(&core->core_lwp_head);
+		int i;
+
+		for (i = 0; i < core->core_nlwp; i++, lwp = nlwp) {
+			nlwp = list_next(lwp);
+#ifdef __sparc
+			if (lwp->lwp_gwins != NULL)
+				free(lwp->lwp_gwins);
+			if (lwp->lwp_xregs != NULL)
+				free(lwp->lwp_xregs);
+			if (lwp->lwp_asrs != NULL)
+				free(lwp->lwp_asrs);
+#endif
+			free(lwp);
+		}
+
+		if (core->core_platform != NULL)
+			free(core->core_platform);
+		if (core->core_uts != NULL)
+			free(core->core_uts);
+		if (core->core_cred != NULL)
+			free(core->core_cred);
+		if (core->core_priv != NULL)
+			free(core->core_priv);
+		if (core->core_privinfo != NULL)
+			__priv_free_info(core->core_privinfo);
+		if (core->core_ppii != NULL)
+			free(core->core_ppii);
+		if (core->core_zonename != NULL)
+			free(core->core_zonename);
+#ifdef __x86
+		if (core->core_ldt != NULL)
+			free(core->core_ldt);
+#endif
+
+		free(core);
+	}
+}
+
+/*ARGSUSED*/
+static char *
+Pplatform_core(struct ps_prochandle *P, char *s, size_t n, void *data)
+{
+	core_info_t *core = data;
+
+	if (core->core_platform == NULL) {
+		errno = ENODATA;
+		return (NULL);
+	}
+	(void) strncpy(s, core->core_platform, n - 1);
+	s[n - 1] = '\0';
+	return (s);
+}
+
+/*ARGSUSED*/
+static int
+Puname_core(struct ps_prochandle *P, struct utsname *u, void *data)
+{
+	core_info_t *core = data;
+
+	if (core->core_uts == NULL) {
+		errno = ENODATA;
+		return (-1);
+	}
+	(void) memcpy(u, core->core_uts, sizeof (struct utsname));
+	return (0);
+}
+
+/*ARGSUSED*/
+static char *
+Pzonename_core(struct ps_prochandle *P, char *s, size_t n, void *data)
+{
+	core_info_t *core = data;
+
+	if (core->core_zonename == NULL) {
+		errno = ENODATA;
+		return (NULL);
+	}
+	(void) strlcpy(s, core->core_zonename, n);
+	return (s);
+}
+
+#ifdef __x86
+/*ARGSUSED*/
+static int
+Pldt_core(struct ps_prochandle *P, struct ssd *pldt, int nldt, void *data)
+{
+	core_info_t *core = data;
+
+	if (pldt == NULL || nldt == 0)
+		return (core->core_nldt);
+
+	if (core->core_ldt != NULL) {
+		nldt = MIN(nldt, core->core_nldt);
+
+		(void) memcpy(pldt, core->core_ldt,
+		    nldt * sizeof (struct ssd));
+
+		return (nldt);
+	}
+
+	errno = ENODATA;
+	return (-1);
+}
+#endif
+
+static const ps_ops_t P_core_ops = {
+	.pop_pread	= Pread_core,
+	.pop_pwrite	= Pwrite_core,
+	.pop_cred	= Pcred_core,
+	.pop_priv	= Ppriv_core,
+	.pop_psinfo	= Ppsinfo_core,
+	.pop_fini	= Pfini_core,
+	.pop_platform	= Pplatform_core,
+	.pop_uname	= Puname_core,
+	.pop_zonename	= Pzonename_core,
+#ifdef __x86
+	.pop_ldt	= Pldt_core
+#endif
+};
 
 /*
  * Return the lwp_info_t for the given lwpid.  If no such lwpid has been
@@ -128,13 +321,14 @@ static const ps_rwops_t P_core_ops = { Pread_core, Pwrite_core };
 static lwp_info_t *
 lwpid2info(struct ps_prochandle *P, lwpid_t id)
 {
-	lwp_info_t *lwp = list_next(&P->core->core_lwp_head);
+	core_info_t *core = P->data;
+	lwp_info_t *lwp = list_next(&core->core_lwp_head);
 	lwp_info_t *next;
 	uint_t i;
 
-	for (i = 0; i < P->core->core_nlwp; i++, lwp = list_next(lwp)) {
+	for (i = 0; i < core->core_nlwp; i++, lwp = list_next(lwp)) {
 		if (lwp->lwp_id == id) {
-			P->core->core_lwp = lwp;
+			core->core_lwp = lwp;
 			return (lwp);
 		}
 		if (lwp->lwp_id < id) {
@@ -149,8 +343,8 @@ lwpid2info(struct ps_prochandle *P, lwpid_t id)
 	list_link(lwp, next);
 	lwp->lwp_id = id;
 
-	P->core->core_lwp = lwp;
-	P->core->core_nlwp++;
+	core->core_lwp = lwp;
+	core->core_nlwp++;
 
 	return (lwp);
 }
@@ -169,7 +363,9 @@ static int
 note_pstatus(struct ps_prochandle *P, size_t nbytes)
 {
 #ifdef _LP64
-	if (P->core->core_dmodel == PR_MODEL_ILP32) {
+	core_info_t *core = P->data;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
 		pstatus32_t ps32;
 
 		if (nbytes < sizeof (pstatus32_t) ||
@@ -201,7 +397,9 @@ note_lwpstatus(struct ps_prochandle *P, size_t nbytes)
 	lwpstatus_t lps;
 
 #ifdef _LP64
-	if (P->core->core_dmodel == PR_MODEL_ILP32) {
+	core_info_t *core = P->data;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
 		lwpstatus32_t l32;
 
 		if (nbytes < sizeof (lwpstatus32_t) ||
@@ -236,11 +434,215 @@ err:
 	return (-1);
 }
 
+#ifdef __x86
+
+static void
+lx_prpsinfo32_to_psinfo(lx_prpsinfo32_t *p32, psinfo_t *psinfo)
+{
+	psinfo->pr_flag = p32->pr_flag;
+	psinfo->pr_pid = p32->pr_pid;
+	psinfo->pr_ppid = p32->pr_ppid;
+	psinfo->pr_uid = p32->pr_uid;
+	psinfo->pr_gid = p32->pr_gid;
+	psinfo->pr_sid = p32->pr_sid;
+	psinfo->pr_pgid = p32->pr_pgrp;
+
+	(void) memcpy(psinfo->pr_fname, p32->pr_fname,
+	    sizeof (psinfo->pr_fname));
+	(void) memcpy(psinfo->pr_psargs, p32->pr_psargs,
+	    sizeof (psinfo->pr_psargs));
+}
+
+static void
+lx_prpsinfo64_to_psinfo(lx_prpsinfo64_t *p64, psinfo_t *psinfo)
+{
+	psinfo->pr_flag = p64->pr_flag;
+	psinfo->pr_pid = p64->pr_pid;
+	psinfo->pr_ppid = p64->pr_ppid;
+	psinfo->pr_uid = p64->pr_uid;
+	psinfo->pr_gid = p64->pr_gid;
+	psinfo->pr_sid = p64->pr_sid;
+	psinfo->pr_pgid = p64->pr_pgrp;
+	psinfo->pr_pgid = p64->pr_pgrp;
+
+	(void) memcpy(psinfo->pr_fname, p64->pr_fname,
+	    sizeof (psinfo->pr_fname));
+	(void) memcpy(psinfo->pr_psargs, p64->pr_psargs,
+	    sizeof (psinfo->pr_psargs));
+}
+
+static int
+note_linux_psinfo(struct ps_prochandle *P, size_t nbytes)
+{
+	core_info_t *core = P->data;
+	lx_prpsinfo32_t p32;
+	lx_prpsinfo64_t p64;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
+		if (nbytes < sizeof (p32) ||
+		    read(P->asfd, &p32, sizeof (p32)) != sizeof (p32))
+			goto err;
+
+		lx_prpsinfo32_to_psinfo(&p32, &P->psinfo);
+	} else {
+		if (nbytes < sizeof (p64) ||
+		    read(P->asfd, &p64, sizeof (p64)) != sizeof (p64))
+			goto err;
+
+		lx_prpsinfo64_to_psinfo(&p64, &P->psinfo);
+	}
+
+
+	P->status.pr_pid = P->psinfo.pr_pid;
+	P->status.pr_ppid = P->psinfo.pr_ppid;
+	P->status.pr_pgid = P->psinfo.pr_pgid;
+	P->status.pr_sid = P->psinfo.pr_sid;
+
+	P->psinfo.pr_nlwp = 0;
+	P->status.pr_nlwp = 0;
+
+	return (0);
+err:
+	dprintf("Pgrab_core: failed to read NT_PSINFO\n");
+	return (-1);
+}
+
+static void
+lx_prstatus64_to_lwp(lx_prstatus64_t *prs64, lwp_info_t *lwp)
+{
+	LTIME_TO_TIMESPEC(lwp->lwp_status.pr_utime, prs64->pr_utime);
+	LTIME_TO_TIMESPEC(lwp->lwp_status.pr_stime, prs64->pr_stime);
+
+	lwp->lwp_status.pr_reg[REG_R15] = prs64->pr_reg.lxr_r15;
+	lwp->lwp_status.pr_reg[REG_R14] = prs64->pr_reg.lxr_r14;
+	lwp->lwp_status.pr_reg[REG_R13] = prs64->pr_reg.lxr_r13;
+	lwp->lwp_status.pr_reg[REG_R12] = prs64->pr_reg.lxr_r12;
+	lwp->lwp_status.pr_reg[REG_R11] = prs64->pr_reg.lxr_r11;
+	lwp->lwp_status.pr_reg[REG_R10] = prs64->pr_reg.lxr_r10;
+	lwp->lwp_status.pr_reg[REG_R9] = prs64->pr_reg.lxr_r9;
+	lwp->lwp_status.pr_reg[REG_R8] = prs64->pr_reg.lxr_r8;
+
+	lwp->lwp_status.pr_reg[REG_RDI] = prs64->pr_reg.lxr_rdi;
+	lwp->lwp_status.pr_reg[REG_RSI] = prs64->pr_reg.lxr_rsi;
+	lwp->lwp_status.pr_reg[REG_RBP] = prs64->pr_reg.lxr_rbp;
+	lwp->lwp_status.pr_reg[REG_RBX] = prs64->pr_reg.lxr_rbx;
+	lwp->lwp_status.pr_reg[REG_RDX] = prs64->pr_reg.lxr_rdx;
+	lwp->lwp_status.pr_reg[REG_RCX] = prs64->pr_reg.lxr_rcx;
+	lwp->lwp_status.pr_reg[REG_RAX] = prs64->pr_reg.lxr_rax;
+
+	lwp->lwp_status.pr_reg[REG_RIP] = prs64->pr_reg.lxr_rip;
+	lwp->lwp_status.pr_reg[REG_CS] = prs64->pr_reg.lxr_cs;
+	lwp->lwp_status.pr_reg[REG_RSP] = prs64->pr_reg.lxr_rsp;
+	lwp->lwp_status.pr_reg[REG_FS] = prs64->pr_reg.lxr_fs;
+	lwp->lwp_status.pr_reg[REG_SS] = prs64->pr_reg.lxr_ss;
+	lwp->lwp_status.pr_reg[REG_GS] = prs64->pr_reg.lxr_gs;
+	lwp->lwp_status.pr_reg[REG_ES] = prs64->pr_reg.lxr_es;
+	lwp->lwp_status.pr_reg[REG_DS] = prs64->pr_reg.lxr_ds;
+
+	lwp->lwp_status.pr_reg[REG_GSBASE] = prs64->pr_reg.lxr_gs_base;
+	lwp->lwp_status.pr_reg[REG_FSBASE] = prs64->pr_reg.lxr_fs_base;
+}
+
+static void
+lx_prstatus32_to_lwp(lx_prstatus32_t *prs32, lwp_info_t *lwp)
+{
+	LTIME_TO_TIMESPEC(lwp->lwp_status.pr_utime, prs32->pr_utime);
+	LTIME_TO_TIMESPEC(lwp->lwp_status.pr_stime, prs32->pr_stime);
+
+#ifdef __amd64
+	lwp->lwp_status.pr_reg[REG_GS] = prs32->pr_reg.lxr_gs;
+	lwp->lwp_status.pr_reg[REG_FS] = prs32->pr_reg.lxr_fs;
+	lwp->lwp_status.pr_reg[REG_DS] = prs32->pr_reg.lxr_ds;
+	lwp->lwp_status.pr_reg[REG_ES] = prs32->pr_reg.lxr_es;
+	lwp->lwp_status.pr_reg[REG_RDI] = prs32->pr_reg.lxr_di;
+	lwp->lwp_status.pr_reg[REG_RSI] = prs32->pr_reg.lxr_si;
+	lwp->lwp_status.pr_reg[REG_RBP] = prs32->pr_reg.lxr_bp;
+	lwp->lwp_status.pr_reg[REG_RBX] = prs32->pr_reg.lxr_bx;
+	lwp->lwp_status.pr_reg[REG_RDX] = prs32->pr_reg.lxr_dx;
+	lwp->lwp_status.pr_reg[REG_RCX] = prs32->pr_reg.lxr_cx;
+	lwp->lwp_status.pr_reg[REG_RAX] = prs32->pr_reg.lxr_ax;
+	lwp->lwp_status.pr_reg[REG_RIP] = prs32->pr_reg.lxr_ip;
+	lwp->lwp_status.pr_reg[REG_CS] = prs32->pr_reg.lxr_cs;
+	lwp->lwp_status.pr_reg[REG_RFL] = prs32->pr_reg.lxr_flags;
+	lwp->lwp_status.pr_reg[REG_RSP] = prs32->pr_reg.lxr_sp;
+	lwp->lwp_status.pr_reg[REG_SS] = prs32->pr_reg.lxr_ss;
+#else /* __amd64 */
+	lwp->lwp_status.pr_reg[EBX] = prs32->pr_reg.lxr_bx;
+	lwp->lwp_status.pr_reg[ECX] = prs32->pr_reg.lxr_cx;
+	lwp->lwp_status.pr_reg[EDX] = prs32->pr_reg.lxr_dx;
+	lwp->lwp_status.pr_reg[ESI] = prs32->pr_reg.lxr_si;
+	lwp->lwp_status.pr_reg[EDI] = prs32->pr_reg.lxr_di;
+	lwp->lwp_status.pr_reg[EBP] = prs32->pr_reg.lxr_bp;
+	lwp->lwp_status.pr_reg[EAX] = prs32->pr_reg.lxr_ax;
+	lwp->lwp_status.pr_reg[EIP] = prs32->pr_reg.lxr_ip;
+	lwp->lwp_status.pr_reg[UESP] = prs32->pr_reg.lxr_sp;
+
+	lwp->lwp_status.pr_reg[DS] = prs32->pr_reg.lxr_ds;
+	lwp->lwp_status.pr_reg[ES] = prs32->pr_reg.lxr_es;
+	lwp->lwp_status.pr_reg[FS] = prs32->pr_reg.lxr_fs;
+	lwp->lwp_status.pr_reg[GS] = prs32->pr_reg.lxr_gs;
+	lwp->lwp_status.pr_reg[CS] = prs32->pr_reg.lxr_cs;
+	lwp->lwp_status.pr_reg[SS] = prs32->pr_reg.lxr_ss;
+
+	lwp->lwp_status.pr_reg[EFL] = prs32->pr_reg.lxr_flags;
+#endif	/* !__amd64 */
+}
+
+static int
+note_linux_prstatus(struct ps_prochandle *P, size_t nbytes)
+{
+	core_info_t *core = P->data;
+
+	lx_prstatus64_t prs64;
+	lx_prstatus32_t prs32;
+	lwp_info_t *lwp;
+	lwpid_t tid;
+
+	dprintf("looking for model %d, %ld/%ld\n", core->core_dmodel,
+	    (ulong_t)nbytes, (ulong_t)sizeof (prs32));
+	if (core->core_dmodel == PR_MODEL_ILP32) {
+		if (nbytes < sizeof (prs32) ||
+		    read(P->asfd, &prs32, sizeof (prs32)) != nbytes)
+			goto err;
+		tid = prs32.pr_pid;
+	} else {
+		if (nbytes < sizeof (prs64) ||
+		    read(P->asfd, &prs64, sizeof (prs64)) != nbytes)
+			goto err;
+		tid = prs64.pr_pid;
+	}
+
+	if ((lwp = lwpid2info(P, tid)) == NULL) {
+		dprintf("Pgrab_core: failed to add lwpid2info "
+		    "linux_prstatus\n");
+		return (-1);
+	}
+
+	P->psinfo.pr_nlwp++;
+	P->status.pr_nlwp++;
+
+	lwp->lwp_status.pr_lwpid = tid;
+
+	if (core->core_dmodel == PR_MODEL_ILP32)
+		lx_prstatus32_to_lwp(&prs32, lwp);
+	else
+		lx_prstatus64_to_lwp(&prs64, lwp);
+
+	return (0);
+err:
+	dprintf("Pgrab_core: failed to read NT_PRSTATUS\n");
+	return (-1);
+}
+
+#endif /* __x86 */
+
 static int
 note_psinfo(struct ps_prochandle *P, size_t nbytes)
 {
 #ifdef _LP64
-	if (P->core->core_dmodel == PR_MODEL_ILP32) {
+	core_info_t *core = P->data;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
 		psinfo32_t ps32;
 
 		if (nbytes < sizeof (psinfo32_t) ||
@@ -272,7 +674,9 @@ note_lwpsinfo(struct ps_prochandle *P, size_t nbytes)
 	lwpsinfo_t lps;
 
 #ifdef _LP64
-	if (P->core->core_dmodel == PR_MODEL_ILP32) {
+	core_info_t *core = P->data;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
 		lwpsinfo32_t l32;
 
 		if (nbytes < sizeof (lwpsinfo32_t) ||
@@ -300,11 +704,32 @@ err:
 }
 
 static int
+note_fdinfo(struct ps_prochandle *P, size_t nbytes)
+{
+	prfdinfo_t prfd;
+	fd_info_t *fip;
+
+	if ((nbytes < sizeof (prfd)) ||
+	    (read(P->asfd, &prfd, sizeof (prfd)) != sizeof (prfd))) {
+		dprintf("Pgrab_core: failed to read NT_FDINFO\n");
+		return (-1);
+	}
+
+	if ((fip = Pfd2info(P, prfd.pr_fd)) == NULL) {
+		dprintf("Pgrab_core: failed to add NT_FDINFO\n");
+		return (-1);
+	}
+	(void) memcpy(&fip->fd_info, &prfd, sizeof (prfd));
+	return (0);
+}
+
+static int
 note_platform(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	char *plat;
 
-	if (P->core->core_platform != NULL)
+	if (core->core_platform != NULL)
 		return (0);	/* Already seen */
 
 	if (nbytes != 0 && ((plat = malloc(nbytes + 1)) != NULL)) {
@@ -314,7 +739,7 @@ note_platform(struct ps_prochandle *P, size_t nbytes)
 			return (-1);
 		}
 		plat[nbytes - 1] = '\0';
-		P->core->core_platform = plat;
+		core->core_platform = plat;
 	}
 
 	return (0);
@@ -323,10 +748,11 @@ note_platform(struct ps_prochandle *P, size_t nbytes)
 static int
 note_utsname(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	size_t ubytes = sizeof (struct utsname);
 	struct utsname *utsp;
 
-	if (P->core->core_uts != NULL || nbytes < ubytes)
+	if (core->core_uts != NULL || nbytes < ubytes)
 		return (0);	/* Already seen or bad size */
 
 	if ((utsp = malloc(ubytes)) == NULL)
@@ -346,22 +772,23 @@ note_utsname(struct ps_prochandle *P, size_t nbytes)
 		dprintf("uts.machine = \"%s\"\n", utsp->machine);
 	}
 
-	P->core->core_uts = utsp;
+	core->core_uts = utsp;
 	return (0);
 }
 
 static int
 note_content(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	core_content_t content;
 
-	if (sizeof (P->core->core_content) != nbytes)
+	if (sizeof (core->core_content) != nbytes)
 		return (-1);
 
 	if (read(P->asfd, &content, sizeof (content)) != sizeof (content))
 		return (-1);
 
-	P->core->core_content = content;
+	core->core_content = content;
 
 	dprintf("core content = %llx\n", content);
 
@@ -371,6 +798,7 @@ note_content(struct ps_prochandle *P, size_t nbytes)
 static int
 note_cred(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	prcred_t *pcrp;
 	int ngroups;
 	const size_t min_size = sizeof (prcred_t) - sizeof (gid_t);
@@ -381,7 +809,7 @@ note_cred(struct ps_prochandle *P, size_t nbytes)
 	 * no group memberships. This allows for more flexibility when it
 	 * comes to slightly malformed -- but still valid -- notes.
 	 */
-	if (P->core->core_cred != NULL || nbytes < min_size)
+	if (core->core_cred != NULL || nbytes < min_size)
 		return (0);	/* Already seen or bad size */
 
 	ngroups = (nbytes - min_size) / sizeof (gid_t);
@@ -402,18 +830,19 @@ note_cred(struct ps_prochandle *P, size_t nbytes)
 		pcrp->pr_ngroups = ngroups;
 	}
 
-	P->core->core_cred = pcrp;
+	core->core_cred = pcrp;
 	return (0);
 }
 
-#if defined(__i386) || defined(__amd64)
+#ifdef __x86
 static int
 note_ldt(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	struct ssd *pldt;
 	uint_t nldt;
 
-	if (P->core->core_ldt != NULL || nbytes < sizeof (struct ssd))
+	if (core->core_ldt != NULL || nbytes < sizeof (struct ssd))
 		return (0);	/* Already seen or bad size */
 
 	nldt = nbytes / sizeof (struct ssd);
@@ -428,8 +857,8 @@ note_ldt(struct ps_prochandle *P, size_t nbytes)
 		return (-1);
 	}
 
-	P->core->core_ldt = pldt;
-	P->core->core_nldt = nldt;
+	core->core_ldt = pldt;
+	core->core_nldt = nldt;
 	return (0);
 }
 #endif	/* __i386 */
@@ -437,9 +866,10 @@ note_ldt(struct ps_prochandle *P, size_t nbytes)
 static int
 note_priv(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	prpriv_t *pprvp;
 
-	if (P->core->core_priv != NULL || nbytes < sizeof (prpriv_t))
+	if (core->core_priv != NULL || nbytes < sizeof (prpriv_t))
 		return (0);	/* Already seen or bad size */
 
 	if ((pprvp = malloc(nbytes)) == NULL)
@@ -451,18 +881,19 @@ note_priv(struct ps_prochandle *P, size_t nbytes)
 		return (-1);
 	}
 
-	P->core->core_priv = pprvp;
-	P->core->core_priv_size = nbytes;
+	core->core_priv = pprvp;
+	core->core_priv_size = nbytes;
 	return (0);
 }
 
 static int
 note_priv_info(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	extern void *__priv_parse_info();
 	priv_impl_info_t *ppii;
 
-	if (P->core->core_privinfo != NULL ||
+	if (core->core_privinfo != NULL ||
 	    nbytes < sizeof (priv_impl_info_t))
 		return (0);	/* Already seen or bad size */
 
@@ -476,17 +907,18 @@ note_priv_info(struct ps_prochandle *P, size_t nbytes)
 		return (-1);
 	}
 
-	P->core->core_privinfo = __priv_parse_info(ppii);
-	P->core->core_ppii = ppii;
+	core->core_privinfo = __priv_parse_info(ppii);
+	core->core_ppii = ppii;
 	return (0);
 }
 
 static int
 note_zonename(struct ps_prochandle *P, size_t nbytes)
 {
+	core_info_t *core = P->data;
 	char *zonename;
 
-	if (P->core->core_zonename != NULL)
+	if (core->core_zonename != NULL)
 		return (0);	/* Already seen */
 
 	if (nbytes != 0) {
@@ -498,7 +930,7 @@ note_zonename(struct ps_prochandle *P, size_t nbytes)
 			return (-1);
 		}
 		zonename[nbytes - 1] = '\0';
-		P->core->core_zonename = zonename;
+		core->core_zonename = zonename;
 	}
 
 	return (0);
@@ -510,7 +942,9 @@ note_auxv(struct ps_prochandle *P, size_t nbytes)
 	size_t n, i;
 
 #ifdef _LP64
-	if (P->core->core_dmodel == PR_MODEL_ILP32) {
+	core_info_t *core = P->data;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
 		auxv32_t *a32;
 
 		n = nbytes / sizeof (auxv32_t);
@@ -568,7 +1002,8 @@ note_auxv(struct ps_prochandle *P, size_t nbytes)
 static int
 note_xreg(struct ps_prochandle *P, size_t nbytes)
 {
-	lwp_info_t *lwp = P->core->core_lwp;
+	core_info_t *core = P->data;
+	lwp_info_t *lwp = core->core_lwp;
 	size_t xbytes = sizeof (prxregset_t);
 	prxregset_t *xregs;
 
@@ -591,7 +1026,8 @@ note_xreg(struct ps_prochandle *P, size_t nbytes)
 static int
 note_gwindows(struct ps_prochandle *P, size_t nbytes)
 {
-	lwp_info_t *lwp = P->core->core_lwp;
+	core_info_t *core = P->data;
+	lwp_info_t *lwp = core->core_lwp;
 
 	if (lwp == NULL || lwp->lwp_gwins != NULL || nbytes == 0)
 		return (0);	/* No lwp yet or already seen or no data */
@@ -606,7 +1042,7 @@ note_gwindows(struct ps_prochandle *P, size_t nbytes)
 	 * fails since we have to zero out gwindows first anyway.
 	 */
 #ifdef _LP64
-	if (P->core->core_dmodel == PR_MODEL_ILP32) {
+	if (core->core_dmodel == PR_MODEL_ILP32) {
 		gwindows32_t g32;
 
 		(void) memset(&g32, 0, sizeof (g32));
@@ -628,7 +1064,8 @@ note_gwindows(struct ps_prochandle *P, size_t nbytes)
 static int
 note_asrs(struct ps_prochandle *P, size_t nbytes)
 {
-	lwp_info_t *lwp = P->core->core_lwp;
+	core_info_t *core = P->data;
+	lwp_info_t *lwp = core->core_lwp;
 	int64_t *asrs;
 
 	if (lwp == NULL || lwp->lwp_asrs != NULL || nbytes < sizeof (asrset_t))
@@ -649,11 +1086,43 @@ note_asrs(struct ps_prochandle *P, size_t nbytes)
 #endif	/* __sparcv9 */
 #endif	/* __sparc */
 
+static int
+note_spymaster(struct ps_prochandle *P, size_t nbytes)
+{
+#ifdef _LP64
+	core_info_t *core = P->data;
+
+	if (core->core_dmodel == PR_MODEL_ILP32) {
+		psinfo32_t ps32;
+
+		if (nbytes < sizeof (psinfo32_t) ||
+		    read(P->asfd, &ps32, sizeof (ps32)) != sizeof (ps32))
+			goto err;
+
+		psinfo_32_to_n(&ps32, &P->spymaster);
+	} else
+#endif
+	if (nbytes < sizeof (psinfo_t) || read(P->asfd,
+	    &P->spymaster, sizeof (psinfo_t)) != sizeof (psinfo_t))
+		goto err;
+
+	dprintf("spymaster pr_fname = <%s>\n", P->psinfo.pr_fname);
+	dprintf("spymaster pr_psargs = <%s>\n", P->psinfo.pr_psargs);
+	dprintf("spymaster pr_wstat = 0x%x\n", P->psinfo.pr_wstat);
+
+	return (0);
+
+err:
+	dprintf("Pgrab_core: failed to read NT_SPYMASTER\n");
+	return (-1);
+}
+
 /*ARGSUSED*/
 static int
 note_notsup(struct ps_prochandle *P, size_t nbytes)
 {
-	dprintf("skipping unsupported note type\n");
+	dprintf("skipping unsupported note type of size %ld bytes\n",
+	    (ulong_t)nbytes);
 	return (0);
 }
 
@@ -663,9 +1132,17 @@ note_notsup(struct ps_prochandle *P, size_t nbytes)
  */
 static int (*nhdlrs[])(struct ps_prochandle *, size_t) = {
 	note_notsup,		/*  0	unassigned		*/
+#ifdef __x86
+	note_linux_prstatus,		/*  1	NT_PRSTATUS (old)	*/
+#else
 	note_notsup,		/*  1	NT_PRSTATUS (old)	*/
+#endif
 	note_notsup,		/*  2	NT_PRFPREG (old)	*/
+#ifdef __x86
+	note_linux_psinfo,		/*  3	NT_PRPSINFO (old)	*/
+#else
 	note_notsup,		/*  3	NT_PRPSINFO (old)	*/
+#endif
 #ifdef __sparc
 	note_xreg,		/*  4	NT_PRXREG		*/
 #else
@@ -684,7 +1161,7 @@ static int (*nhdlrs[])(struct ps_prochandle *, size_t) = {
 	note_notsup,		/*  7	NT_GWINDOWS		*/
 	note_notsup,		/*  8	NT_ASRS			*/
 #endif
-#if defined(__i386) || defined(__amd64)
+#ifdef __x86
 	note_ldt,		/*  9	NT_LDT			*/
 #else
 	note_notsup,		/*  9	NT_LDT			*/
@@ -701,7 +1178,72 @@ static int (*nhdlrs[])(struct ps_prochandle *, size_t) = {
 	note_priv_info,		/* 19	NT_PRPRIVINFO		*/
 	note_content,		/* 20	NT_CONTENT		*/
 	note_zonename,		/* 21	NT_ZONENAME		*/
+	note_fdinfo,		/* 22	NT_FDINFO		*/
+	note_spymaster,		/* 23	NT_SPYMASTER		*/
 };
+
+static void
+core_report_mapping(struct ps_prochandle *P, GElf_Phdr *php)
+{
+	prkillinfo_t killinfo;
+	siginfo_t *si = &killinfo.prk_info;
+	char signame[SIG2STR_MAX], sig[64], info[64];
+	void *addr = (void *)(uintptr_t)php->p_vaddr;
+
+	const char *errfmt = "core file data for mapping at %p not saved: %s\n";
+	const char *incfmt = "core file incomplete due to %s%s\n";
+	const char *msgfmt = "mappings at and above %p are missing\n";
+
+	if (!(php->p_flags & PF_SUNW_KILLED)) {
+		int err = 0;
+
+		(void) pread64(P->asfd, &err,
+		    sizeof (err), (off64_t)php->p_offset);
+
+		Perror_printf(P, errfmt, addr, strerror(err));
+		dprintf(errfmt, addr, strerror(err));
+		return;
+	}
+
+	if (!(php->p_flags & PF_SUNW_SIGINFO))
+		return;
+
+	(void) memset(&killinfo, 0, sizeof (killinfo));
+
+	(void) pread64(P->asfd, &killinfo,
+	    sizeof (killinfo), (off64_t)php->p_offset);
+
+	/*
+	 * While there is (or at least should be) only one segment that has
+	 * PF_SUNW_SIGINFO set, the signal information there is globally
+	 * useful (even if only to those debugging libproc consumers); we hang
+	 * the signal information gleaned here off of the ps_prochandle.
+	 */
+	P->map_missing = php->p_vaddr;
+	P->killinfo = killinfo.prk_info;
+
+	if (sig2str(si->si_signo, signame) == -1) {
+		(void) snprintf(sig, sizeof (sig),
+		    "<Unknown signal: 0x%x>, ", si->si_signo);
+	} else {
+		(void) snprintf(sig, sizeof (sig), "SIG%s, ", signame);
+	}
+
+	if (si->si_code == SI_USER || si->si_code == SI_QUEUE) {
+		(void) snprintf(info, sizeof (info),
+		    "pid=%d uid=%d zone=%d ctid=%d",
+		    si->si_pid, si->si_uid, si->si_zoneid, si->si_ctid);
+	} else {
+		(void) snprintf(info, sizeof (info),
+		    "code=%d", si->si_code);
+	}
+
+	Perror_printf(P, incfmt, sig, info);
+	Perror_printf(P, msgfmt, addr);
+
+	dprintf(incfmt, sig, info);
+	dprintf(msgfmt, addr);
+}
 
 /*
  * Add information on the address space mapping described by the given
@@ -710,10 +1252,10 @@ static int (*nhdlrs[])(struct ps_prochandle *, size_t) = {
 static int
 core_add_mapping(struct ps_prochandle *P, GElf_Phdr *php)
 {
-	int err = 0;
+	core_info_t *core = P->data;
 	prmap_t pmap;
 
-	dprintf("mapping base %llx filesz %llu memsz %llu offset %llu\n",
+	dprintf("mapping base %llx filesz %llx memsz %llx offset %llx\n",
 	    (u_longlong_t)php->p_vaddr, (u_longlong_t)php->p_filesz,
 	    (u_longlong_t)php->p_memsz, (u_longlong_t)php->p_offset);
 
@@ -725,15 +1267,8 @@ core_add_mapping(struct ps_prochandle *P, GElf_Phdr *php)
 	 * PF_SUNW_FAILURE in the Phdr and try to stash away the errno for us.
 	 */
 	if (php->p_flags & PF_SUNW_FAILURE) {
-		(void) pread64(P->asfd, &err,
-		    sizeof (err), (off64_t)php->p_offset);
-
-		Perror_printf(P, "core file data for mapping at %p not saved: "
-		    "%s\n", (void *)(uintptr_t)php->p_vaddr, strerror(err));
-		dprintf("core file data for mapping at %p not saved: %s\n",
-		    (void *)(uintptr_t)php->p_vaddr, strerror(err));
-
-	} else if (php->p_filesz != 0 && php->p_offset >= P->core->core_size) {
+		core_report_mapping(P, php);
+	} else if (php->p_filesz != 0 && php->p_offset >= core->core_size) {
 		Perror_printf(P, "core file may be corrupt -- data for mapping "
 		    "at %p is missing\n", (void *)(uintptr_t)php->p_vaddr);
 		dprintf("core file may be corrupt -- data for mapping "
@@ -1369,6 +1904,7 @@ core_find_data(struct ps_prochandle *P, Elf *elf, rd_loadobj_t *rlp)
 static int
 core_iter_mapping(const rd_loadobj_t *rlp, struct ps_prochandle *P)
 {
+	core_info_t *core = P->data;
 	char lname[PATH_MAX], buf[PATH_MAX];
 	file_info_t *fp;
 	map_info_t *mp;
@@ -1396,7 +1932,7 @@ core_iter_mapping(const rd_loadobj_t *rlp, struct ps_prochandle *P)
 	 */
 	if ((fp = mp->map_file) == NULL &&
 	    (fp = file_info_new(P, mp)) == NULL) {
-		P->core->core_errno = errno;
+		core->core_errno = errno;
 		dprintf("failed to malloc mapping data\n");
 		return (0); /* Abort */
 	}
@@ -1404,7 +1940,7 @@ core_iter_mapping(const rd_loadobj_t *rlp, struct ps_prochandle *P)
 
 	/* Create a local copy of the load object representation */
 	if ((fp->file_lo = calloc(1, sizeof (rd_loadobj_t))) == NULL) {
-		P->core->core_errno = errno;
+		core->core_errno = errno;
 		dprintf("failed to malloc mapping data\n");
 		return (0); /* Abort */
 	}
@@ -1671,6 +2207,7 @@ struct ps_prochandle *
 Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 {
 	struct ps_prochandle *P;
+	core_info_t *core_info;
 	map_info_t *stk_mp, *brk_mp;
 	const char *execname;
 	char *interp;
@@ -1679,6 +2216,9 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 	struct stat64 stbuf;
 	void *phbuf, *php;
 	size_t nbytes;
+#ifdef __x86
+	boolean_t from_linux = B_FALSE;
+#endif
 
 	elf_file_t aout;
 	elf_file_t core;
@@ -1736,7 +2276,7 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 	P->agentstatfd = -1;
 	P->zoneroot = NULL;
 	P->info_valid = 1;
-	P->ops = &P_core_ops;
+	Pinit_ops(&P->ops, &P_core_ops);
 
 	Pinitsym(P);
 
@@ -1755,33 +2295,35 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 	 * Allocate and initialize a core_info_t to hang off the ps_prochandle
 	 * structure.  We keep all core-specific information in this structure.
 	 */
-	if ((P->core = calloc(1, sizeof (core_info_t))) == NULL) {
+	if ((core_info = calloc(1, sizeof (core_info_t))) == NULL) {
 		*perr = G_STRANGE;
 		goto err;
 	}
 
-	list_link(&P->core->core_lwp_head, NULL);
-	P->core->core_size = stbuf.st_size;
+	P->data = core_info;
+	list_link(&core_info->core_lwp_head, NULL);
+	core_info->core_size = stbuf.st_size;
 	/*
 	 * In the days before adjustable core file content, this was the
 	 * default core file content. For new core files, this value will
 	 * be overwritten by the NT_CONTENT note section.
 	 */
-	P->core->core_content = CC_CONTENT_STACK | CC_CONTENT_HEAP |
+	core_info->core_content = CC_CONTENT_STACK | CC_CONTENT_HEAP |
 	    CC_CONTENT_DATA | CC_CONTENT_RODATA | CC_CONTENT_ANON |
 	    CC_CONTENT_SHANON;
 
 	switch (core.e_hdr.e_ident[EI_CLASS]) {
 	case ELFCLASS32:
-		P->core->core_dmodel = PR_MODEL_ILP32;
+		core_info->core_dmodel = PR_MODEL_ILP32;
 		break;
 	case ELFCLASS64:
-		P->core->core_dmodel = PR_MODEL_LP64;
+		core_info->core_dmodel = PR_MODEL_LP64;
 		break;
 	default:
 		*perr = G_FORMAT;
 		goto err;
 	}
+	core_info->core_osabi = core.e_hdr.e_ident[EI_OSABI];
 
 	/*
 	 * Because the core file may be a large file, we can't use libelf to
@@ -1828,6 +2370,9 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 				goto err;
 			}
 			break;
+		default:
+			dprintf("Pgrab_core: unknown phdr %d\n", phdr.p_type);
+			break;
 		}
 
 		php = (char *)php + core.e_hdr.e_phentsize;
@@ -1841,7 +2386,8 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 	 * If we couldn't find anything of type PT_NOTE, or only one PT_NOTE
 	 * was present, abort.  The core file is either corrupt or too old.
 	 */
-	if (notes == 0 || notes == 1) {
+	if (notes == 0 || (notes == 1 && core_info->core_osabi ==
+	    ELFOSABI_SOLARIS)) {
 		*perr = G_NOTE;
 		goto err;
 	}
@@ -1871,7 +2417,7 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 	 */
 	for (nleft = note_phdr.p_filesz; nleft > 0; ) {
 		Elf64_Nhdr nhdr;
-		off64_t off, namesz;
+		off64_t off, namesz, descsz;
 
 		/*
 		 * Although <sys/elf.h> defines both Elf32_Nhdr and Elf64_Nhdr
@@ -1894,6 +2440,7 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 		 * the name field and the padding to 4-byte alignment.
 		 */
 		namesz = P2ROUNDUP((off64_t)nhdr.n_namesz, (off64_t)4);
+
 		if (lseek64(P->asfd, namesz, SEEK_CUR) == (off64_t)-1) {
 			dprintf("failed to seek past name and padding\n");
 			*perr = G_STRANGE;
@@ -1910,17 +2457,29 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 		 */
 		if (nhdr.n_type < sizeof (nhdlrs) / sizeof (nhdlrs[0])) {
 			if (nhdlrs[nhdr.n_type](P, nhdr.n_descsz) < 0) {
+				dprintf("handler for type %d returned < 0",
+				    nhdr.n_type);
 				*perr = G_NOTE;
 				goto err;
 			}
-		} else
+			/*
+			 * The presence of either of these notes indicates that
+			 * the dump was generated on Linux.
+			 */
+#ifdef __x86
+			if (nhdr.n_type == NT_PRSTATUS ||
+			    nhdr.n_type == NT_PRPSINFO)
+				from_linux = B_TRUE;
+#endif
+		} else {
 			(void) note_notsup(P, nhdr.n_descsz);
+		}
 
 		/*
 		 * Seek past the current note data to the next Elf_Nhdr
 		 */
-		if (lseek64(P->asfd, off + nhdr.n_descsz,
-		    SEEK_SET) == (off64_t)-1) {
+		descsz = P2ROUNDUP((off64_t)nhdr.n_descsz, (off64_t)4);
+		if (lseek64(P->asfd, off + descsz, SEEK_SET) == (off64_t)-1) {
 			dprintf("Pgrab_core: failed to seek to next nhdr\n");
 			*perr = G_STRANGE;
 			goto err;
@@ -1930,8 +2489,64 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 		 * Subtract the size of the header and its data from what
 		 * we have left to process.
 		 */
-		nleft -= sizeof (nhdr) + namesz + nhdr.n_descsz;
+		nleft -= sizeof (nhdr) + namesz + descsz;
 	}
+
+#ifdef __x86
+	if (from_linux) {
+		size_t tcount, pid;
+		lwp_info_t *lwp;
+
+		P->status.pr_dmodel = core_info->core_dmodel;
+
+		lwp = list_next(&core_info->core_lwp_head);
+
+		pid = P->status.pr_pid;
+
+		for (tcount = 0; tcount < core_info->core_nlwp;
+		    tcount++, lwp = list_next(lwp)) {
+			dprintf("Linux thread with id %d\n", lwp->lwp_id);
+
+			/*
+			 * In the case we don't have a valid psinfo (i.e. pid is
+			 * 0, probably because of gdb creating the core) assume
+			 * lowest pid count is the first thread (what if the
+			 * next thread wraps the pid around?)
+			 */
+			if (P->status.pr_pid == 0 &&
+			    ((pid == 0 && lwp->lwp_id > 0) ||
+			    (lwp->lwp_id < pid))) {
+				pid = lwp->lwp_id;
+			}
+		}
+
+		if (P->status.pr_pid != pid) {
+			dprintf("No valid pid, setting to %ld\n", (ulong_t)pid);
+			P->status.pr_pid = pid;
+			P->psinfo.pr_pid = pid;
+		}
+
+		/*
+		 * Consumers like mdb expect the first thread to actually have
+		 * an id of 1, on linux that is actually the pid. Find the the
+		 * thread with our process id, and set the id to 1
+		 */
+		if ((lwp = lwpid2info(P, pid)) == NULL) {
+			dprintf("Couldn't find first thread\n");
+			*perr = G_STRANGE;
+			goto err;
+		}
+
+		dprintf("setting representative thread: %d\n", lwp->lwp_id);
+
+		lwp->lwp_id = 1;
+		lwp->lwp_status.pr_lwpid = 1;
+
+		/* set representative thread */
+		(void) memcpy(&P->status.pr_lwp, &lwp->lwp_status,
+		    sizeof (P->status.pr_lwp));
+	}
+#endif /* __x86 */
 
 	if (nleft != 0) {
 		dprintf("Pgrab_core: note section malformed\n");
@@ -2002,7 +2617,7 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 		interp = dp->d_buf;
 
 	} else if (base_addr != (uintptr_t)-1L) {
-		if (P->core->core_dmodel == PR_MODEL_LP64)
+		if (core_info->core_dmodel == PR_MODEL_LP64)
 			interp = "/usr/lib/64/ld.so.1";
 		else
 			interp = "/usr/lib/ld.so.1";
@@ -2049,10 +2664,16 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 		P->map_exec = core_name_mapping(P, addr, "a.out");
 
 	/*
-	 * If we're a statically linked executable, then just locate the
-	 * executable's text and data and name them after the executable.
+	 * If we're a statically linked executable (or we're on x86 and looking
+	 * at a Linux core dump), then just locate the executable's text and
+	 * data and name them after the executable.
 	 */
+#ifndef __x86
 	if (base_addr == (uintptr_t)-1L) {
+#else
+	if (base_addr == (uintptr_t)-1L || from_linux) {
+#endif
+		dprintf("looking for text and data: %s\n", execname);
 		map_info_t *tmp, *dmp;
 		file_info_t *fp;
 		rd_loadobj_t rl;
@@ -2117,8 +2738,8 @@ Pfgrab_core(int core_fd, const char *aout_path, int *perr)
 		(void) rd_loadobj_iter(P->rap, (rl_iter_f *)
 		    core_iter_mapping, P);
 
-		if (P->core->core_errno != 0) {
-			errno = P->core->core_errno;
+		if (core_info->core_errno != 0) {
+			errno = core_info->core_errno;
 			*perr = G_STRANGE;
 			goto err;
 		}

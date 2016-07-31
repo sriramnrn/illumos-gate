@@ -22,6 +22,8 @@
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2015 Joyent, Inc. All rights reserved.
+ * Copyright 2014 Andrew Stormont.
  */
 
 /*
@@ -90,7 +92,6 @@ int			get_ethernet_address(uuid_node_t *);
 static	int		map_state();
 static	void 		format_uuid(struct uuid *, uint16_t, uuid_time_t,
     uuid_node_t);
-static	void		fill_random_bytes(uchar_t *, int);
 static	int		uuid_create(struct uuid *);
 static	void		gen_ethernet_address(uuid_node_t *);
 static	void		revalidate_data(uuid_node_t *);
@@ -184,7 +185,7 @@ gen_ethernet_address(uuid_node_t *system_node)
 	uchar_t		node[6];
 
 	if (get_ethernet_address(system_node) != 0) {
-		fill_random_bytes(node, 6);
+		arc4random_buf(node, 6);
 		(void) memcpy(system_node->nodeID, node, 6);
 		/*
 		 * use 8:0:20 with the multicast bit set
@@ -312,46 +313,6 @@ uuid_print(struct uuid u)
 }
 
 /*
- * Fills buf with random numbers - nbytes is the number of bytes
- * to fill-in. Tries to use /dev/urandom random number generator-
- * if that fails for some reason, it retries MAX_RETRY times. If
- * it still fails then it uses srand48(3C)
- */
-static void
-fill_random_bytes(uchar_t *buf, int nbytes)
-{
-	int i, fd, retries = 0;
-
-	fd = open(URANDOM_PATH, O_RDONLY);
-	if (fd >= 0) {
-		while (nbytes > 0) {
-			i = read(fd, buf, nbytes);
-			if ((i < 0) && (errno == EINTR)) {
-				continue;
-			}
-			if (i <= 0) {
-				if (retries++ == MAX_RETRY)
-					break;
-				continue;
-			}
-			nbytes -= i;
-			buf += i;
-			retries = 0;
-		}
-		if (nbytes == 0) {
-			(void) close(fd);
-			return;
-		}
-	}
-	for (i = 0; i < nbytes; i++) {
-		*buf++ = get_random() & 0xFF;
-	}
-	if (fd >= 0) {
-		(void) close(fd);
-	}
-}
-
-/*
  * Unpacks the structure members in "struct uuid" to a char string "uuid_t".
  */
 void
@@ -437,7 +398,7 @@ uuid_generate_random(uuid_t uu)
 	(void) memset(uu, 0, sizeof (uuid_t));
 	(void) memset(&uuid, 0, sizeof (struct uuid));
 
-	fill_random_bytes(uu, sizeof (uuid_t));
+	arc4random_buf(uu, sizeof (uuid_t));
 	string_to_struct(&uuid, uu);
 	/*
 	 * This is version 4, so say so in the UUID version field (4 bits)
@@ -483,25 +444,12 @@ uuid_generate_time(uuid_t uu)
 
 /*
  * Creates a new UUID. The uuid will be generated based on high-quality
- * randomness from /dev/urandom, if available by calling uuid_generate_random.
- * If it failed to generate UUID then uuid_generate will call
- * uuid_generate_time.
+ * randomness from arc4random(3C).
  */
 void
 uuid_generate(uuid_t uu)
 {
-	int fd;
-
-	if (uu == NULL) {
-		return;
-	}
-	fd = open(URANDOM_PATH, O_RDONLY);
-	if (fd >= 0) {
-		(void) close(fd);
-		uuid_generate_random(uu);
-	} else {
-		(void) uuid_generate_time(uu);
-	}
+	uuid_generate_random(uu);
 }
 
 /*
@@ -527,8 +475,8 @@ uuid_clear(uuid_t uu)
  * binary format into a 36-byte string (plus trailing null char)
  * and stores this value in the character string pointed to by out.
  */
-void
-uuid_unparse(uuid_t uu, char *out)
+static void
+uuid_unparse_common(uuid_t uu, char *out, boolean_t upper)
 {
 	struct uuid 	uuid;
 	uint16_t	clock_seq;
@@ -540,24 +488,42 @@ uuid_unparse(uuid_t uu, char *out)
 		return;
 	}
 
-	/* XXX user should have allocated enough memory */
-	/*
-	 * if (strlen(out) < UUID_PRINTABLE_STRING_LENGTH) {
-	 * return;
-	 * }
-	 */
 	string_to_struct(&uuid, uu);
 	clock_seq = uuid.clock_seq_hi_and_reserved;
 	clock_seq = (clock_seq  << 8) | uuid.clock_seq_low;
 	for (i = 0; i < 6; i++) {
-		(void) sprintf(&etheraddr[index++], "%.2x", uuid.node_addr[i]);
+		(void) sprintf(&etheraddr[index++], upper ? "%.2X" : "%.2x",
+		    uuid.node_addr[i]);
 		index++;
 	}
 	etheraddr[index] = '\0';
 
-	(void) snprintf(out, 25, "%08x-%04x-%04x-%04x-",
+	(void) snprintf(out, 25,
+	    upper ? "%08X-%04X-%04X-%04X-" : "%08x-%04x-%04x-%04x-",
 	    uuid.time_low, uuid.time_mid, uuid.time_hi_and_version, clock_seq);
 	(void) strlcat(out, etheraddr, UUID_PRINTABLE_STRING_LENGTH);
+}
+
+void
+uuid_unparse_upper(uuid_t uu, char *out)
+{
+	uuid_unparse_common(uu, out, B_TRUE);
+}
+
+void
+uuid_unparse_lower(uuid_t uu, char *out)
+{
+	uuid_unparse_common(uu, out, B_FALSE);
+}
+
+void
+uuid_unparse(uuid_t uu, char *out)
+{
+	/*
+	 * Historically uuid_unparse on Solaris returns lower case,
+	 * for compatibility we preserve this behaviour.
+	 */
+	uuid_unparse_common(uu, out, B_FALSE);
 }
 
 /*

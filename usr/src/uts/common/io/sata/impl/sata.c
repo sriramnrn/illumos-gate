@@ -23,7 +23,7 @@
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -1952,6 +1952,58 @@ sata_register_pmult(dev_info_t *dip, sata_device_t *sd, sata_pmult_gscr_t *sg)
 }
 
 /*
+ * sata_split_model splits the model ID into vendor and product IDs.
+ * It assumes that a vendor ID cannot be longer than 8 characters, and
+ * that vendor and product ID are separated by a whitespace.
+ */
+void
+sata_split_model(char *model, char **vendor, char **product)
+{
+	int i, modlen;
+	char *vid, *pid;
+
+	/*
+	 * remove whitespace at the end of model
+	 */
+	for (i = SATA_ID_MODEL_LEN; i > 0; i--)
+		if (model[i] == ' ' || model[i] == '\t' || model[i] == '\0')
+			model[i] = '\0';
+		else
+			break;
+
+	/*
+	 * try to split model into into vid/pid
+	 */
+	modlen = strlen(model);
+	for (i = 0, pid = model; i < modlen; i++, pid++)
+		if ((*pid == ' ') || (*pid == '\t'))
+			break;
+
+	/*
+	 * only use vid if it is less than 8 chars (as in SCSI)
+	 */
+	if (i < modlen && i <= 8) {
+		vid = model;
+		/*
+		 * terminate vid, establish pid
+		 */
+		*pid++ = '\0';
+	} else {
+		/*
+		 * vid will stay "ATA     "
+		 */
+		vid = NULL;
+		/*
+		 * model is all pid
+		 */
+		pid = model;
+	}
+
+	*vendor = vid;
+	*product = pid;
+}
+
+/*
  * sata_name_child is for composing the name of the node
  * the format of the name is "target,0".
  */
@@ -1995,7 +2047,6 @@ sata_scsi_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 	char			model[SATA_ID_MODEL_LEN + 1];
 	char			fw[SATA_ID_FW_LEN + 1];
 	char			*vid, *pid;
-	int			i;
 
 	/*
 	 * Fail tran_tgt_init for .conf stub node
@@ -2060,17 +2111,7 @@ sata_scsi_tgt_init(dev_info_t *hba_dip, dev_info_t *tgt_dip,
 	model[SATA_ID_MODEL_LEN] = 0;
 	fw[SATA_ID_FW_LEN] = 0;
 
-	/* split model into into vid/pid */
-	for (i = 0, pid = model; i < SATA_ID_MODEL_LEN; i++, pid++)
-		if ((*pid == ' ') || (*pid == '\t'))
-			break;
-	if (i < SATA_ID_MODEL_LEN) {
-		vid = model;
-		*pid++ = 0;		/* terminate vid, establish pid */
-	} else {
-		vid = NULL;		/* vid will stay "ATA     " */
-		pid = model;		/* model is all pid */
-	}
+	sata_split_model(model, &vid, &pid);
 
 	if (vid)
 		(void) scsi_device_prop_update_inqstring(sd, INQUIRY_VENDOR_ID,
@@ -7596,7 +7637,7 @@ sata_txlt_apt_completion(sata_pkt_t *sata_pkt)
 			*scsipkt->pkt_scbp = STATUS_CHECK;
 			sata_fill_ata_return_desc(sata_pkt,
 			    KEY_RECOVERABLE_ERROR,
-			    SD_SCSI_ASC_ATP_INFO_AVAIL, 0);
+			    SD_SCSI_ASC_APT_INFO_AVAIL, 0x1d);
 		}
 
 		if (spx->txlt_tmp_buf != NULL) {
@@ -12603,6 +12644,9 @@ sata_identify_device(sata_hba_inst_t *sata_hba_inst,
 		case SATA_ATAPI_DIRACC_DEV:
 			sdinfo->satadrv_type = SATA_DTYPE_ATAPIDISK;
 			break;
+		case SATA_ATAPI_PROC_DEV:
+			sdinfo->satadrv_type = SATA_DTYPE_ATAPIPROC;
+			break;
 		default:
 			sdinfo->satadrv_type = SATA_DTYPE_UNKNOWN;
 		}
@@ -12706,6 +12750,10 @@ sata_show_drive_info(sata_hba_inst_t *sata_hba_inst,
 		(void) sprintf(msg_buf, "SATA disk (ATAPI) device at");
 		break;
 
+	case SATA_DTYPE_ATAPIPROC:
+		(void) sprintf(msg_buf, "SATA processor (ATAPI) device at");
+		break;
+
 	case SATA_DTYPE_UNKNOWN:
 		(void) sprintf(msg_buf,
 		    "Unsupported SATA device type (cfg 0x%x) at ",
@@ -12796,7 +12844,9 @@ sata_show_drive_info(sata_hba_inst_t *sata_hba_inst,
 	    (sdinfo->satadrv_id.ai_features87 & SATA_SMART_SELF_TEST_SUPPORTED))
 		(void) strlcat(msg_buf, ", SMART self-test", MAXPATHLEN);
 	cmn_err(CE_CONT, "?\t %s\n", msg_buf);
-	if (sdinfo->satadrv_features_support & SATA_DEV_F_SATA2)
+	if (sdinfo->satadrv_features_support & SATA_DEV_F_SATA3)
+		cmn_err(CE_CONT, "?\tSATA Gen3 signaling speed (6.0Gbps)\n");
+	else if (sdinfo->satadrv_features_support & SATA_DEV_F_SATA2)
 		cmn_err(CE_CONT, "?\tSATA Gen2 signaling speed (3.0Gbps)\n");
 	else if (sdinfo->satadrv_features_support & SATA_DEV_F_SATA1)
 		cmn_err(CE_CONT, "?\tSATA Gen1 signaling speed (1.5Gbps)\n");
@@ -13757,7 +13807,11 @@ sata_fetch_device_identify_data(sata_hba_inst_t *sata_hba_inst,
 				sdinfo->satadrv_features_support |=
 				    SATA_DEV_F_NCQ;
 			if (sdinfo->satadrv_id.ai_satacap &
-			    (SATA_1_SPEED | SATA_2_SPEED)) {
+			    (SATA_1_SPEED | SATA_2_SPEED | SATA_3_SPEED)) {
+				if (sdinfo->satadrv_id.ai_satacap &
+				    SATA_3_SPEED)
+					sdinfo->satadrv_features_support |=
+					    SATA_DEV_F_SATA3;
 				if (sdinfo->satadrv_id.ai_satacap &
 				    SATA_2_SPEED)
 					sdinfo->satadrv_features_support |=
@@ -15991,6 +16045,11 @@ sata_cfgadm_state(sata_hba_inst_t *sata_hba_inst, int32_t port,
 		}
 		break;
 	}
+	case SATA_DTYPE_ATAPIPROC:
+		ap_state->ap_rstate = AP_RSTATE_CONNECTED;
+		ap_state->ap_ostate = AP_OSTATE_UNCONFIGURED;
+		ap_state->ap_condition = AP_COND_OK;
+		break;
 	default:
 		ap_state->ap_rstate = AP_RSTATE_CONNECTED;
 		ap_state->ap_ostate = AP_OSTATE_UNCONFIGURED;
@@ -16091,6 +16150,10 @@ sata_ioctl_get_ap_type(sata_hba_inst_t *sata_hba_inst,
 
 	case SATA_DTYPE_ATAPITAPE:
 		ap_type = "tape";
+		break;
+
+	case SATA_DTYPE_ATAPIPROC:
+		ap_type = "processor";
 		break;
 
 	case SATA_DTYPE_PMULT:

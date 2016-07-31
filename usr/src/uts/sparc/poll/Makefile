@@ -23,7 +23,6 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 
 #
 #	Path to the base of the uts directory tree (usually /usr/src/uts).
@@ -54,7 +53,13 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 #
 # lint pass one enforcement
 #
-CFLAGS += $(CCVERBOSE)
+CFLAGS		+= $(CCVERBOSE)
+CERRWARN	+= -_gcc=-Wno-uninitialized
+
+#
+# See uts/intel/poll/Makefile for why this is necessary.
+#
+LINTTAGS      += -erroff=E_BAD_PTR_CAST_ALIGN
 
 #
 #	Default build targets.

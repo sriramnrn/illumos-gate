@@ -20,6 +20,7 @@
 #
 
 # Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 
 include ../Makefile.master
 
@@ -82,7 +83,6 @@ MANIFEST_SUBDIRS=			\
 	cmd-inet/usr.lib/ilbd		\
 	cmd-inet/usr.lib/in.chargend	\
 	cmd-inet/usr.lib/in.daytimed	\
-	cmd-inet/usr.lib/in.dhcpd	\
 	cmd-inet/usr.lib/in.discardd	\
 	cmd-inet/usr.lib/in.echod	\
 	cmd-inet/usr.lib/in.ndpd	\
@@ -94,7 +94,6 @@ MANIFEST_SUBDIRS=			\
 	cmd-inet/usr.lib/vrrpd		\
 	cmd-inet/usr.lib/wpad		\
 	cmd-inet/usr.sbin		\
-	cmd-inet/usr.sbin/in.ftpd	\
 	cmd-inet/usr.sbin/in.rdisc	\
 	cmd-inet/usr.sbin/in.routed	\
 	cmd-inet/usr.sbin/in.talkd	\
@@ -145,11 +144,9 @@ MANIFEST_SUBDIRS=			\
 	ypcmd/ypupdated			\
 	zonestat/zonestatd
 
-$(CLOSED_BUILD)MANIFEST_SUBDIRS +=		\
-	$(CLOSED)/cmd/cmd-inet/usr.lib/in.iked
-
-DTEST_SUBDIRS= \
-	dtrace/test/tst
+MISC_SUBDIRS=		\
+	dtrace/test/tst \
+	sgs
 
 .KEEP_STATE:
 
@@ -163,13 +160,13 @@ DTEST_SUBDIRS= \
 
 .NO_PARALLEL:
 
-check: svccfg_check $(MANIFEST_TOPDIRS) $(MANIFEST_SUBDIRS) $(DTEST_SUBDIRS)
+check: svccfg_check $(MANIFEST_TOPDIRS) $(MANIFEST_SUBDIRS) $(MISC_SUBDIRS)
 
 svccfg_check:
 	@$(ECHO) "building requirements for svccfg check ..."; \
 	(cd $(SRC)/cmd/svc/seed && pwd && $(MAKE) $(MFLAGS) global.db)
 
-$(MANIFEST_TOPDIRS) $(MANIFEST_SUBDIRS) $(DTEST_SUBDIRS): FRC
+$(MANIFEST_TOPDIRS) $(MANIFEST_SUBDIRS) $(MISC_SUBDIRS): FRC
 	@cd $@; pwd; $(MAKE) check
 
 FRC:

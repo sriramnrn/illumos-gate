@@ -18,10 +18,12 @@
  *
  * CDDL HEADER END
  */
+
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
- * Copyright (c) 2011 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright 2015 RackTop Systems.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 /*
@@ -196,8 +198,10 @@ fix_paths(nvlist_t *nv, name_entry_t *names)
 	if ((devid = get_devid(best->ne_name)) == NULL) {
 		(void) nvlist_remove_all(nv, ZPOOL_CONFIG_DEVID);
 	} else {
-		if (nvlist_add_string(nv, ZPOOL_CONFIG_DEVID, devid) != 0)
+		if (nvlist_add_string(nv, ZPOOL_CONFIG_DEVID, devid) != 0) {
+			devid_str_free(devid);
 			return (-1);
+		}
 		devid_str_free(devid);
 	}
 
@@ -434,13 +438,13 @@ get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
 	pool_entry_t *pe;
 	vdev_entry_t *ve;
 	config_entry_t *ce;
-	nvlist_t *ret = NULL, *config = NULL, *tmp, *nvtop, *nvroot;
+	nvlist_t *ret = NULL, *config = NULL, *tmp = NULL, *nvtop, *nvroot;
 	nvlist_t **spares, **l2cache;
 	uint_t i, nspares, nl2cache;
 	boolean_t config_seen;
 	uint64_t best_txg;
-	char *name, *hostname, *comment;
-	uint64_t version, guid;
+	char *name, *hostname = NULL;
+	uint64_t guid;
 	uint_t children = 0;
 	nvlist_t **child = NULL;
 	uint_t holes;
@@ -526,61 +530,48 @@ get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
 				 * configuration:
 				 *
 				 *	version
-				 * 	pool guid
-				 * 	name
+				 *	pool guid
+				 *	name
 				 *	comment (if available)
-				 * 	pool state
+				 *	pool state
 				 *	hostid (if available)
 				 *	hostname (if available)
 				 */
-				uint64_t state;
+				uint64_t state, version;
+				char *comment = NULL;
 
-				verify(nvlist_lookup_uint64(tmp,
-				    ZPOOL_CONFIG_VERSION, &version) == 0);
-				if (nvlist_add_uint64(config,
-				    ZPOOL_CONFIG_VERSION, version) != 0)
-					goto nomem;
-				verify(nvlist_lookup_uint64(tmp,
-				    ZPOOL_CONFIG_POOL_GUID, &guid) == 0);
-				if (nvlist_add_uint64(config,
-				    ZPOOL_CONFIG_POOL_GUID, guid) != 0)
-					goto nomem;
-				verify(nvlist_lookup_string(tmp,
-				    ZPOOL_CONFIG_POOL_NAME, &name) == 0);
-				if (nvlist_add_string(config,
-				    ZPOOL_CONFIG_POOL_NAME, name) != 0)
-					goto nomem;
+				version = fnvlist_lookup_uint64(tmp,
+				    ZPOOL_CONFIG_VERSION);
+				fnvlist_add_uint64(config,
+				    ZPOOL_CONFIG_VERSION, version);
+				guid = fnvlist_lookup_uint64(tmp,
+				    ZPOOL_CONFIG_POOL_GUID);
+				fnvlist_add_uint64(config,
+				    ZPOOL_CONFIG_POOL_GUID, guid);
+				name = fnvlist_lookup_string(tmp,
+				    ZPOOL_CONFIG_POOL_NAME);
+				fnvlist_add_string(config,
+				    ZPOOL_CONFIG_POOL_NAME, name);
 
-				/*
-				 * COMMENT is optional, don't bail if it's not
-				 * there, instead, set it to NULL.
-				 */
 				if (nvlist_lookup_string(tmp,
-				    ZPOOL_CONFIG_COMMENT, &comment) != 0)
-					comment = NULL;
-				else if (nvlist_add_string(config,
-				    ZPOOL_CONFIG_COMMENT, comment) != 0)
-					goto nomem;
+				    ZPOOL_CONFIG_COMMENT, &comment) == 0)
+					fnvlist_add_string(config,
+					    ZPOOL_CONFIG_COMMENT, comment);
 
-				verify(nvlist_lookup_uint64(tmp,
-				    ZPOOL_CONFIG_POOL_STATE, &state) == 0);
-				if (nvlist_add_uint64(config,
-				    ZPOOL_CONFIG_POOL_STATE, state) != 0)
-					goto nomem;
+				state = fnvlist_lookup_uint64(tmp,
+				    ZPOOL_CONFIG_POOL_STATE);
+				fnvlist_add_uint64(config,
+				    ZPOOL_CONFIG_POOL_STATE, state);
 
 				hostid = 0;
 				if (nvlist_lookup_uint64(tmp,
 				    ZPOOL_CONFIG_HOSTID, &hostid) == 0) {
-					if (nvlist_add_uint64(config,
-					    ZPOOL_CONFIG_HOSTID, hostid) != 0)
-						goto nomem;
-					verify(nvlist_lookup_string(tmp,
-					    ZPOOL_CONFIG_HOSTNAME,
-					    &hostname) == 0);
-					if (nvlist_add_string(config,
-					    ZPOOL_CONFIG_HOSTNAME,
-					    hostname) != 0)
-						goto nomem;
+					fnvlist_add_uint64(config,
+					    ZPOOL_CONFIG_HOSTID, hostid);
+					hostname = fnvlist_lookup_string(tmp,
+					    ZPOOL_CONFIG_HOSTNAME);
+					fnvlist_add_string(config,
+					    ZPOOL_CONFIG_HOSTNAME, hostname);
 				}
 
 				config_seen = B_TRUE;
@@ -676,8 +667,10 @@ get_configs(libzfs_handle_t *hdl, pool_list_t *pl, boolean_t active_ok)
 				    nvlist_add_uint64(holey,
 				    ZPOOL_CONFIG_ID, c) != 0 ||
 				    nvlist_add_uint64(holey,
-				    ZPOOL_CONFIG_GUID, 0ULL) != 0)
+				    ZPOOL_CONFIG_GUID, 0ULL) != 0) {
+					nvlist_free(holey);
 					goto nomem;
+				}
 				child[c] = holey;
 			}
 		}
@@ -1087,17 +1080,11 @@ zpool_open_func(void *arg)
 	}
 	(void) close(fd);
 
-
 	rn->rn_config = config;
-	if (config != NULL) {
-		assert(rn->rn_nozpool == B_FALSE);
-	}
 }
 
 /*
- * Given a file descriptor, clear (zero) the label information.  This function
- * is currently only used in the appliance stack as part of the ZFS sysevent
- * module.
+ * Given a file descriptor, clear (zero) the label information.
  */
 int
 zpool_clear_label(int fd)
@@ -1116,8 +1103,10 @@ zpool_clear_label(int fd)
 
 	for (l = 0; l < VDEV_LABELS; l++) {
 		if (pwrite64(fd, label, sizeof (vdev_label_t),
-		    label_offset(size, l)) != sizeof (vdev_label_t))
+		    label_offset(size, l)) != sizeof (vdev_label_t)) {
+			free(label);
 			return (-1);
+		}
 	}
 
 	free(label);
@@ -1135,13 +1124,12 @@ static nvlist_t *
 zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 {
 	int i, dirs = iarg->paths;
-	DIR *dirp = NULL;
 	struct dirent64 *dp;
 	char path[MAXPATHLEN];
 	char *end, **dir = iarg->path;
 	size_t pathleft;
 	nvlist_t *ret = NULL;
-	static char *default_dir = "/dev/dsk";
+	static char *default_dir = ZFS_DISK_ROOT;
 	pool_list_t pools = { 0 };
 	pool_entry_t *pe, *penext;
 	vdev_entry_t *ve, *venext;
@@ -1163,8 +1151,10 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 	 */
 	for (i = 0; i < dirs; i++) {
 		tpool_t *t;
-		char *rdsk;
+		char rdsk[MAXPATHLEN];
 		int dfd;
+		boolean_t config_failed = B_FALSE;
+		DIR *dirp;
 
 		/* use realpath to normalize the path */
 		if (realpath(dir[i], path) == 0) {
@@ -1182,13 +1172,15 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 		 * reading the labels skips a bunch of slow operations during
 		 * close(2) processing, so we replace /dev/dsk with /dev/rdsk.
 		 */
-		if (strcmp(path, "/dev/dsk/") == 0)
-			rdsk = "/dev/rdsk/";
+		if (strcmp(path, ZFS_DISK_ROOTD) == 0)
+			(void) strlcpy(rdsk, ZFS_RDISK_ROOTD, sizeof (rdsk));
 		else
-			rdsk = path;
+			(void) strlcpy(rdsk, path, sizeof (rdsk));
 
 		if ((dfd = open64(rdsk, O_RDONLY)) < 0 ||
 		    (dirp = fdopendir(dfd)) == NULL) {
+			if (dfd >= 0)
+				(void) close(dfd);
 			zfs_error_aux(hdl, strerror(errno));
 			(void) zfs_error_fmt(hdl, EZFS_BADPATH,
 			    dgettext(TEXT_DOMAIN, "cannot open '%s'"),
@@ -1236,7 +1228,7 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 		cookie = NULL;
 		while ((slice = avl_destroy_nodes(&slice_cache,
 		    &cookie)) != NULL) {
-			if (slice->rn_config != NULL) {
+			if (slice->rn_config != NULL && !config_failed) {
 				nvlist_t *config = slice->rn_config;
 				boolean_t matched = B_TRUE;
 
@@ -1257,13 +1249,16 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 				}
 				if (!matched) {
 					nvlist_free(config);
-					config = NULL;
-					continue;
+				} else {
+					/*
+					 * use the non-raw path for the config
+					 */
+					(void) strlcpy(end, slice->rn_name,
+					    pathleft);
+					if (add_config(hdl, &pools, path,
+					    config) != 0)
+						config_failed = B_TRUE;
 				}
-				/* use the non-raw path for the config */
-				(void) strlcpy(end, slice->rn_name, pathleft);
-				if (add_config(hdl, &pools, path, config) != 0)
-					goto error;
 			}
 			free(slice->rn_name);
 			free(slice);
@@ -1271,7 +1266,9 @@ zpool_find_import_impl(libzfs_handle_t *hdl, importargs_t *iarg)
 		avl_destroy(&slice_cache);
 
 		(void) closedir(dirp);
-		dirp = NULL;
+
+		if (config_failed)
+			goto error;
 	}
 
 	ret = get_configs(hdl, &pools, iarg->can_be_active);
@@ -1283,8 +1280,7 @@ error:
 			venext = ve->ve_next;
 			for (ce = ve->ve_configs; ce != NULL; ce = cenext) {
 				cenext = ce->ce_next;
-				if (ce->ce_config)
-					nvlist_free(ce->ce_config);
+				nvlist_free(ce->ce_config);
 				free(ce);
 			}
 			free(ve);
@@ -1294,13 +1290,9 @@ error:
 
 	for (ne = pools.names; ne != NULL; ne = nenext) {
 		nenext = ne->ne_next;
-		if (ne->ne_name)
-			free(ne->ne_name);
+		free(ne->ne_name);
 		free(ne);
 	}
-
-	if (dirp)
-		(void) closedir(dirp);
 
 	return (ret);
 }
@@ -1390,21 +1382,15 @@ zpool_find_import_cached(libzfs_handle_t *hdl, const char *cachefile,
 
 	elem = NULL;
 	while ((elem = nvlist_next_nvpair(raw, elem)) != NULL) {
-		verify(nvpair_value_nvlist(elem, &src) == 0);
+		src = fnvpair_value_nvlist(elem);
 
-		verify(nvlist_lookup_string(src, ZPOOL_CONFIG_POOL_NAME,
-		    &name) == 0);
+		name = fnvlist_lookup_string(src, ZPOOL_CONFIG_POOL_NAME);
 		if (poolname != NULL && strcmp(poolname, name) != 0)
 			continue;
 
-		verify(nvlist_lookup_uint64(src, ZPOOL_CONFIG_POOL_GUID,
-		    &this_guid) == 0);
-		if (guid != 0) {
-			verify(nvlist_lookup_uint64(src, ZPOOL_CONFIG_POOL_GUID,
-			    &this_guid) == 0);
-			if (guid != this_guid)
-				continue;
-		}
+		this_guid = fnvlist_lookup_uint64(src, ZPOOL_CONFIG_POOL_GUID);
+		if (guid != 0 && guid != this_guid)
+			continue;
 
 		if (pool_active(hdl, name, this_guid, &active) != 0) {
 			nvlist_free(raw);
@@ -1581,9 +1567,16 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 		 * its state to active.
 		 */
 		if (pool_active(hdl, name, guid, &isactive) == 0 && isactive &&
-		    (zhp = zpool_open_canfail(hdl, name)) != NULL &&
-		    zpool_get_prop_int(zhp, ZPOOL_PROP_READONLY, NULL))
-			stateval = POOL_STATE_ACTIVE;
+		    (zhp = zpool_open_canfail(hdl, name)) != NULL) {
+			if (zpool_get_prop_int(zhp, ZPOOL_PROP_READONLY, NULL))
+				stateval = POOL_STATE_ACTIVE;
+
+			/*
+			 * All we needed the zpool handle for is the
+			 * readonly prop check.
+			 */
+			zpool_close(zhp);
+		}
 
 		ret = B_TRUE;
 		break;
@@ -1658,9 +1651,9 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 		cb.cb_type = ZPOOL_CONFIG_SPARES;
 		if (zpool_iter(hdl, find_aux, &cb) == 1) {
 			name = (char *)zpool_get_name(cb.cb_zhp);
-			ret = TRUE;
+			ret = B_TRUE;
 		} else {
-			ret = FALSE;
+			ret = B_FALSE;
 		}
 		break;
 
@@ -1674,9 +1667,9 @@ zpool_in_use(libzfs_handle_t *hdl, int fd, pool_state_t *state, char **namestr,
 		cb.cb_type = ZPOOL_CONFIG_L2CACHE;
 		if (zpool_iter(hdl, find_aux, &cb) == 1) {
 			name = (char *)zpool_get_name(cb.cb_zhp);
-			ret = TRUE;
+			ret = B_TRUE;
 		} else {
-			ret = FALSE;
+			ret = B_FALSE;
 		}
 		break;
 

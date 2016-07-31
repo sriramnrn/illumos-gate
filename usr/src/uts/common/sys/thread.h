@@ -164,7 +164,7 @@ typedef struct _kthread {
 	k_sigset_t	t_sig;		/* signals pending to this process */
 	k_sigset_t	t_extsig;	/* signals sent from another contract */
 	k_sigset_t	t_hold;		/* hold signal bit mask */
-	k_sigset_t	t_sigwait;	/* sigtimedwait() is accepting these */
+	k_sigset_t	t_sigwait;	/* sigtimedwait/sigfd accepting these */
 	struct	_kthread *t_forw;	/* process's forward thread link */
 	struct	_kthread *t_back;	/* process's backward thread link */
 	struct	_kthread *t_thlink;	/* tid (lwpid) lookup hash link */
@@ -339,6 +339,7 @@ typedef struct _kthread {
 	uintptr_t	t_dtrace_astpc;	/* DTrace return sequence location */
 #ifdef __amd64
 	uint64_t	t_dtrace_regv;	/* DTrace saved reg from fasttrap */
+	uint64_t	t_useracc;	/* SMAP state saved across swtch() */
 #endif
 	hrtime_t	t_hrtime;	/* high-res last time on cpu */
 	kmutex_t	t_ctx_lock;	/* protects t_ctx in removectx() */

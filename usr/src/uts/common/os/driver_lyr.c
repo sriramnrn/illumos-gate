@@ -21,6 +21,9 @@
 /*
  * Copyright (c) 1994, 2010, Oracle and/or its affiliates. All rights reserved.
  */
+/*
+ * Copyright (c) 2013, Joyent, Inc.  All rights reserved.
+ */
 
 /*
  * Layered driver support.
@@ -127,6 +130,10 @@ static kmutex_t			ldi_handle_hash_lock[LH_HASH_SZ];
 static struct ldi_handle	*ldi_handle_hash[LH_HASH_SZ];
 static size_t			ldi_handle_hash_count;
 
+/*
+ * Use of "ldi_ev_callback_list" must be protected by ldi_ev_lock()
+ * and ldi_ev_unlock().
+ */
 static struct ldi_ev_callback_list ldi_ev_callback_list;
 
 static uint32_t ldi_ev_id_pool = 0;
@@ -166,6 +173,8 @@ ldi_init(void)
 	cv_init(&ldi_ev_callback_list.le_cv, NULL, CV_DEFAULT, NULL);
 	ldi_ev_callback_list.le_busy = 0;
 	ldi_ev_callback_list.le_thread = NULL;
+	ldi_ev_callback_list.le_walker_next = NULL;
+	ldi_ev_callback_list.le_walker_prev = NULL;
 	list_create(&ldi_ev_callback_list.le_head,
 	    sizeof (ldi_ev_callback_impl_t),
 	    offsetof(ldi_ev_callback_impl_t, lec_list));
@@ -399,7 +408,7 @@ handle_alloc(vnode_t *vp, struct ldi_ident *ident)
 	/* add it to the handle hash */
 	lhp->lh_next = ldi_handle_hash[index];
 	ldi_handle_hash[index] = lhp;
-	atomic_add_long(&ldi_handle_hash_count, 1);
+	atomic_inc_ulong(&ldi_handle_hash_count);
 
 	LDI_ALLOCFREE((CE_WARN, "ldi handle alloc: new "
 	    "lh=0x%p, ident=0x%p, vp=0x%p, drv=%s, minor=0x%x",
@@ -439,7 +448,7 @@ handle_release(struct ldi_handle *lhp)
 	lhpp = handle_find_ref_nolock(lhp->lh_vp, lhp->lh_ident);
 	ASSERT((lhpp != NULL) && (*lhpp != NULL));
 	*lhpp = lhp->lh_next;
-	atomic_add_long(&ldi_handle_hash_count, -1);
+	atomic_dec_ulong(&ldi_handle_hash_count);
 	mutex_exit(&ldi_handle_hash_lock[index]);
 
 	VN_RELE(lhp->lh_vp);
@@ -3329,8 +3338,12 @@ ldi_invoke_notify(dev_info_t *dip, dev_t dev, int spec_type, char *event,
 
 	ret = LDI_EV_NONE;
 	ldi_ev_lock();
+
+	VERIFY(ldi_ev_callback_list.le_walker_next == NULL);
 	listp = &ldi_ev_callback_list.le_head;
-	for (lecp = list_head(listp); lecp; lecp = list_next(listp, lecp)) {
+	for (lecp = list_head(listp); lecp; lecp =
+	    ldi_ev_callback_list.le_walker_next) {
+		ldi_ev_callback_list.le_walker_next = list_next(listp, lecp);
 
 		/* Check if matching device */
 		if (!ldi_ev_device_match(lecp, dip, dev, spec_type))
@@ -3386,7 +3399,9 @@ ldi_invoke_notify(dev_info_t *dip, dev_t dev, int spec_type, char *event,
 	 * Undo notifies already sent
 	 */
 	lecp = list_prev(listp, lecp);
-	for (; lecp; lecp = list_prev(listp, lecp)) {
+	VERIFY(ldi_ev_callback_list.le_walker_prev == NULL);
+	for (; lecp; lecp = ldi_ev_callback_list.le_walker_prev) {
+		ldi_ev_callback_list.le_walker_prev = list_prev(listp, lecp);
 
 		/*
 		 * Check if matching device
@@ -3437,6 +3452,8 @@ ldi_invoke_notify(dev_info_t *dip, dev_t dev, int spec_type, char *event,
 	}
 
 out:
+	ldi_ev_callback_list.le_walker_next = NULL;
+	ldi_ev_callback_list.le_walker_prev = NULL;
 	ldi_ev_unlock();
 
 	if (ret == LDI_EV_NONE) {
@@ -3552,8 +3569,11 @@ ldi_invoke_finalize(dev_info_t *dip, dev_t dev, int spec_type, char *event,
 	    " event=%s", (void *)dip, ldi_result, event));
 
 	ldi_ev_lock();
+	VERIFY(ldi_ev_callback_list.le_walker_next == NULL);
 	listp = &ldi_ev_callback_list.le_head;
-	for (lecp = list_head(listp); lecp; lecp = list_next(listp, lecp)) {
+	for (lecp = list_head(listp); lecp; lecp =
+	    ldi_ev_callback_list.le_walker_next) {
+		ldi_ev_callback_list.le_walker_next = list_next(listp, lecp);
 
 		if (lecp->lec_finalize == NULL) {
 			LDI_EVDBG((CE_NOTE, "ldi_invoke_finalize(): No "
@@ -3604,6 +3624,7 @@ ldi_invoke_finalize(dev_info_t *dip, dev_t dev, int spec_type, char *event,
 			lecp->lec_finalize = NULL;
 		}
 	}
+	ldi_ev_callback_list.le_walker_next = NULL;
 	ldi_ev_unlock();
 
 	if (found)
@@ -3684,7 +3705,23 @@ ldi_ev_remove_callbacks(ldi_callback_id_t id)
 	for (lecp = list_head(listp); lecp; lecp = next) {
 		next = list_next(listp, lecp);
 		if (lecp->lec_id == id) {
-			ASSERT(found == NULL);
+			VERIFY(found == NULL);
+
+			/*
+			 * If there is a walk in progress, shift that walk
+			 * along to the next element so that we can remove
+			 * this one.  This allows us to unregister an arbitrary
+			 * number of callbacks from within a callback.
+			 *
+			 * See the struct definition (in sunldi_impl.h) for
+			 * more information.
+			 */
+			if (ldi_ev_callback_list.le_walker_next == lecp)
+				ldi_ev_callback_list.le_walker_next = next;
+			if (ldi_ev_callback_list.le_walker_prev == lecp)
+				ldi_ev_callback_list.le_walker_prev = list_prev(
+				    listp, ldi_ev_callback_list.le_walker_prev);
+
 			list_remove(listp, lecp);
 			found = lecp;
 		}

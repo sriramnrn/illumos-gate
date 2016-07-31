@@ -25,16 +25,15 @@
 #
 
 PROG	  = findunref
-MAN1FILES = findunref.1
+MAN1ONBLDFILES = findunref.1onbld
 CFLAGS += $(CCVERBOSE)
 LINTFLAGS += -ux
 
 include ../Makefile.tools
 
-$(ROOTONBLDMAN1FILES) := FILEMODE=      644
+$(ROOTONBLDMAN1ONBLDFILES) := FILEMODE=      644
 
 EXCEPTION_SRC= common open
-$(CLOSED_BUILD)EXCEPTION_SRC += closed
 EXCEPTION_LISTS=	$(EXCEPTION_SRC:%=exception_list.%)
 
 CLOBBERFILES += exception_list
@@ -43,7 +42,7 @@ CLOBBERFILES += exception_list
 
 all:    $(PROG) exception_list
 
-install: all .WAIT $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1FILES)
+install: all .WAIT $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1ONBLDFILES)
 
 lint:	lint_PROG
 

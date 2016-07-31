@@ -24,6 +24,8 @@
  */
 /*
  * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 /*
@@ -1137,7 +1139,7 @@ tl_info(dev_info_t *dip, ddi_info_cmd_t infocmd, void *arg, void **result)
 static void
 tl_refhold(tl_endpt_t *tep)
 {
-	atomic_add_32(&tep->te_refcnt, 1);
+	atomic_inc_32(&tep->te_refcnt);
 }
 
 static void
@@ -1145,7 +1147,7 @@ tl_refrele(tl_endpt_t *tep)
 {
 	ASSERT(tep->te_refcnt != 0);
 
-	if (atomic_add_32_nv(&tep->te_refcnt, -1) == 0)
+	if (atomic_dec_32_nv(&tep->te_refcnt) == 0)
 		tl_free(tep);
 }
 
@@ -1263,13 +1265,13 @@ tl_serializer_alloc(int flags)
 static void
 tl_serializer_refhold(tl_serializer_t *s)
 {
-	atomic_add_32(&s->ts_refcnt, 1);
+	atomic_inc_32(&s->ts_refcnt);
 }
 
 static void
 tl_serializer_refrele(tl_serializer_t *s)
 {
-	if (atomic_add_32_nv(&s->ts_refcnt, -1) == 0) {
+	if (atomic_dec_32_nv(&s->ts_refcnt) == 0) {
 		serializer_destroy(s->ts_serializer);
 		kmem_free(s, sizeof (tl_serializer_t));
 	}
@@ -4252,7 +4254,7 @@ tl_addr_req(mblk_t *mp, tl_endpt_t *tep)
 static void
 tl_connected_cots_addr_req(mblk_t *mp, tl_endpt_t *tep)
 {
-	tl_endpt_t		*peer_tep;
+	tl_endpt_t		*peer_tep = tep->te_conp;
 	size_t			ack_sz;
 	mblk_t			*ackmp;
 	struct T_addr_ack	*taa;
@@ -4263,11 +4265,15 @@ tl_connected_cots_addr_req(mblk_t *mp, tl_endpt_t *tep)
 		return;
 	}
 
+	if (peer_tep == NULL || peer_tep->te_closing) {
+		tl_error_ack(tep->te_wq, mp, TSYSERR, ECONNRESET, T_ADDR_REQ);
+		return;
+	}
+
 	ASSERT(tep->te_state >= TS_IDLE);
 
 	ack_sz = sizeof (struct T_addr_ack);
 	ack_sz += T_ALIGN(tep->te_alen);
-	peer_tep = tep->te_conp;
 	ack_sz += peer_tep->te_alen;
 
 	ackmp = tpi_ack_alloc(mp, ack_sz, M_PCPROTO, T_ADDR_ACK);
@@ -4995,7 +5001,7 @@ tl_unitdata(mblk_t *mp, tl_endpt_t *tep)
 	tl_endpt_t		*peer_tep;
 	struct T_unitdata_ind	*udind;
 	struct T_unitdata_req	*udreq;
-	ssize_t			msz, ui_sz;
+	ssize_t			msz, ui_sz, reuse_mb_sz;
 	t_scalar_t		alen, aoff, olen, ooff;
 	t_scalar_t		oldolen = 0;
 	cred_t			*cr = NULL;
@@ -5191,11 +5197,25 @@ tl_unitdata(mblk_t *mp, tl_endpt_t *tep)
 		}
 	}
 
-	ui_sz = T_ALIGN(sizeof (struct T_unitdata_ind) + tep->te_alen) +
-	    olen;
+	ui_sz = T_ALIGN(sizeof (struct T_unitdata_ind) + tep->te_alen) + olen;
+	reuse_mb_sz = T_ALIGN(sizeof (struct T_unitdata_ind) + alen) + olen;
+
 	/*
 	 * If the unitdata_ind fits and we are not adding options
 	 * reuse the udreq mblk.
+	 *
+	 * Otherwise, it is possible we need to append an option if one of the
+	 * te_flag bits is set. This requires extra space in the data block for
+	 * the additional option but the traditional technique used below to
+	 * allocate a new block and copy into it will not work when there is a
+	 * message block with a free pointer (since we don't know anything
+	 * about the layout of the data, pointers referencing or within the
+	 * data, etc.). To handle this possibility the upper layers may have
+	 * preallocated some space to use for appending an option. We check the
+	 * overall mblock size against the size we need ('reuse_mb_sz' with the
+	 * original address length [alen] to ensure we won't overrun the
+	 * current mblk data size) to see if there is free space and thus
+	 * avoid allocating a new message block.
 	 */
 	if (msz >= ui_sz && alen >= tep->te_alen &&
 	    !(peer_tep->te_flag & (TL_SETCRED|TL_SETUCRED|TL_SOCKUCRED))) {
@@ -5207,8 +5227,44 @@ tl_unitdata(mblk_t *mp, tl_endpt_t *tep)
 		udind->SRC_length = tep->te_alen;
 		addr_startp = mp->b_rptr + udind->SRC_offset;
 		bcopy(tep->te_abuf, addr_startp, tep->te_alen);
+
+	} else if (MBLKSIZE(mp) >= reuse_mb_sz && alen >= tep->te_alen &&
+	    mp->b_datap->db_frtnp != NULL) {
+		/*
+		 * We have a message block with a free pointer, but extra space
+		 * has been pre-allocated for us in case we need to append an
+		 * option. Reuse the original mblk, leaving existing options in
+		 * place.
+		 */
+		udind =  (struct T_unitdata_ind *)mp->b_rptr;
+		udind->PRIM_type = T_UNITDATA_IND;
+		udind->SRC_length = tep->te_alen;
+		addr_startp = mp->b_rptr + udind->SRC_offset;
+		bcopy(tep->te_abuf, addr_startp, tep->te_alen);
+
+		if (peer_tep->te_flag & (TL_SETCRED|TL_SETUCRED|TL_SOCKUCRED)) {
+			ASSERT(cr != NULL);
+			/*
+			 * We're appending one new option here after the
+			 * original ones.
+			 */
+			tl_fill_option(mp->b_rptr + udind->OPT_offset + oldolen,
+			    cr, cpid, peer_tep->te_flag, peer_tep->te_credp);
+		}
+
+	} else if (mp->b_datap->db_frtnp != NULL) {
+		/*
+		 * The next block creates a new mp and tries to copy the data
+		 * block into it, but that cannot handle a message with a free
+		 * pointer (for more details see the comment in kstrputmsg()
+		 * where dupmsg() is called). Since we can never properly
+		 * duplicate the mp while also extending the data, just error
+		 * out now.
+		 */
+		tl_uderr(wq, mp, EPROTO);
+		return;
 	} else {
-		/* Allocate a new T_unidata_ind message */
+		/* Allocate a new T_unitdata_ind message */
 		mblk_t *ui_mp;
 
 		ui_mp = allocb(ui_sz, BPRI_MED);
@@ -5421,7 +5477,7 @@ tl_get_any_addr(tl_endpt_t *tep, tl_addr_t *req)
 		 * Use default address.
 		 */
 		bcopy(&tep->te_defaddr, tep->te_abuf, sizeof (uint32_t));
-		atomic_add_32(&tep->te_defaddr, 1);
+		atomic_inc_32(&tep->te_defaddr);
 	}
 
 	/*

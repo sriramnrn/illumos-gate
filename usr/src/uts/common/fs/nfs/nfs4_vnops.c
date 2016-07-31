@@ -18,6 +18,11 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -26,6 +31,10 @@
 /*
  *	Copyright 1983,1984,1985,1986,1987,1988,1989 AT&T.
  *	All Rights Reserved
+ */
+
+/*
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/param.h>
@@ -3639,14 +3648,13 @@ nfs4_getattr(vnode_t *vp, struct vattr *vap, int flags, cred_t *cr,
 	 * call.
 	 */
 	if (flags & ATTR_HINT) {
-		if (vap->va_mask ==
-		    (vap->va_mask & (AT_SIZE | AT_FSID | AT_RDEV))) {
+		if (!(vap->va_mask & ~(AT_SIZE | AT_FSID | AT_RDEV))) {
 			mutex_enter(&rp->r_statelock);
-			if (vap->va_mask | AT_SIZE)
+			if (vap->va_mask & AT_SIZE)
 				vap->va_size = rp->r_size;
-			if (vap->va_mask | AT_FSID)
+			if (vap->va_mask & AT_FSID)
 				vap->va_fsid = rp->r_attr.va_fsid;
-			if (vap->va_mask | AT_RDEV)
+			if (vap->va_mask & AT_RDEV)
 				vap->va_rdev = rp->r_attr.va_rdev;
 			mutex_exit(&rp->r_statelock);
 			return (0);
@@ -3710,6 +3718,8 @@ static int
 nfs4_setattr(vnode_t *vp, struct vattr *vap, int flags, cred_t *cr,
     caller_context_t *ct)
 {
+	int error;
+
 	if (vap->va_mask & AT_NOSET)
 		return (EINVAL);
 
@@ -3725,8 +3735,12 @@ nfs4_setattr(vnode_t *vp, struct vattr *vap, int flags, cred_t *cr,
 	 * to setattr (e.g. basic without chmod) then we will
 	 * need to add a check here before calling the server.
 	 */
+	error = nfs4setattr(vp, vap, flags, cr, NULL);
 
-	return (nfs4setattr(vp, vap, flags, cr, NULL));
+	if (error == 0 && (vap->va_mask & AT_SIZE) && vap->va_size == 0)
+		vnevent_truncate(vp, ct);
+
+	return (error);
 }
 
 /*
@@ -4575,7 +4589,7 @@ recov_retry:
 	/*
 	 * treat symlink names as data
 	 */
-	linkdata = utf8_to_str(&lr_res->link, &len, NULL);
+	linkdata = utf8_to_str((utf8string *)&lr_res->link, &len, NULL);
 	if (linkdata != NULL) {
 		int uio_len = len - 1;
 		/* len includes null byte, which we won't uiomove */
@@ -6651,16 +6665,20 @@ top:
 	} else {
 		vnode_t *tvp;
 		rnode4_t *trp;
-		/*
-		 * existing file got truncated, notify.
-		 */
 		tvp = vp;
 		if (vp->v_type == VREG) {
 			trp = VTOR4(vp);
 			if (IS_SHADOW(vp, trp))
 				tvp = RTOV4(trp);
 		}
-		vnevent_create(tvp, ct);
+
+		if (must_trunc) {
+			/*
+			 * existing file got truncated, notify.
+			 */
+			vnevent_create(tvp, ct);
+		}
+
 		*vpp = vp;
 	}
 	return (error);
@@ -9771,19 +9789,11 @@ retry:
 
 	mutex_exit(&rp->r_statelock);
 
-	if (len <= PAGESIZE) {
-		error = nfs4_getapage(vp, off, len, protp, pl, plsz,
-		    seg, addr, rw, cr);
-		NFS4_DEBUG(nfs4_pageio_debug && error,
-		    (CE_NOTE, "getpage error %d; off=%lld, "
-		    "len=%lld", error, off, (u_longlong_t)len));
-	} else {
-		error = pvn_getpages(nfs4_getapage, vp, off, len, protp,
-		    pl, plsz, seg, addr, rw, cr);
-		NFS4_DEBUG(nfs4_pageio_debug && error,
-		    (CE_NOTE, "getpages error %d; off=%lld, "
-		    "len=%lld", error, off, (u_longlong_t)len));
-	}
+	error = pvn_getpages(nfs4_getapage, vp, off, len, protp,
+	    pl, plsz, seg, addr, rw, cr);
+	NFS4_DEBUG(nfs4_pageio_debug && error,
+	    (CE_NOTE, "getpages error %d; off=%lld, len=%lld",
+	    error, off, (u_longlong_t)len));
 
 	switch (error) {
 	case NFS_EOF:
@@ -9797,7 +9807,7 @@ retry:
 }
 
 /*
- * Called from pvn_getpages or nfs4_getpage to get a particular page.
+ * Called from pvn_getpages to get a particular page.
  */
 /* ARGSUSED */
 static int
@@ -10474,11 +10484,11 @@ nfs4_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 	if (nfs_rw_enter_sig(&rp->r_rwlock, RW_WRITER, INTR4(vp)))
 		return (EINTR);
-	atomic_add_int(&rp->r_inmap, 1);
+	atomic_inc_uint(&rp->r_inmap);
 	nfs_rw_exit(&rp->r_rwlock);
 
 	if (nfs_rw_enter_sig(&rp->r_lkserlock, RW_READER, INTR4(vp))) {
-		atomic_add_int(&rp->r_inmap, -1);
+		atomic_dec_uint(&rp->r_inmap);
 		return (EINTR);
 	}
 
@@ -10586,7 +10596,7 @@ nfs4_map(vnode_t *vp, offset_t off, struct as *as, caddr_t *addrp,
 
 done:
 	nfs_rw_exit(&rp->r_lkserlock);
-	atomic_add_int(&rp->r_inmap, -1);
+	atomic_dec_uint(&rp->r_inmap);
 	return (error);
 }
 
@@ -10989,6 +10999,9 @@ nfs4_space(vnode_t *vp, int cmd, struct flock64 *bfp, int flag,
 			va.va_mask = AT_SIZE;
 			va.va_size = bfp->l_start;
 			error = nfs4setattr(vp, &va, 0, cr, NULL);
+
+			if (error == 0 && bfp->l_start == 0)
+				vnevent_truncate(vp, ct);
 		} else
 			error = EINVAL;
 	}

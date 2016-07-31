@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc.
  */
 
 /*
@@ -40,6 +41,7 @@
 #include "libshare_impl.h"
 #include <nfs/export.h>
 #include <pwd.h>
+#include <grp.h>
 #include <limits.h>
 #include <libscf.h>
 #include <syslog.h>
@@ -49,6 +51,7 @@
 #include "libshare_nfs.h"
 #include <nfs/nfs.h>
 #include <nfs/nfssys.h>
+#include <netconfig.h>
 #include "smfcfg.h"
 
 /* should really be in some global place */
@@ -166,8 +169,12 @@ struct option_defs optdefs[] = {
 	{"", OPT_CHARSET_MAP, OPT_TYPE_ACCLIST},
 #define	OPT_NOACLFAB	17
 	{SHOPT_NOACLFAB, OPT_NOACLFAB, OPT_TYPE_BOOLEAN},
+#define	OPT_UIDMAP	18
+	{SHOPT_UIDMAP, OPT_UIDMAP, OPT_TYPE_MAPPING},
+#define	OPT_GIDMAP	19
+	{SHOPT_GIDMAP, OPT_GIDMAP, OPT_TYPE_MAPPING},
 #ifdef VOLATILE_FH_TEST	/* XXX added for testing volatile fh's only */
-#define	OPT_VOLFH	18
+#define	OPT_VOLFH	20
 	{SHOPT_VOLFH, OPT_VOLFH},
 #endif /* VOLATILE_FH_TEST */
 	NULL
@@ -210,6 +217,8 @@ static char *seclist[] = {
 	SHOPT_WINDOW,
 	SHOPT_NONE,
 	SHOPT_ROOT_MAPPING,
+	SHOPT_UIDMAP,
+	SHOPT_GIDMAP,
 	NULL
 };
 
@@ -252,7 +261,7 @@ findopt(char *name)
 	if (name != NULL) {
 		for (i = 0; optdefs[i].tag != NULL; i++) {
 			if (strcmp(optdefs[i].tag, name) == 0)
-				return (i);
+				return (optdefs[i].index);
 		}
 		if (findcharset(name))
 			return (OPT_CHARSET_MAP);
@@ -433,7 +442,7 @@ nfs_alistcat(char *str1, char *str2, char sep)
 }
 
 /*
- * add_security_prop(sec, name, value, persist)
+ * add_security_prop(sec, name, value, persist, iszfs)
  *
  * Add the property to the securities structure. This accumulates
  * properties for as part of parsing legacy options.
@@ -441,7 +450,7 @@ nfs_alistcat(char *str1, char *str2, char sep)
 
 static int
 add_security_prop(struct securities *sec, char *name, char *value,
-			int persist, int iszfs)
+    int persist, int iszfs)
 {
 	sa_property_t prop;
 	int ret = SA_OK;
@@ -471,21 +480,28 @@ add_security_prop(struct securities *sec, char *name, char *value,
 			char *newvalue;
 
 			/*
-			 * The security options of ro/rw/root might appear
-			 * multiple times. If they do, the values need to be
-			 * merged into an access list. If it was previously
-			 * empty, the new value alone is added.
+			 * The security options of ro/rw/root/uidmap/gidmap
+			 * might appear multiple times.  If they do, the values
+			 * need to be merged.  If it was previously empty, the
+			 * new value alone is added.
 			 */
 			oldvalue = sa_get_property_attr(prop, "value");
 			if (oldvalue != NULL) {
+				char sep = ':';
+
+				if (strcmp(name, SHOPT_UIDMAP) == 0 ||
+				    strcmp(name, SHOPT_GIDMAP) == 0)
+					sep = '~';
+
 				/*
 				 * The general case is to concatenate the new
 				 * value onto the old value for multiple
-				 * rw(ro/root) properties. A special case
-				 * exists when either the old or new is the
-				 * "all" case. In the special case, if both
-				 * are "all", then it is "all", else if one is
-				 * an access-list, that replaces the "all".
+				 * rw(ro/root/uidmap/gidmap) properties.  For
+				 * rw/ro/root a special case exists when either
+				 * the old or new is the "all" case.  In the
+				 * special case, if both are "all", then it is
+				 * "all", else if one is an access-list, that
+				 * replaces the "all".
 				 */
 				if (strcmp(oldvalue, "*") == 0) {
 					/* Replace old value with new value. */
@@ -503,7 +519,7 @@ add_security_prop(struct securities *sec, char *name, char *value,
 					 * access-list.
 					 */
 					newvalue = nfs_alistcat(oldvalue,
-					    value, ':');
+					    value, sep);
 				}
 
 				if (newvalue != NULL) {
@@ -514,8 +530,8 @@ add_security_prop(struct securities *sec, char *name, char *value,
 					    prop);
 					free(newvalue);
 				}
-				if (oldvalue != NULL)
-					sa_free_attr_string(oldvalue);
+
+				sa_free_attr_string(oldvalue);
 			}
 		} else {
 			prop = sa_create_property(name, value);
@@ -566,7 +582,7 @@ invalid_security(char *options)
 			value = strchr(token, '=');
 			if (value != NULL)
 				*value++ = '\0';
-			if (strcmp(token, "sec") == 0) {
+			if (strcmp(token, SHOPT_SEC) == 0) {
 				/* HAVE security flavors so check them */
 				char *tok, *next;
 				for (next = NULL, tok = value; tok != NULL;
@@ -680,7 +696,6 @@ nfs_parse_legacy_options(sa_group_t group, char *options)
 	token = dup;
 	lasts = NULL;
 	while (token != NULL && ret == SA_OK) {
-		ret = SA_OK;
 		token = strtok_r(base, ",", &lasts);
 		base = NULL;
 		if (token != NULL) {
@@ -695,8 +710,8 @@ nfs_parse_legacy_options(sa_group_t group, char *options)
 			if (value != NULL) {
 				*value++ = '\0';
 			}
-			if (strcmp(token, "sec") == 0 ||
-			    strcmp(token, "secure") == 0) {
+			if (strcmp(token, SHOPT_SEC) == 0 ||
+			    strcmp(token, SHOPT_SECURE) == 0) {
 				/*
 				 * Once in security parsing, we only
 				 * do security. We do need to move
@@ -712,7 +727,7 @@ nfs_parse_legacy_options(sa_group_t group, char *options)
 					 */
 					free_security_list(security_list);
 				}
-				if (strcmp(token, "secure") == 0) {
+				if (strcmp(token, SHOPT_SECURE) == 0) {
 					value = "dh";
 				} else {
 					if (value == NULL) {
@@ -725,7 +740,7 @@ nfs_parse_legacy_options(sa_group_t group, char *options)
 			} else {
 				/*
 				 * Note that the "old" syntax allowed a
-				 * default security model This must be
+				 * default security model.  This must be
 				 * accounted for and internally converted to
 				 * "standard" security structure.
 				 */
@@ -880,10 +895,8 @@ out:
 
 err:
 	if (error != 0) {
-		if (exp->ex_flags != NULL)
-			free(exp->ex_tag);
-		if (exp->ex_log_buffer != NULL)
-			free(exp->ex_log_buffer);
+		free(exp->ex_tag);
+		free(exp->ex_log_buffer);
 		(void) fprintf(stderr,
 		    dgettext(TEXT_DOMAIN, "Cannot set log configuration: %s\n"),
 		    strerror(error));
@@ -1040,14 +1053,17 @@ cleanup_export(struct exportdata *export)
 {
 	int i;
 
-	if (export->ex_index != NULL)
-		free(export->ex_index);
-	if (export->ex_secinfo != NULL) {
-		for (i = 0; i < export->ex_seccnt; i++)
-			if (export->ex_secinfo[i].s_rootnames != NULL)
-				free(export->ex_secinfo[i].s_rootnames);
-		free(export->ex_secinfo);
+	free(export->ex_index);
+
+	for (i = 0; i < export->ex_seccnt; i++) {
+		struct secinfo *s = &export->ex_secinfo[i];
+
+		while (s->s_rootcnt > 0)
+			free(s->s_rootnames[--s->s_rootcnt]);
+
+		free(s->s_rootnames);
 	}
+	free(export->ex_secinfo);
 }
 
 /*
@@ -1079,12 +1095,16 @@ get_rootnames(seconfig_t *sec, char *list, int *count)
 	if (a == NULL) {
 		(void) printf(dgettext(TEXT_DOMAIN,
 		    "get_rootnames: no memory\n"));
+		*count = 0;
 	} else {
 		for (i = 0; i < c; i++) {
 			host = strtok(list, ":");
 			if (!nfs_get_root_principal(sec, host, &a[i])) {
+				while (i > 0)
+					free(a[--i]);
 				free(a);
 				a = NULL;
+				*count = 0;
 				break;
 			}
 			list = NULL;
@@ -1149,7 +1169,7 @@ fill_security_from_secopts(struct secinfo *sp, sa_security_t secopts)
 			 * such as RO/RW
 			 */
 			if (sp->s_secinfo.sc_rpcnum == AUTH_UNIX)
-				continue;
+				break;
 			/* not AUTH_UNIX */
 			if (value != NULL) {
 				sp->s_rootnames = get_rootnames(&sp->s_secinfo,
@@ -1187,6 +1207,10 @@ fill_security_from_secopts(struct secinfo *sp, sa_security_t secopts)
 				endpwent();
 			}
 			sp->s_rootid = val;
+			break;
+		case OPT_UIDMAP:
+		case OPT_GIDMAP:
+			sp->s_flags |= M_MAP;
 			break;
 		default:
 			break;
@@ -1257,6 +1281,7 @@ printarg(char *path, struct exportdata *ep)
 		if (sp->s_flags & M_RW) (void) printf("M_RW ");
 		if (sp->s_flags & M_RWL) (void) printf("M_RWL ");
 		if (sp->s_flags & M_NONE) (void) printf("M_NONE ");
+		if (sp->s_flags & M_MAP) (void) printf("M_MAP ");
 		if (sp->s_flags == 0) (void) printf("(none)");
 		(void) printf("\n");
 		(void) printf("\t\ts_window = %d\n", sp->s_window);
@@ -1304,7 +1329,7 @@ count_security(sa_optionset_t opts)
 
 static int
 nfs_sprint_option(char **rbuff, size_t *rbuffsize, size_t incr,
-			sa_property_t prop, int sep)
+    sa_property_t prop, int sep)
 {
 	char *name;
 	char *value;
@@ -1384,8 +1409,7 @@ nfs_sprint_option(char **rbuff, size_t *rbuffsize, size_t incr,
 
 		if (value == NULL) {
 			(void) snprintf(buff + curlen, buffsize - curlen,
-			    "%s%s", sep ? "," : "",
-			    name, value != NULL ? value : "");
+			    "%s%s", sep ? "," : "", name);
 		} else {
 			(void) snprintf(buff + curlen, buffsize - curlen,
 			    "%s%s=%s", sep ? "," : "",
@@ -1534,8 +1558,7 @@ err:
  * Append an entry to the nfslogtab file
  */
 static int
-nfslogtab_add(dir, buffer, tag)
-	char *dir, *buffer, *tag;
+nfslogtab_add(char *dir, char *buffer, char *tag)
 {
 	FILE *f;
 	struct logtab_ent lep;
@@ -1617,8 +1640,7 @@ out:
  * Deactivate an entry from the nfslogtab file
  */
 static int
-nfslogtab_deactivate(path)
-	char *path;
+nfslogtab_deactivate(char *path)
 {
 	FILE *f;
 	int error = 0;
@@ -1691,7 +1713,7 @@ check_public(sa_group_t group, sa_share_t skipshare)
 }
 
 /*
- * public_exists(handle, share)
+ * public_exists(handle, skipshare)
  *
  * check to see if public option is set on any other share than the
  * one specified. Need to check zfs sub-groups as well as the top
@@ -1865,7 +1887,7 @@ nfs_enable_share(sa_share_t share)
 			sp[i].s_window = DEF_WIN;
 			sp[i].s_rootcnt = 0;
 			sp[i].s_rootnames = NULL;
-				(void) fill_security_from_secopts(&sp[i], sec);
+			(void) fill_security_from_secopts(&sp[i], sec);
 			if (sec != NULL)
 				sa_free_derived_security(sec);
 			if (sectype != NULL)
@@ -1874,10 +1896,10 @@ nfs_enable_share(sa_share_t share)
 	}
 	/*
 	 * when we get here, we can do the exportfs system call and
-	 * initiate thinsg. We probably want to enable the nfs.server
-	 * service first if it isn't running within SMF.
+	 * initiate things. We probably want to enable the
+	 * svc:/network/nfs/server service first if it isn't running.
 	 */
-	/* check nfs.server status and start if needed */
+	/* check svc:/network/nfs/server status and start if needed */
 	/* now add the share to the internal tables */
 	printarg(path, &export);
 	/*
@@ -2088,6 +2110,56 @@ nfs_disable_share(sa_share_t share, char *path)
 	return (ret);
 }
 
+static int
+check_user(char *value)
+{
+	int ret = SA_OK;
+
+	if (!is_a_number(value)) {
+		struct passwd *pw;
+		/*
+		 * in this case it would have to be a
+		 * user name
+		 */
+		pw = getpwnam(value);
+		if (pw == NULL)
+			ret = SA_BAD_VALUE;
+		endpwent();
+	} else {
+		uint64_t intval;
+		intval = strtoull(value, NULL, 0);
+		if (intval > UID_MAX && intval != -1)
+			ret = SA_BAD_VALUE;
+	}
+
+	return (ret);
+}
+
+static int
+check_group(char *value)
+{
+	int ret = SA_OK;
+
+	if (!is_a_number(value)) {
+		struct group *gr;
+		/*
+		 * in this case it would have to be a
+		 * group name
+		 */
+		gr = getgrnam(value);
+		if (gr == NULL)
+			ret = SA_BAD_VALUE;
+		endgrent();
+	} else {
+		uint64_t intval;
+		intval = strtoull(value, NULL, 0);
+		if (intval > UID_MAX && intval != -1)
+			ret = SA_BAD_VALUE;
+	}
+
+	return (ret);
+}
+
 /*
  * check_rorwnone(v1, v2, v3)
  *
@@ -2155,11 +2227,13 @@ nfs_validate_property(sa_handle_t handle, sa_property_t property,
 		if (value != NULL) {
 			/* first basic type checking */
 			switch (optdefs[optindex].type) {
+
 			case OPT_TYPE_NUMBER:
 				/* check that the value is all digits */
 				if (!is_a_number(value))
 					ret = SA_BAD_VALUE;
 				break;
+
 			case OPT_TYPE_BOOLEAN:
 				if (strlen(value) == 0 ||
 				    strcasecmp(value, "true") == 0 ||
@@ -2171,30 +2245,18 @@ nfs_validate_property(sa_handle_t handle, sa_property_t property,
 					ret = SA_BAD_VALUE;
 				}
 				break;
+
 			case OPT_TYPE_USER:
-				if (!is_a_number(value)) {
-					struct passwd *pw;
-					/*
-					 * in this case it would have to be a
-					 * user name
-					 */
-					pw = getpwnam(value);
-					if (pw == NULL)
-						ret = SA_BAD_VALUE;
-					endpwent();
-				} else {
-					uint64_t intval;
-					intval = strtoull(value, NULL, 0);
-					if (intval > UID_MAX && intval != ~0)
-						ret = SA_BAD_VALUE;
-				}
+				ret = check_user(value);
 				break;
+
 			case OPT_TYPE_FILE:
 				if (strcmp(value, "..") == 0 ||
 				    strchr(value, '/') != NULL) {
 					ret = SA_BAD_VALUE;
 				}
 				break;
+
 			case OPT_TYPE_ACCLIST: {
 				sa_property_t oprop1;
 				sa_property_t oprop2;
@@ -2250,6 +2312,7 @@ nfs_validate_property(sa_handle_t handle, sa_property_t property,
 					sa_free_attr_string(ovalue2);
 				break;
 			}
+
 			case OPT_TYPE_LOGTAG:
 				if (nfsl_getconfig_list(&configlist) == 0) {
 					int error;
@@ -2271,9 +2334,11 @@ nfs_validate_property(sa_handle_t handle, sa_property_t property,
 					ret = SA_CONFIG_ERR;
 				}
 				break;
+
 			case OPT_TYPE_STRING:
 				/* whatever is here should be ok */
 				break;
+
 			case OPT_TYPE_SECURITY:
 				/*
 				 * The "sec" property isn't used in the
@@ -2283,6 +2348,99 @@ nfs_validate_property(sa_handle_t handle, sa_property_t property,
 				 */
 				ret = SA_NO_SUCH_PROP;
 				break;
+
+			case OPT_TYPE_MAPPING: {
+				char *p;
+				char *n;
+				char *c;
+				int (*f)(char *);
+
+				sa_security_t security;
+
+				/*
+				 * mapping is only supported for sec=sys
+				 */
+				ret = SA_CONFIG_ERR;
+				if (parent_group == NULL)
+					break;
+
+				for (security = sa_get_security(parent_group,
+				    NULL, NULL); security != NULL;
+				    security = sa_get_next_security(security)) {
+					char *type;
+					char *sectype;
+
+					type = sa_get_security_attr(security,
+					    "type");
+					if (type == NULL)
+						continue;
+
+					if (strcmp(type, "nfs") != 0) {
+						sa_free_attr_string(type);
+						continue;
+					}
+					sa_free_attr_string(type);
+
+					sectype = sa_get_security_attr(security,
+					    "sectype");
+					if (sectype == NULL)
+						continue;
+
+					if (strcmp(sectype, "sys") != 0) {
+						sa_free_attr_string(sectype);
+						ret = SA_CONFIG_ERR;
+						break;
+					}
+					sa_free_attr_string(sectype);
+					ret = SA_OK;
+				}
+
+				if (ret != SA_OK)
+					break;
+
+				assert(optindex == OPT_UIDMAP ||
+				    optindex == OPT_GIDMAP);
+				f = optindex == OPT_UIDMAP ? check_user :
+				    check_group;
+
+
+				p = strdup(value);
+				if (p == NULL)
+					ret = SA_BAD_VALUE;
+
+				for (c = p; ret == SA_OK && c != NULL; c = n) {
+					char *s;
+					char *t;
+
+					n = strchr(c, '~');
+					if (n != NULL)
+						*n++ = '\0';
+
+					s = strchr(c, ':');
+					if (s != NULL) {
+						*s++ = '\0';
+						t = strchr(s, ':');
+						if (t != NULL)
+							*t = '\0';
+					}
+
+					if (s == NULL || t == NULL)
+						ret = SA_BAD_VALUE;
+
+					if (ret == SA_OK && *c != '\0' &&
+					    strcmp(c, "*") != 0)
+						ret = f(c);
+
+					if (ret == SA_OK && *s != '\0' &&
+					    strcmp(s, "-1") != 0)
+						ret = f(s);
+				}
+
+				free(p);
+
+				break;
+			}
+
 			default:
 				break;
 			}
@@ -2396,6 +2554,14 @@ struct proto_option_defs {
 	{"nfsd_device",
 	    "device", PROTO_OPT_NFSD_DEVICE,
 	    OPT_TYPE_STRING, NULL, SVC_NFSD, 0, 0},
+#define	PROTO_OPT_MOUNTD_LISTEN_BACKLOG		15
+	{"mountd_listen_backlog",
+	    "mountd_listen_backlog", PROTO_OPT_MOUNTD_LISTEN_BACKLOG,
+	    OPT_TYPE_NUMBER, 64, SVC_NFSD|SVC_MOUNTD, 1, INT32_MAX},
+#define	PROTO_OPT_MOUNTD_MAX_THREADS		16
+	{"mountd_max_threads",
+	    "mountd_max_threads", PROTO_OPT_MOUNTD_MAX_THREADS,
+	    OPT_TYPE_NUMBER, 16, SVC_NFSD|SVC_MOUNTD, 1, INT32_MAX},
 	{NULL}
 };
 
@@ -2787,7 +2953,7 @@ restart_service(uint32_t svcs)
 				(void) fprintf(stderr,
 				    dgettext(TEXT_DOMAIN,
 				    "%s failed to restart: %s\n"),
-				    scf_strerror(scf_error()));
+				    service, scf_strerror(scf_error()));
 			} else {
 				/*
 				 * Check whether it has gone to "maintenance"
@@ -2930,13 +3096,31 @@ nfs_validate_proto_prop(int index, char *name, char *value)
 		}
 		break;
 
-	case OPT_TYPE_PROTOCOL:
-		if (strlen(value) != 0 &&
-		    strcasecmp(value, "all") != 0 &&
-		    strcasecmp(value, "tcp") != 0 &&
-		    strcasecmp(value, "udp") != 0)
+	case OPT_TYPE_PROTOCOL: {
+		struct netconfig *nconf;
+		void *nc;
+		boolean_t pfound = B_FALSE;
+
+		if (strcasecmp(value, "all") == 0)
+			break;
+
+		if ((nc = setnetconfig()) == NULL) {
+			(void) fprintf(stderr, dgettext(TEXT_DOMAIN,
+			    "setnetconfig failed: %s\n"), strerror(errno));
+		} else {
+			while ((nconf = getnetconfig(nc)) != NULL) {
+				if (strcmp(nconf->nc_proto, value) == 0) {
+					pfound = B_TRUE;
+					break;
+				}
+			}
+			(void) endnetconfig(nc);
+		}
+
+		if (!pfound)
 			ret = SA_BAD_VALUE;
 		break;
+	}
 
 	default:
 		/* treat as a string */
@@ -3006,9 +3190,7 @@ nfs_set_proto_prop(sa_property_t prop)
 static char *
 nfs_get_status()
 {
-	char *state;
-	state = smf_get_state(NFSD);
-	return (state != NULL ? state : strdup("-"));
+	return (smf_get_state(NFSD));
 }
 
 /*
@@ -3028,7 +3210,7 @@ nfs_space_alias(char *space)
 	 * Only the space named "default" is special. If it is used,
 	 * the default needs to be looked up and the real name used.
 	 * This is normally "sys" but could be changed.  We always
-	 * change defautl to the real name.
+	 * change default to the real name.
 	 */
 	if (strcmp(space, "default") == 0 &&
 	    nfs_getseconfig_default(&secconf) == 0) {

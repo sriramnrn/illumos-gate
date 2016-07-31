@@ -18,6 +18,11 @@
  *
  * CDDL HEADER END
  */
+
+/*
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+ */
+
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
@@ -46,9 +51,19 @@
 extern "C" {
 #endif
 
-#define	NFS4_MAX_UTF8STRING	65536
-#define	NFS4_MAX_PATHNAME4	65536
 #define	NFS4_MAX_SECOID4	65536
+#define	NFS4_MAX_UTF8STRING	65536
+#define	NFS4_MAX_LINKTEXT4	65536
+#define	NFS4_MAX_PATHNAME4	65536
+
+struct nfs_fsl_info {
+	uint_t netbuf_len;
+	uint_t netnm_len;
+	uint_t knconf_len;
+	char *netname;
+	struct netbuf *addr;
+	struct knetconfig *knconf;
+};
 
 #ifdef _KERNEL
 
@@ -387,12 +402,12 @@ nvlist_t *rfs4_dss_paths, *rfs4_dss_oldpaths;
 /*
  * The following ascii art represents each of these data structs and
  * their references to each other.  Note: "<-(x)->" represents the
- * doubly link lists defined above.
+ * doubly link lists (list_t).
  *
  *                          ____________________
  *                         |                    |
  *                         |    rfs4_client_t   |
- *                       ->|         (1),(2)    |<-
+ *                       ->|         (1)        |<-
  *                      /  |____________________|  \
  *                     /              ^             \
  *                    /               |              \
@@ -406,7 +421,7 @@ nvlist_t *rfs4_dss_paths, *rfs4_dss_oldpaths;
  *  ____________________    ____________________    ____________________
  * |                    |  |                    |  |                    |
  * |  rfs4_lo_state_t   |->|    rfs4_state_t    |->|     rfs4_file_t    |
- * |            <-(4)-> |  |     (4)    <-(3)-> |  |                    |
+ * |            <-(4)-> |  |     (4)    <-(3)-> |  |        (2)         |
  * |____________________|  |____________________|  |____________________|
  */
 /*
@@ -1307,7 +1322,7 @@ extern char	*utf8_to_fn(utf8string *, uint_t *, char *);
 extern utf8string *str_to_utf8(char *, utf8string *);
 extern utf8string *utf8_copy(utf8string *, utf8string *);
 extern int	utf8_compare(const utf8string *, const utf8string *);
-extern int	utf8_dir_verify(utf8string *);
+extern nfsstat4	utf8_dir_verify(utf8string *);
 extern char	*utf8_strchr(utf8string *, const char);
 extern int	ln_ace4_cmp(nfsace4 *, nfsace4 *, int);
 extern int	vs_aent_to_ace4(vsecattr_t *, vsecattr_t *, int, int);
@@ -1333,6 +1348,7 @@ extern struct nfs4_ntov_map nfs4_ntov_map[];
 extern uint_t nfs4_ntov_map_size;
 
 extern kstat_named_t	*rfsproccnt_v4_ptr;
+extern kstat_t		**rfsprocio_v4_ptr;
 extern struct vfsops	*nfs4_vfsops;
 extern struct vnodeops	*nfs4_vnodeops;
 extern const struct	fs_operation_def nfs4_vnodeops_template[];
@@ -1365,6 +1381,8 @@ extern void	rfs4_compound(COMPOUND4args *, COMPOUND4res *,
 			struct exportinfo *, struct svc_req *, cred_t *, int *);
 extern void	rfs4_compound_free(COMPOUND4res *);
 extern void	rfs4_compound_flagproc(COMPOUND4args *, int *);
+extern void	rfs4_compound_kstat_args(COMPOUND4args *);
+extern void	rfs4_compound_kstat_res(COMPOUND4res *);
 
 extern int	rfs4_srvrinit(void);
 extern void	rfs4_srvrfini(void);

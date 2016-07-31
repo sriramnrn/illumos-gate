@@ -20,6 +20,9 @@
  */
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -353,8 +356,8 @@ fs_copyfsops(const fs_operation_def_t *template, vfsops_t *actual,
 }
 
 void
-zfs_boot_init() {
-
+zfs_boot_init(void)
+{
 	if (strcmp(rootfs.bo_fstype, MNTTYPE_ZFS) == 0)
 		spa_boot_init();
 }
@@ -467,7 +470,7 @@ vfs_setops(vfs_t *vfsp, vfsops_t *vfsops)
 	op = vfsp->vfs_op;
 	membar_consumer();
 	if (vfsp->vfs_femhead == NULL &&
-	    casptr(&vfsp->vfs_op, op, vfsops) == op) {
+	    atomic_cas_ptr(&vfsp->vfs_op, op, vfsops) == op) {
 		return;
 	}
 	fsem_setvfsops(vfsp, vfsops);
@@ -523,7 +526,7 @@ vfs_init(vfs_t *vfsp, vfsops_t *op, void *data)
 	vfsp->vfs_prev = vfsp;
 	vfsp->vfs_zone_next = vfsp;
 	vfsp->vfs_zone_prev = vfsp;
-	vfsp->vfs_lofi_minor = 0;
+	vfsp->vfs_lofi_id = 0;
 	sema_init(&vfsp->vfs_reflock, 1, NULL, SEMA_DEFAULT, NULL);
 	vfsimpl_setup(vfsp);
 	vfsp->vfs_data = (data);
@@ -904,6 +907,7 @@ vfs_mountroot(void)
 	vfs_mountfs("mntfs", "/etc/mnttab", "/etc/mnttab");
 	vfs_mountfs("tmpfs", "/etc/svc/volatile", "/etc/svc/volatile");
 	vfs_mountfs("objfs", "objfs", OBJFS_ROOT);
+	vfs_mountfs("bootfs", "bootfs", "/system/boot");
 
 	if (getzoneid() == GLOBAL_ZONEID) {
 		vfs_mountfs("sharefs", "sharefs", "/etc/dfs/sharetab");
@@ -935,29 +939,33 @@ vfs_mountroot(void)
 	}
 #endif /* __sparc */
 
-	/*
-	 * Look up the root device via devfs so that a dv_node is
-	 * created for it. The vnode is never VN_RELE()ed.
-	 * We allocate more than MAXPATHLEN so that the
-	 * buffer passed to i_ddi_prompath_to_devfspath() is
-	 * exactly MAXPATHLEN (the function expects a buffer
-	 * of that length).
-	 */
-	plen = strlen("/devices");
-	path = kmem_alloc(plen + MAXPATHLEN, KM_SLEEP);
-	(void) strcpy(path, "/devices");
+	if (strcmp(rootfs.bo_fstype, "zfs") != 0) {
+		/*
+		 * Look up the root device via devfs so that a dv_node is
+		 * created for it. The vnode is never VN_RELE()ed.
+		 * We allocate more than MAXPATHLEN so that the
+		 * buffer passed to i_ddi_prompath_to_devfspath() is
+		 * exactly MAXPATHLEN (the function expects a buffer
+		 * of that length).
+		 */
+		plen = strlen("/devices");
+		path = kmem_alloc(plen + MAXPATHLEN, KM_SLEEP);
+		(void) strcpy(path, "/devices");
 
-	if (i_ddi_prompath_to_devfspath(rootfs.bo_name, path + plen)
-	    != DDI_SUCCESS ||
-	    lookupname(path, UIO_SYSSPACE, FOLLOW, NULLVPP, &rvp)) {
+		if (i_ddi_prompath_to_devfspath(rootfs.bo_name, path + plen)
+		    != DDI_SUCCESS ||
+		    lookupname(path, UIO_SYSSPACE, FOLLOW, NULLVPP, &rvp)) {
 
-		/* NUL terminate in case "path" has garbage */
-		path[plen + MAXPATHLEN - 1] = '\0';
+			/* NUL terminate in case "path" has garbage */
+			path[plen + MAXPATHLEN - 1] = '\0';
 #ifdef	DEBUG
-		cmn_err(CE_WARN, "!Cannot lookup root device: %s", path);
+			cmn_err(CE_WARN, "!Cannot lookup root device: %s",
+			    path);
 #endif
+		}
+		kmem_free(path, plen + MAXPATHLEN);
 	}
-	kmem_free(path, plen + MAXPATHLEN);
+
 	vfs_mnttabvp_setup();
 }
 
@@ -977,7 +985,7 @@ lofi_add(const char *fsname, struct vfs *vfsp,
 	ldi_ident_t ldi_id;
 	ldi_handle_t ldi_hdl;
 	vfssw_t *vfssw;
-	int minor;
+	int id;
 	int err = 0;
 
 	if ((vfssw = vfs_getvfssw(fsname)) == NULL)
@@ -1021,12 +1029,12 @@ lofi_add(const char *fsname, struct vfs *vfsp,
 		goto out2;
 
 	err = ldi_ioctl(ldi_hdl, LOFI_MAP_FILE, (intptr_t)li,
-	    FREAD | FWRITE | FKIOCTL, kcred, &minor);
+	    FREAD | FWRITE | FKIOCTL, kcred, &id);
 
 	(void) ldi_close(ldi_hdl, FREAD | FWRITE, kcred);
 
 	if (!err)
-		vfsp->vfs_lofi_minor = minor;
+		vfsp->vfs_lofi_id = id;
 
 out2:
 	ldi_ident_release(ldi_id);
@@ -1047,13 +1055,13 @@ lofi_remove(struct vfs *vfsp)
 	ldi_handle_t ldi_hdl;
 	int err;
 
-	if (vfsp->vfs_lofi_minor == 0)
+	if (vfsp->vfs_lofi_id == 0)
 		return;
 
 	ldi_id = ldi_ident_from_anon();
 
 	li = kmem_zalloc(sizeof (*li), KM_SLEEP);
-	li->li_minor = vfsp->vfs_lofi_minor;
+	li->li_id = vfsp->vfs_lofi_id;
 	li->li_cleanup = B_TRUE;
 
 	err = ldi_open_by_name("/dev/lofictl", FREAD | FWRITE, kcred,
@@ -1068,7 +1076,7 @@ lofi_remove(struct vfs *vfsp)
 	(void) ldi_close(ldi_hdl, FREAD | FWRITE, kcred);
 
 	if (!err)
-		vfsp->vfs_lofi_minor = 0;
+		vfsp->vfs_lofi_id = 0;
 
 out:
 	ldi_ident_release(ldi_id);
@@ -1098,7 +1106,7 @@ out:
  */
 int
 domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
-	struct vfs **vfspp)
+    struct vfs **vfspp)
 {
 	struct vfssw	*vswp;
 	vfsops_t	*vfsops;
@@ -1125,6 +1133,7 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	struct pathname	pn, rpn;
 	vsk_anchor_t	*vskap;
 	char fstname[FSTYPSZ];
+	zone_t		*zone;
 
 	/*
 	 * The v_flag value for the mount point vp is permanently set
@@ -1473,7 +1482,7 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	/*
 	 * PRIV_SYS_MOUNT doesn't mean you can become root.
 	 */
-	if (vfsp->vfs_lofi_minor != 0) {
+	if (vfsp->vfs_lofi_id != 0) {
 		uap->flags |= MS_NOSUID;
 		vfs_setmntopt_nolock(&mnt_mntopts, MNTOPT_NOSUID, NULL, 0, 0);
 	}
@@ -1586,9 +1595,24 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 	}
 
 	/*
-	 * Serialize with zone creations.
+	 * Serialize with zone state transitions.
+	 * See vfs_list_add; zone mounted into is:
+	 * 	zone_find_by_path(refstr_value(vfsp->vfs_mntpt))
+	 * not the zone doing the mount (curproc->p_zone), but if we're already
+	 * inside a NGZ, then we know what zone we are.
 	 */
-	mount_in_progress();
+	if (INGLOBALZONE(curproc)) {
+		zone = zone_find_by_path(mountpt);
+		ASSERT(zone != NULL);
+	} else {
+		zone = curproc->p_zone;
+		/*
+		 * zone_find_by_path does a hold, so do one here too so that
+		 * we can do a zone_rele after mount_completed.
+		 */
+		zone_hold(zone);
+	}
+	mount_in_progress(zone);
 	/*
 	 * Instantiate (or reinstantiate) the file system.  If appropriate,
 	 * splice it into the file system name space.
@@ -1757,7 +1781,8 @@ domount(char *fsname, struct mounta *uap, vnode_t *vp, struct cred *credp,
 
 		vfs_unlock(vfsp);
 	}
-	mount_completed();
+	mount_completed(zone);
+	zone_rele(zone);
 	if (splice)
 		vn_vfsunlock(vp);
 
@@ -2764,7 +2789,7 @@ vfs_freeopttbl(mntopts_t *mp)
 /* ARGSUSED */
 static int
 vfs_mntdummyread(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cred,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	return (0);
 }
@@ -2772,7 +2797,7 @@ vfs_mntdummyread(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cred,
 /* ARGSUSED */
 static int
 vfs_mntdummywrite(vnode_t *vp, uio_t *uio, int ioflag, cred_t *cred,
-	caller_context_t *ct)
+    caller_context_t *ct)
 {
 	return (0);
 }
@@ -2965,7 +2990,7 @@ vfs_mono_time(timespec_t *ts)
 		oldhrt = hrt;
 		if (newhrt <= hrt)
 			newhrt = hrt + 1;
-		if (cas64((uint64_t *)&hrt, oldhrt, newhrt) == oldhrt)
+		if (atomic_cas_64((uint64_t *)&hrt, oldhrt, newhrt) == oldhrt)
 			break;
 	}
 	hrt2ts(newhrt, ts);
@@ -4327,7 +4352,7 @@ vfs_free(vfs_t *vfsp)
 void
 vfs_hold(vfs_t *vfsp)
 {
-	atomic_add_32(&vfsp->vfs_count, 1);
+	atomic_inc_32(&vfsp->vfs_count);
 	ASSERT(vfsp->vfs_count != 0);
 }
 
@@ -4340,7 +4365,7 @@ void
 vfs_rele(vfs_t *vfsp)
 {
 	ASSERT(vfsp->vfs_count != 0);
-	if (atomic_add_32_nv(&vfsp->vfs_count, -1) == 0) {
+	if (atomic_dec_32_nv(&vfsp->vfs_count) == 0) {
 		VFS_FREEVFS(vfsp);
 		lofi_remove(vfsp);
 		if (vfsp->vfs_zone)
@@ -4633,8 +4658,8 @@ getfsname(char *askfor, char *name, size_t namelen)
  * convention that the NFS V2 filesystem name is "nfs" (see vfs_conf.c)
  * we need to map "nfs" => "nfsdyn" and "nfs2" => "nfs".  The dynamic
  * nfs module will map the type back to either "nfs", "nfs3", or "nfs4".
- * This is only for root filesystems, all other uses such as cachefs
- * will expect that "nfs" == NFS V2.
+ * This is only for root filesystems, all other uses will expect
+ * that "nfs" == NFS V2.
  */
 static void
 getrootfs(char **fstypp, char **fsmodp)
@@ -4776,14 +4801,14 @@ vfs_get_lofi(vfs_t *vfsp, vnode_t **vpp)
 	int strsize;
 	int err;
 
-	if (vfsp->vfs_lofi_minor == 0) {
+	if (vfsp->vfs_lofi_id == 0) {
 		*vpp = NULL;
 		return (-1);
 	}
 
-	strsize = snprintf(NULL, 0, LOFINODE_PATH, vfsp->vfs_lofi_minor);
+	strsize = snprintf(NULL, 0, LOFINODE_PATH, vfsp->vfs_lofi_id);
 	path = kmem_alloc(strsize + 1, KM_SLEEP);
-	(void) snprintf(path, strsize + 1, LOFINODE_PATH, vfsp->vfs_lofi_minor);
+	(void) snprintf(path, strsize + 1, LOFINODE_PATH, vfsp->vfs_lofi_id);
 
 	/*
 	 * We may be inside a zone, so we need to use the /dev path, but

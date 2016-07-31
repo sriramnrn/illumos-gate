@@ -20,8 +20,8 @@
  */
 
 /*
- * Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
  * Copyright (c) 2007, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
  */
 
 /*
@@ -38,12 +38,13 @@
 #include <smbsrv/smb_fsops.h>
 #include <smbsrv/smbinfo.h>
 
-volatile uint32_t smb_fids = 0;
+static volatile uint32_t smb_fids = 0;
+#define	SMB_UNIQ_FID()	atomic_inc_32_nv(&smb_fids)
 
 static uint32_t smb_open_subr(smb_request_t *);
 extern uint32_t smb_is_executable(char *);
 static void smb_delete_new_object(smb_request_t *);
-static int smb_set_open_timestamps(smb_request_t *, smb_ofile_t *, boolean_t);
+static int smb_set_open_attributes(smb_request_t *, smb_ofile_t *);
 static void smb_open_oplock_break(smb_request_t *, smb_node_t *);
 static boolean_t smb_open_attr_only(smb_arg_open_t *);
 static boolean_t smb_open_overwrite(smb_arg_open_t *);
@@ -60,15 +61,11 @@ static boolean_t smb_open_overwrite(smb_arg_open_t *);
  *               FILE_WRITE_ATTRIBUTES, FILE_WRITE_EA, and FILE_APPEND_DATA
  *
  * GENERIC_EXECUTE	STANDARD_RIGHTS_EXECUTE, SYNCHRONIZE, and FILE_EXECUTE.
- *
- * Careful, we have to emulate some Windows behavior here.
- * When requested access == zero, you get READ_CONTROL.
- * MacOS 10.7 depends on this.
  */
-uint32_t
+static uint32_t
 smb_access_generic_to_file(uint32_t desired_access)
 {
-	uint32_t access = READ_CONTROL;
+	uint32_t access = 0;
 
 	if (desired_access & GENERIC_ALL)
 		return (FILE_ALL_ACCESS & ~SYNCHRONIZE);
@@ -201,15 +198,8 @@ smb_common_open(smb_request_t *sr)
 		bcopy(parg, &sr->arg.open, sizeof (*parg));
 	}
 
-	if (status == NT_STATUS_SHARING_VIOLATION) {
-		smbsr_error(sr, NT_STATUS_SHARING_VIOLATION,
-		    ERRDOS, ERROR_SHARING_VIOLATION);
-	}
-
-	if (status == NT_STATUS_NO_SUCH_FILE) {
-		smbsr_error(sr, NT_STATUS_OBJECT_NAME_NOT_FOUND,
-		    ERRDOS, ERROR_FILE_NOT_FOUND);
-	}
+	if (status == NT_STATUS_NO_SUCH_FILE)
+		status = NT_STATUS_OBJECT_NAME_NOT_FOUND;
 
 	kmem_free(parg, sizeof (*parg));
 	return (status);
@@ -233,9 +223,7 @@ smb_common_open(smb_request_t *sr)
  * parameters to the node. We test the omode write-through flag in all
  * write functions.
  *
- * This function will return NT status codes but it also raises errors,
- * in which case it won't return to the caller. Be careful how you
- * handle things in here.
+ * This function returns NT status codes.
  *
  * The following rules apply when processing a file open request:
  *
@@ -333,8 +321,6 @@ smb_open_subr(smb_request_t *sr)
 		if ((op->create_disposition != FILE_CREATE) &&
 		    (op->create_disposition != FILE_OPEN_IF) &&
 		    (op->create_disposition != FILE_OPEN)) {
-			smbsr_error(sr, NT_STATUS_INVALID_PARAMETER,
-			    ERRDOS, ERROR_INVALID_ACCESS);
 			return (NT_STATUS_INVALID_PARAMETER);
 		}
 	}
@@ -349,9 +335,6 @@ smb_open_subr(smb_request_t *sr)
 		ASSERT(sr->uid_user);
 		cmn_err(CE_NOTE, "smbsrv[%s\\%s]: TOO_MANY_OPENED_FILES",
 		    sr->uid_user->u_domain, sr->uid_user->u_name);
-
-		smbsr_error(sr, NT_STATUS_TOO_MANY_OPENED_FILES,
-		    ERRDOS, ERROR_TOO_MANY_OPEN_FILES);
 		return (NT_STATUS_TOO_MANY_OPENED_FILES);
 	}
 
@@ -366,10 +349,19 @@ smb_open_subr(smb_request_t *sr)
 		break;
 
 	case STYPE_IPC:
+		/*
+		 * Security descriptors for pipes are not implemented,
+		 * so just setup a reasonable access mask.
+		 */
+		op->desired_access = (READ_CONTROL | SYNCHRONIZE |
+		    FILE_READ_DATA | FILE_READ_ATTRIBUTES |
+		    FILE_WRITE_DATA | FILE_APPEND_DATA);
 
+		/*
+		 * Limit the number of open pipe instances.
+		 */
 		if ((rc = smb_threshold_enter(&sv->sv_opipe_ct)) != 0) {
 			status = RPC_NT_SERVER_TOO_BUSY;
-			smbsr_error(sr, status, 0, 0);
 			return (status);
 		}
 
@@ -377,15 +369,12 @@ smb_open_subr(smb_request_t *sr)
 		 * No further processing for IPC, we need to either
 		 * raise an exception or return success here.
 		 */
-		if ((status = smb_opipe_open(sr)) != NT_STATUS_SUCCESS)
-			smbsr_error(sr, status, 0, 0);
-
-		smb_threshold_exit(&sv->sv_opipe_ct, sv);
+		uniq_fid = SMB_UNIQ_FID();
+		status = smb_opipe_open(sr, uniq_fid);
+		smb_threshold_exit(&sv->sv_opipe_ct);
 		return (status);
 
 	default:
-		smbsr_error(sr, NT_STATUS_BAD_DEVICE_TYPE,
-		    ERRDOS, ERROR_BAD_DEV_TYPE);
 		return (NT_STATUS_BAD_DEVICE_TYPE);
 	}
 
@@ -393,9 +382,8 @@ smb_open_subr(smb_request_t *sr)
 	if (!smb_pathname_validate(sr, pn))
 		return (sr->smb_error.status);
 
-	if (strlen(pn->pn_path) >= MAXPATHLEN) {
-		smbsr_error(sr, 0, ERRSRV, ERRfilespecs);
-		return (NT_STATUS_NAME_TOO_LONG);
+	if (strlen(pn->pn_path) >= SMB_MAXPATHLEN) {
+		return (NT_STATUS_OBJECT_PATH_INVALID);
 	}
 
 	if (is_dir) {
@@ -421,12 +409,8 @@ smb_open_subr(smb_request_t *sr)
 		 */
 		if (cur_node == sr->tid_tree->t_snode) {
 			if (op->create_disposition == FILE_OPEN) {
-				smbsr_error(sr, NT_STATUS_OBJECT_NAME_NOT_FOUND,
-				    ERRDOS, ERROR_FILE_NOT_FOUND);
 				return (NT_STATUS_OBJECT_NAME_NOT_FOUND);
 			}
-			smbsr_error(sr, NT_STATUS_ACCESS_DENIED, ERRDOS,
-			    ERROR_ACCESS_DENIED);
 			return (NT_STATUS_ACCESS_DENIED);
 		}
 
@@ -437,11 +421,11 @@ smb_open_subr(smb_request_t *sr)
 		op->fqi.fq_dnode = cur_node->n_dnode;
 		smb_node_ref(op->fqi.fq_dnode);
 	} else {
-		if (rc = smb_pathname_reduce(sr, sr->user_cr, pn->pn_path,
+		rc = smb_pathname_reduce(sr, sr->user_cr, pn->pn_path,
 		    sr->tid_tree->t_snode, cur_node, &op->fqi.fq_dnode,
-		    op->fqi.fq_last_comp)) {
-			smbsr_errno(sr, rc);
-			return (sr->smb_error.status);
+		    op->fqi.fq_last_comp);
+		if (rc != 0) {
+			return (smb_errno2status(rc));
 		}
 	}
 
@@ -455,20 +439,23 @@ smb_open_subr(smb_request_t *sr)
 	if ((op->desired_access & ~FILE_READ_ATTRIBUTES) == DELETE)
 		lookup_flags &= ~SMB_FOLLOW_LINKS;
 
-	rc = smb_fsop_lookup_name(sr, kcred, lookup_flags,
+	rc = smb_fsop_lookup_name(sr, zone_kcred(), lookup_flags,
 	    sr->tid_tree->t_snode, op->fqi.fq_dnode, op->fqi.fq_last_comp,
 	    &op->fqi.fq_fnode);
 
 	if (rc == 0) {
 		last_comp_found = B_TRUE;
-		rc = smb_node_getattr(sr, op->fqi.fq_fnode,
-		    &op->fqi.fq_fattr);
+		/*
+		 * Need the DOS attributes below, where we
+		 * check the search attributes (sattr).
+		 */
+		op->fqi.fq_fattr.sa_mask = SMB_AT_DOSATTR;
+		rc = smb_node_getattr(sr, op->fqi.fq_fnode, zone_kcred(),
+		    NULL, &op->fqi.fq_fattr);
 		if (rc != 0) {
 			smb_node_release(op->fqi.fq_fnode);
 			smb_node_release(op->fqi.fq_dnode);
-			smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
-			    ERRDOS, ERROR_INTERNAL_ERROR);
-			return (sr->smb_error.status);
+			return (NT_STATUS_INTERNAL_ERROR);
 		}
 	} else if (rc == ENOENT) {
 		last_comp_found = B_FALSE;
@@ -476,8 +463,7 @@ smb_open_subr(smb_request_t *sr)
 		rc = 0;
 	} else {
 		smb_node_release(op->fqi.fq_dnode);
-		smbsr_errno(sr, rc);
-		return (sr->smb_error.status);
+		return (smb_errno2status(rc));
 	}
 
 
@@ -498,8 +484,6 @@ smb_open_subr(smb_request_t *sr)
 		    !smb_node_is_symlink(node)) {
 			smb_node_release(node);
 			smb_node_release(dnode);
-			smbsr_error(sr, NT_STATUS_ACCESS_DENIED, ERRDOS,
-			    ERRnoaccess);
 			return (NT_STATUS_ACCESS_DENIED);
 		}
 
@@ -514,8 +498,6 @@ smb_open_subr(smb_request_t *sr)
 			if (op->create_options & FILE_NON_DIRECTORY_FILE) {
 				smb_node_release(node);
 				smb_node_release(dnode);
-				smbsr_error(sr, NT_STATUS_FILE_IS_A_DIRECTORY,
-				    ERRDOS, ERROR_ACCESS_DENIED);
 				return (NT_STATUS_FILE_IS_A_DIRECTORY);
 			}
 		} else {
@@ -523,8 +505,6 @@ smb_open_subr(smb_request_t *sr)
 			    (op->nt_flags & NT_CREATE_FLAG_OPEN_TARGET_DIR)) {
 				smb_node_release(node);
 				smb_node_release(dnode);
-				smbsr_error(sr, NT_STATUS_NOT_A_DIRECTORY,
-				    ERRDOS, ERROR_DIRECTORY);
 				return (NT_STATUS_NOT_A_DIRECTORY);
 			}
 		}
@@ -536,8 +516,6 @@ smb_open_subr(smb_request_t *sr)
 		if (node->flags & NODE_FLAGS_DELETE_ON_CLOSE) {
 			smb_node_release(node);
 			smb_node_release(dnode);
-			smbsr_error(sr, NT_STATUS_DELETE_PENDING,
-			    ERRDOS, ERROR_ACCESS_DENIED);
 			return (NT_STATUS_DELETE_PENDING);
 		}
 
@@ -547,8 +525,6 @@ smb_open_subr(smb_request_t *sr)
 		if (op->create_disposition == FILE_CREATE) {
 			smb_node_release(node);
 			smb_node_release(dnode);
-			smbsr_error(sr, NT_STATUS_OBJECT_NAME_COLLISION,
-			    ERRDOS, ERROR_FILE_EXISTS);
 			return (NT_STATUS_OBJECT_NAME_COLLISION);
 		}
 
@@ -566,45 +542,82 @@ smb_open_subr(smb_request_t *sr)
 				    FILE_APPEND_DATA)) {
 					smb_node_release(node);
 					smb_node_release(dnode);
-					smbsr_error(sr, NT_STATUS_ACCESS_DENIED,
-					    ERRDOS, ERRnoaccess);
 					return (NT_STATUS_ACCESS_DENIED);
 				}
 			}
 		}
 
+		if ((op->create_disposition == FILE_SUPERSEDE) ||
+		    (op->create_disposition == FILE_OVERWRITE_IF) ||
+		    (op->create_disposition == FILE_OVERWRITE)) {
+
+			if (!smb_sattr_check(op->fqi.fq_fattr.sa_dosattr,
+			    op->dattr)) {
+				smb_node_release(node);
+				smb_node_release(dnode);
+				return (NT_STATUS_ACCESS_DENIED);
+			}
+
+			if (smb_node_is_dir(node)) {
+				smb_node_release(node);
+				smb_node_release(dnode);
+				return (NT_STATUS_ACCESS_DENIED);
+			}
+		}
+
+		/* MS-FSA 2.1.5.1.2 */
+		if (op->create_disposition == FILE_SUPERSEDE)
+			op->desired_access |= DELETE;
+		if ((op->create_disposition == FILE_OVERWRITE_IF) ||
+		    (op->create_disposition == FILE_OVERWRITE))
+			op->desired_access |= FILE_WRITE_DATA;
+
+		status = smb_fsop_access(sr, sr->user_cr, node,
+		    op->desired_access);
+		if (status != NT_STATUS_SUCCESS) {
+			smb_node_release(node);
+			smb_node_release(dnode);
+
+			/* SMB1 specific? NT_STATUS_PRIVILEGE_NOT_HELD */
+			if (status == NT_STATUS_PRIVILEGE_NOT_HELD) {
+				return (status);
+			} else {
+				return (NT_STATUS_ACCESS_DENIED);
+			}
+		}
+
+		if (max_requested) {
+			smb_fsop_eaccess(sr, sr->user_cr, node, &max_allowed);
+			op->desired_access |= max_allowed;
+		}
+		/*
+		 * According to MS "dochelp" mail in Mar 2015, any handle
+		 * on which read or write access is granted implicitly
+		 * gets "read attributes", even if it was not requested.
+		 * This avoids unexpected access failures later that
+		 * would happen if these were not granted.
+		 */
+		if ((op->desired_access & FILE_DATA_ALL) != 0) {
+			op->desired_access |= (READ_CONTROL |
+			    FILE_READ_ATTRIBUTES);
+		}
+
 		/*
 		 * Oplock break is done prior to sharing checks as the break
 		 * may cause other clients to close the file which would
-		 * affect the sharing checks.
+		 * affect the sharing checks. This may block, so set the
+		 * file opening count before oplock stuff.
 		 */
 		smb_node_inc_opening_count(node);
 		smb_open_oplock_break(sr, node);
 
 		smb_node_wrlock(node);
 
-		if ((op->create_disposition == FILE_SUPERSEDE) ||
-		    (op->create_disposition == FILE_OVERWRITE_IF) ||
-		    (op->create_disposition == FILE_OVERWRITE)) {
-
-			if ((!(op->desired_access &
-			    (FILE_WRITE_DATA | FILE_APPEND_DATA |
-			    FILE_WRITE_ATTRIBUTES | FILE_WRITE_EA))) ||
-			    (!smb_sattr_check(op->fqi.fq_fattr.sa_dosattr,
-			    op->dattr))) {
-				smb_node_unlock(node);
-				smb_node_dec_opening_count(node);
-				smb_node_release(node);
-				smb_node_release(dnode);
-				smbsr_error(sr, NT_STATUS_ACCESS_DENIED,
-				    ERRDOS, ERRnoaccess);
-				return (NT_STATUS_ACCESS_DENIED);
-			}
-		}
-
+		/*
+		 * Check for sharing violations
+		 */
 		status = smb_fsop_shrlock(sr->user_cr, node, uniq_fid,
 		    op->desired_access, op->share_access);
-
 		if (status == NT_STATUS_SHARING_VIOLATION) {
 			smb_node_unlock(node);
 			smb_node_dec_opening_count(node);
@@ -613,43 +626,13 @@ smb_open_subr(smb_request_t *sr)
 			return (status);
 		}
 
-		status = smb_fsop_access(sr, sr->user_cr, node,
-		    op->desired_access);
-
-		if (status != NT_STATUS_SUCCESS) {
-			smb_fsop_unshrlock(sr->user_cr, node, uniq_fid);
-
-			smb_node_unlock(node);
-			smb_node_dec_opening_count(node);
-			smb_node_release(node);
-			smb_node_release(dnode);
-
-			if (status == NT_STATUS_PRIVILEGE_NOT_HELD) {
-				smbsr_error(sr, status,
-				    ERRDOS, ERROR_PRIVILEGE_NOT_HELD);
-				return (status);
-			} else {
-				smbsr_error(sr, NT_STATUS_ACCESS_DENIED,
-				    ERRDOS, ERROR_ACCESS_DENIED);
-				return (NT_STATUS_ACCESS_DENIED);
-			}
-		}
-
+		/*
+		 * Go ahead with modifications as necessary.
+		 */
 		switch (op->create_disposition) {
 		case FILE_SUPERSEDE:
 		case FILE_OVERWRITE_IF:
 		case FILE_OVERWRITE:
-			if (smb_node_is_dir(node)) {
-				smb_fsop_unshrlock(sr->user_cr, node, uniq_fid);
-				smb_node_unlock(node);
-				smb_node_dec_opening_count(node);
-				smb_node_release(node);
-				smb_node_release(dnode);
-				smbsr_error(sr, NT_STATUS_ACCESS_DENIED,
-				    ERRDOS, ERROR_ACCESS_DENIED);
-				return (NT_STATUS_ACCESS_DENIED);
-			}
-
 			op->dattr |= FILE_ATTRIBUTE_ARCHIVE;
 			/* Don't apply readonly bit until smb_ofile_close */
 			if (op->dattr & FILE_ATTRIBUTE_READONLY) {
@@ -657,9 +640,15 @@ smb_open_subr(smb_request_t *sr)
 				op->dattr &= ~FILE_ATTRIBUTE_READONLY;
 			}
 
+			/*
+			 * Truncate the file data here.
+			 * We set alloc_size = op->dsize later,
+			 * after we have an ofile.  See:
+			 * smb_set_open_attributes
+			 */
 			bzero(&new_attr, sizeof (new_attr));
 			new_attr.sa_dosattr = op->dattr;
-			new_attr.sa_vattr.va_size = op->dsize;
+			new_attr.sa_vattr.va_size = 0;
 			new_attr.sa_mask = SMB_AT_DOSATTR | SMB_AT_SIZE;
 			rc = smb_fsop_setattr(sr, sr->user_cr, node, &new_attr);
 			if (rc != 0) {
@@ -668,24 +657,23 @@ smb_open_subr(smb_request_t *sr)
 				smb_node_dec_opening_count(node);
 				smb_node_release(node);
 				smb_node_release(dnode);
-				smbsr_errno(sr, rc);
-				return (sr->smb_error.status);
+				return (smb_errno2status(rc));
 			}
 
 			/*
 			 * If file is being replaced, remove existing streams
 			 */
 			if (SMB_IS_STREAM(node) == 0) {
-				rc = smb_fsop_remove_streams(sr, sr->user_cr,
-				    node);
-				if (rc != 0) {
+				status = smb_fsop_remove_streams(sr,
+				    sr->user_cr, node);
+				if (status != 0) {
 					smb_fsop_unshrlock(sr->user_cr, node,
 					    uniq_fid);
 					smb_node_unlock(node);
 					smb_node_dec_opening_count(node);
 					smb_node_release(node);
 					smb_node_release(dnode);
-					return (sr->smb_error.status);
+					return (status);
 				}
 			}
 
@@ -696,6 +684,12 @@ smb_open_subr(smb_request_t *sr)
 			/*
 			 * FILE_OPEN or FILE_OPEN_IF.
 			 */
+			/*
+			 * Ignore any user-specified alloc_size for
+			 * existing files, to avoid truncation in
+			 * smb_set_open_attributes
+			 */
+			op->dsize = 0L;
 			op->action_taken = SMB_OACT_OPENED;
 			break;
 		}
@@ -709,15 +703,11 @@ smb_open_subr(smb_request_t *sr)
 		if ((op->create_disposition == FILE_OPEN) ||
 		    (op->create_disposition == FILE_OVERWRITE)) {
 			smb_node_release(dnode);
-			smbsr_error(sr, NT_STATUS_OBJECT_NAME_NOT_FOUND,
-			    ERRDOS, ERROR_FILE_NOT_FOUND);
 			return (NT_STATUS_OBJECT_NAME_NOT_FOUND);
 		}
 
 		if (pn->pn_fname && smb_is_invalid_filename(pn->pn_fname)) {
 			smb_node_release(dnode);
-			smbsr_error(sr, NT_STATUS_OBJECT_NAME_INVALID,
-			    ERRDOS, ERROR_INVALID_NAME);
 			return (NT_STATUS_OBJECT_NAME_INVALID);
 		}
 
@@ -751,10 +741,11 @@ smb_open_subr(smb_request_t *sr)
 			new_attr.sa_mask |=
 			    SMB_AT_DOSATTR | SMB_AT_TYPE | SMB_AT_MODE;
 
-			if (op->dsize) {
-				new_attr.sa_vattr.va_size = op->dsize;
-				new_attr.sa_mask |= SMB_AT_SIZE;
-			}
+			/*
+			 * We set alloc_size = op->dsize later,
+			 * after we have an ofile.  See:
+			 * smb_set_open_attributes
+			 */
 
 			rc = smb_fsop_create(sr, sr->user_cr, dnode,
 			    op->fqi.fq_last_comp, &new_attr, &op->fqi.fq_fnode);
@@ -762,8 +753,7 @@ smb_open_subr(smb_request_t *sr)
 			if (rc != 0) {
 				smb_node_unlock(dnode);
 				smb_node_release(dnode);
-				smbsr_errno(sr, rc);
-				return (sr->smb_error.status);
+				return (smb_errno2status(rc));
 			}
 
 			node = op->fqi.fq_fnode;
@@ -795,8 +785,7 @@ smb_open_subr(smb_request_t *sr)
 			if (rc != 0) {
 				smb_node_unlock(dnode);
 				smb_node_release(dnode);
-				smbsr_errno(sr, rc);
-				return (sr->smb_error.status);
+				return (smb_errno2status(rc));
 			}
 
 			node = op->fqi.fq_fnode;
@@ -806,44 +795,64 @@ smb_open_subr(smb_request_t *sr)
 
 		created = B_TRUE;
 		op->action_taken = SMB_OACT_CREATED;
-	}
 
-	if (max_requested) {
-		smb_fsop_eaccess(sr, sr->user_cr, node, &max_allowed);
-		op->desired_access |= max_allowed;
+		if (max_requested) {
+			smb_fsop_eaccess(sr, sr->user_cr, node, &max_allowed);
+			op->desired_access |= max_allowed;
+		}
+		/*
+		 * We created created this object (we own it) so
+		 * grant read/write attributes on this handle,
+		 * even if that was not requested.  This avoids
+		 * unexpected access failures later that would
+		 * happen if these were not granted.
+		 */
+		op->desired_access |= (READ_CONTROL |
+		    FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES);
 	}
 
 	status = NT_STATUS_SUCCESS;
 
-	of = smb_ofile_open(sr->tid_tree, node, sr->smb_pid, op, SMB_FTYPE_DISK,
-	    uniq_fid, &err);
+	of = smb_ofile_open(sr, node, op, SMB_FTYPE_DISK, uniq_fid,
+	    &err);
 	if (of == NULL) {
-		smbsr_error(sr, err.status, err.errcls, err.errcode);
 		status = err.status;
 	}
 
-	if (status == NT_STATUS_SUCCESS) {
-		if (!smb_tree_is_connected(sr->tid_tree)) {
-			smbsr_error(sr, 0, ERRSRV, ERRinvnid);
-			status = NT_STATUS_UNSUCCESSFUL;
-		}
+	/*
+	 * We might have blocked in smb_ofile_open long enough so a
+	 * tree disconnect might have happened.  In that case, we've
+	 * just added an ofile to a tree that's disconnecting, and
+	 * need to undo that to avoid interfering with tear-down of
+	 * the tree connection.
+	 */
+	if (status == NT_STATUS_SUCCESS &&
+	    !smb_tree_is_connected(sr->tid_tree)) {
+		status = NT_STATUS_INVALID_PARAMETER;
 	}
 
 	/*
 	 * This MUST be done after ofile creation, so that explicitly
-	 * set timestamps can be remembered on the ofile.
+	 * set timestamps can be remembered on the ofile, and the
+	 * readonly flag will be stored "pending" on the node.
 	 */
 	if (status == NT_STATUS_SUCCESS) {
-		if ((rc = smb_set_open_timestamps(sr, of, created)) != 0) {
-			smbsr_errno(sr, rc);
-			status = sr->smb_error.status;
+		if ((rc = smb_set_open_attributes(sr, of)) != 0) {
+			status = smb_errno2status(rc);
 		}
 	}
 
 	if (status == NT_STATUS_SUCCESS) {
-		if (smb_node_getattr(sr, node,  &op->fqi.fq_fattr) != 0) {
-			smbsr_error(sr, NT_STATUS_INTERNAL_ERROR,
-			    ERRDOS, ERROR_INTERNAL_ERROR);
+		/*
+		 * We've already done access checks above,
+		 * and want this call to succeed even when
+		 * !(desired_access & FILE_READ_ATTRIBUTES),
+		 * so pass kcred here.
+		 */
+		op->fqi.fq_fattr.sa_mask = SMB_AT_ALL;
+		rc = smb_node_getattr(sr, node, zone_kcred(), of,
+		    &op->fqi.fq_fattr);
+		if (rc != 0) {
 			status = NT_STATUS_INTERNAL_ERROR;
 		}
 	}
@@ -951,7 +960,7 @@ static boolean_t
 smb_open_attr_only(smb_arg_open_t *op)
 {
 	if (((op->desired_access & ~(FILE_READ_ATTRIBUTES |
-	    FILE_WRITE_ATTRIBUTES | SYNCHRONIZE)) == 0) &&
+	    FILE_WRITE_ATTRIBUTES | SYNCHRONIZE | READ_CONTROL)) == 0) &&
 	    (op->create_disposition != FILE_SUPERSEDE) &&
 	    (op->create_disposition != FILE_OVERWRITE)) {
 		return (B_TRUE);
@@ -969,60 +978,66 @@ smb_open_overwrite(smb_arg_open_t *op)
 	}
 	return (B_FALSE);
 }
+
 /*
- * smb_set_open_timestamps
+ * smb_set_open_attributes
  *
  * Last write time:
  * - If the last_write time specified in the open params is not 0 or -1,
  *   use it as file's mtime. This will be considered an explicitly set
  *   timestamps, not reset by subsequent writes.
  *
- * Opening existing file (not directory):
- * - If opening an existing file for overwrite set initial ATIME, MTIME
- *   & CTIME to now. (This is achieved by setting them as pending then forcing
- *   an smb_node_setattr() to apply pending times.)
+ * DOS attributes
+ * - If we created_readonly, we now store the real DOS attributes
+ *   (including the readonly bit) so subsequent opens will see it.
  *
- * - Note  If opening an existing file NOT for overwrite, windows would
- *   set the atime on file close, however setting the atime would cause
- *   the ARCHIVE attribute to be set, which does not occur on windows,
- *   so we do not do the atime update.
+ * Both are stored "pending" rather than in the file system.
  *
  * Returns: errno
  */
 static int
-smb_set_open_timestamps(smb_request_t *sr, smb_ofile_t *of, boolean_t created)
+smb_set_open_attributes(smb_request_t *sr, smb_ofile_t *of)
 {
-	int		rc = 0;
+	smb_attr_t	attr;
 	smb_arg_open_t	*op = &sr->sr_open;
 	smb_node_t	*node = of->f_node;
-	boolean_t	existing_file, set_times;
-	smb_attr_t	attr;
+	int		rc = 0;
 
 	bzero(&attr, sizeof (smb_attr_t));
-	set_times = B_FALSE;
+
+	if (op->created_readonly) {
+		attr.sa_dosattr = op->dattr | FILE_ATTRIBUTE_READONLY;
+		attr.sa_mask |= SMB_AT_DOSATTR;
+	}
+
+	if (op->dsize != 0) {
+		attr.sa_allocsz = op->dsize;
+		attr.sa_mask |= SMB_AT_ALLOCSZ;
+	}
 
 	if ((op->mtime.tv_sec != 0) && (op->mtime.tv_sec != UINT_MAX)) {
-		attr.sa_mask = SMB_AT_MTIME;
 		attr.sa_vattr.va_mtime = op->mtime;
-		set_times = B_TRUE;
+		attr.sa_mask |= SMB_AT_MTIME;
 	}
 
-	existing_file = !(created || smb_node_is_dir(node));
-	if (existing_file) {
-		switch (op->create_disposition) {
-		case FILE_SUPERSEDE:
-		case FILE_OVERWRITE_IF:
-		case FILE_OVERWRITE:
-			smb_ofile_set_write_time_pending(of);
-			set_times = B_TRUE;
-			break;
-		default:
-			break;
-		}
-	}
+	/*
+	 * Used to have code here to set mtime, ctime, atime
+	 * when the open op->create_disposition is any of:
+	 * FILE_SUPERSEDE, FILE_OVERWRITE_IF, FILE_OVERWRITE.
+	 * We know that in those cases we will have set the
+	 * file size, in which case the file system will
+	 * update those times, so we don't have to.
+	 *
+	 * However, keep track of the fact that we modified
+	 * the file via this handle, so we can do the evil,
+	 * gratuitious mtime update on close that Windows
+	 * clients appear to expect.
+	 */
+	if (op->action_taken == SMB_OACT_TRUNCATED)
+		of->f_written = B_TRUE;
 
-	if (set_times)
-		rc = smb_node_setattr(sr, node, sr->user_cr, of, &attr);
+	if (attr.sa_mask != 0)
+		rc = smb_node_setattr(sr, node, of->f_cr, of, &attr);
 
 	return (rc);
 }

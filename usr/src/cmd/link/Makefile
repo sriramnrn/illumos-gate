@@ -23,7 +23,7 @@
 # Copyright 2004 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
+# Copyright 2015 RackTop Systems.
 #
 
 PROG= link 
@@ -36,12 +36,14 @@ clean $(XPG4) := OBJS += values-xpg4.o
 
 FILEMODE= 0555
 
+CERRWARN += -_gcc=-Wno-parentheses
+
 .KEEP_STATE:
 
 all: $(PROG) $(XPG4)
 
 $(PROG) $(XPG4): $$(OBJS)
-	$(LINK.c) -o $@ $(OBJS)
+	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
 install: all $(ROOTUSRSBINPROG) $(ROOTXPG4PROG)

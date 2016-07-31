@@ -22,7 +22,6 @@
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
 
 UTSBASE	= ../..
 
@@ -40,6 +39,10 @@ include $(UTSBASE)/sparc/Makefile.sparc
 #
 DSF_DIR		= $(UTSBASE)/$(PLATFORM)/genassym
 
+CERRWARN	+= -_gcc=-Wno-parentheses
+CERRWARN	+= -_gcc=-Wno-type-limits
+CERRWARN	+= -_gcc=-Wno-uninitialized
+
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
 LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
@@ -49,6 +52,7 @@ DTRACE_INC_64	= -I$(UTSBASE)/sparc/v9
 
 CFLAGS += $(CCVERBOSE)
 CPPFLAGS += $(DTRACE_INC_$(CLASS))
+CPPFLAGS += -I$(SRC)/common/util
 
 DTRACE_XAS_32	= -xarch=v8plus
 DTRACE_XAS_64	= -xarch=v9

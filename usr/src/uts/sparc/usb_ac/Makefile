@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+#
 # uts/sparc/usb_ac/Makefile
 #
 #	This makefile drives the production of the usb_ac driver
@@ -63,6 +65,11 @@ LDFLAGS	+= -dy -Nmisc/usba -Ndrv/audio
 ALL_TARGET	= $(BINARY) $(SRC_CONFILE)
 LINT_TARGET	= $(MODULE).lint
 INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
+
+CERRWARN	+= -_gcc=-Wno-switch
+CERRWARN	+= -_gcc=-Wno-type-limits
+CERRWARN	+= -_gcc=-Wno-unused-label
+CERRWARN	+= -_gcc=-Wno-uninitialized
 
 #
 # For now, disable these lint checks; maintainers should endeavor
@@ -107,7 +114,7 @@ TEST		= test
 #
 #	lock_lint rules
 #
-USBA_FILES	= $(USBA_WITHOUT_WUSB_OBJS:%.o=../usba/%.ll)
+USBA_FILES	= $(USBA_OBJS:%.o=../usba/%.ll)
 UHCI_FILES	= $(UHCI_OBJS:%.o=../uhci/%.ll)
 OHCI_FILES	= $(OHCI_OBJS:%.o=../ohci/%.ll)
 EHCI_FILES	= $(EHCI_OBJS:%.o=../ehci/%.ll)

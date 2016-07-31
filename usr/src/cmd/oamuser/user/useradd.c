@@ -19,6 +19,8 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright (c) 2013 Gary Mills
+ *
  * Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -26,6 +28,9 @@
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
 /*	  All Rights Reserved  	*/
 
+/*
+ * Copyright (c) 2013 RackTop Systems.
+ */
 
 #include	<sys/types.h>
 #include	<sys/stat.h>
@@ -40,13 +45,15 @@
 #include	<project.h>
 #include	<unistd.h>
 #include	<user_attr.h>
+#include	<libcmdutils.h>
 #include	"users.h"
 #include	"messages.h"
 #include	"userdisp.h"
 #include	"funcs.h"
 
 /*
- *  useradd [-u uid [-o] | -g group | -G group [[, group]...] | -d dir [-m]
+ *  useradd [-u uid [-o] | -g group | -G group [[, group]...]
+ *		| -d dir [-m [-z|Z]]
  *		| -s shell | -c comment | -k skel_dir | -b base_dir] ]
  *		[ -A authorization [, authorization ...]]
  *		[ -P profile [, profile ...]]
@@ -82,7 +89,6 @@ extern void dispusrdef();
 
 static void cleanup();
 
-extern uid_t findnextuid(void);
 extern int check_perm(), valid_expire();
 extern int putusrdef(), valid_uid();
 extern int call_passmgmt(), edit_group(), create_home();
@@ -91,6 +97,7 @@ extern int **valid_lgroup();
 extern projid_t **valid_lproject();
 extern void update_def(struct userdefs *);
 extern void import_def(struct userdefs *);
+extern int get_default_zfs_flags();
 
 static uid_t uid;			/* new uid */
 static char *logname;			/* login name to add */
@@ -132,8 +139,9 @@ main(argc, argv)
 int argc;
 char *argv[];
 {
-	int ch, ret, mflag = 0, oflag = 0, Dflag = 0, **gidlist;
-	projid_t **projlist;
+	int ch, ret, mflag = 0, oflag = 0, Dflag = 0;
+	int zflag = 0, Zflag = 0, **gidlist = NULL;
+	projid_t **projlist = NULL;
 	char *ptr;			/* loc in a str, may be set by strtol */
 	struct group *g_ptr;
 	struct project p_ptr;
@@ -143,6 +151,7 @@ char *argv[];
 	int busy = 0;
 	char **nargv;			/* arguments for execvp of passmgmt */
 	int argindex;			/* argument index into nargv */
+	int zfs_flags = 0;			/* create_home flags */
 
 	cmdname = argv[0];
 
@@ -157,7 +166,7 @@ char *argv[];
 	change_key(USERATTR_TYPE_KW, usertype);
 
 	while ((ch = getopt(argc, argv,
-		    "b:c:Dd:e:f:G:g:k:mop:s:u:A:P:R:K:")) != EOF)
+		    "b:c:Dd:e:f:G:g:k:mzZop:s:u:A:P:R:K:")) != EOF)
 		switch (ch) {
 		case 'b':
 			base_dir = optarg;
@@ -215,6 +224,14 @@ char *argv[];
 			uidstr = optarg;
 			break;
 
+		case 'Z':
+			Zflag++;
+			break;
+
+		case 'z':
+			zflag++;
+			break;
+
 		case 'A':
 			change_key(USERATTR_AUTHS_KW, optarg);
 			break;
@@ -243,6 +260,16 @@ char *argv[];
 				errmsg(M_AUSAGE);
 			exit(EX_SYNTAX);
 		}
+
+	if (((!mflag) && (zflag || Zflag)) || (zflag && Zflag) ||
+	    (mflag > 1 && (zflag || Zflag))) {
+		if (is_role(usertype))
+			errmsg(M_ARUSAGE);
+		else
+			errmsg(M_AUSAGE);
+		exit(EX_SYNTAX);
+	}
+
 
 	/* get defaults for adding new users */
 	usrdefs = getusrdef(usertype);
@@ -393,6 +420,11 @@ char *argv[];
 		errmsg(M_USED, logname);
 		exit(EX_NAME_EXISTS);
 		/*NOTREACHED*/
+
+	case LONGNAME:
+		errmsg(M_TOO_LONG, logname);
+		exit(EX_BADARG);
+		/*NOTREACHED*/
 	}
 
 	if (warning)
@@ -425,7 +457,7 @@ char *argv[];
 
 	} else {
 
-		if ((uid = findnextuid()) < 0) {
+		if (findnextuid(DEFRID+1, MAXUID, &uid) != 0) {
 			errmsg(M_INVALID, "default id", "user id");
 			exit(EX_ID_EXISTS);
 		}
@@ -634,7 +666,7 @@ char *argv[];
 				errmsg(M_UID_USED, uid);
 				exit(EX_ID_EXISTS);
 			} else {
-				if ((uid = findnextuid()) < 0) {
+				if (findnextuid(DEFRID+1, MAXUID, &uid) != 0) {
 					errmsg(M_INVALID, "default id",
 					    "user id");
 					exit(EX_ID_EXISTS);
@@ -676,8 +708,18 @@ char *argv[];
 	}
 
 	/* create home directory */
-	if (mflag &&
-	    (create_home(homedir, skel_dir, uid, gid) != EX_SUCCESS)) {
+	if (mflag) {
+		zfs_flags = get_default_zfs_flags();
+
+		if (zflag || mflag > 1)
+			zfs_flags |= MANAGE_ZFS;
+		else if (Zflag)
+			zfs_flags &= ~MANAGE_ZFS;
+		ret = create_home(homedir, skel_dir, uid, gid, zfs_flags);
+	}
+	if (ret != EX_SUCCESS) {
+		(void) edit_project(logname, (char *)NULL, (projid_t **)NULL,
+		    0);
 		(void) edit_group(logname, (char *)0, (int **)0, 1);
 		cleanup(logname);
 		exit(EX_HOMEDIR);

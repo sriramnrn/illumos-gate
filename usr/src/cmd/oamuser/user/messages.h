@@ -23,14 +23,14 @@
 
 
 /*
+ * Copyright (c) 2013 Gary Mills
+ *
  * Copyright 2006 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
 
 #ifndef	_MESSAGES_H
 #define	_MESSAGES_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 extern void errmsg(int, ...);
 
@@ -148,5 +148,15 @@ extern void errmsg(int, ...);
 
 /* ERROR: Failed to read /etc/group file due to invalid entry or read error. */
 #define	M_READ_ERROR	37
+
+/* ERROR: %s is too long.  Choose another. */
+#define	M_TOO_LONG	38
+
+/*
+ * WARNING: Avoided creating ZFS filesystem as parent directory
+ * %s is not a ZFS mount point.
+ */
+#define	M_NO_ZFS_MOUNTPOINT	39
+
 
 #endif /* _MESSAGES_H */

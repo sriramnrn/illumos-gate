@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1989, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2015, Joyent Inc.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -39,6 +40,7 @@
 #include <sys/vnode.h>
 #include <sys/pathname.h>
 #include <sys/file.h>
+#include <sys/flock.h>
 #include <sys/proc.h>
 #include <sys/var.h>
 #include <sys/cpuvar.h>
@@ -54,6 +56,7 @@
 #include <sys/poll.h>
 #include <sys/rctl.h>
 #include <sys/port_impl.h>
+#include <sys/dtrace.h>
 
 #include <c2/audit.h>
 #include <sys/nbmlock.h>
@@ -65,7 +68,7 @@ static uint32_t afd_alloc;	/* count of kmem_alloc()s */
 static uint32_t afd_free;	/* count of kmem_free()s */
 static uint32_t afd_wait;	/* count of waits on non-zero ref count */
 #define	MAXFD(x)	(afd_maxfd = ((afd_maxfd >= (x))? afd_maxfd : (x)))
-#define	COUNT(x)	atomic_add_32(&x, 1)
+#define	COUNT(x)	atomic_inc_32(&x)
 
 #else	/* DEBUG */
 
@@ -950,7 +953,21 @@ closef(file_t *fp)
 		return (error);
 	}
 	ASSERT(fp->f_count == 0);
+	/* Last reference, remove any OFD style lock for the file_t */
+	ofdcleanlock(fp);
 	mutex_exit(&fp->f_tlock);
+
+	/*
+	 * If DTrace has getf() subroutines active, it will set dtrace_closef
+	 * to point to code that implements a barrier with respect to probe
+	 * context.  This must be called before the file_t is freed (and the
+	 * vnode that it refers to is released) -- but it must be after the
+	 * file_t has been removed from the uf_entry_t.  That is, there must
+	 * be no way for a racing getf() in probe context to yield the fp that
+	 * we're operating upon.
+	 */
+	if (dtrace_closef != NULL)
+		(*dtrace_closef)();
 
 	VN_RELE(vp);
 	/*
@@ -1195,7 +1212,8 @@ f_getfl(int fd, int *flagp)
 			error = EBADF;
 		else {
 			vnode_t *vp = fp->f_vnode;
-			int flag = fp->f_flag | (fp->f_flag2 << 16);
+			int flag = fp->f_flag |
+			    ((fp->f_flag2 & ~FEPOLLED) << 16);
 
 			/*
 			 * BSD fcntl() FASYNC compatibility.

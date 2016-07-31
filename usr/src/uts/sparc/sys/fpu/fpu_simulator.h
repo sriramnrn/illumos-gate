@@ -379,7 +379,7 @@ struct visinfo_kstat {
 	extern void __dtrace_probe___visinfo_##opcode(uint64_t *);	\
 	uint64_t *stataddr = &visinfo.opcode.value.ui64;		\
 	__dtrace_probe___visinfo_##opcode(stataddr);       		\
-	atomic_add_64(&visinfo.opcode.value.ui64, 1);			\
+	atomic_inc_64(&visinfo.opcode.value.ui64);			\
 }
 
 
@@ -455,7 +455,7 @@ extern enum ftt_type fp_emulator(
 	fp_inst_type	*pinst,    /* Pointer to FPU instruction to simulate. */
 	struct regs	*pregs,    /* Pointer to PCB image of registers. */
 	struct rwindow	*pwindow,  /* Pointer to locals and ins. */
-	struct fpu	*pfpu);	   /* Pointer to FPU register block. */
+	struct _fpu	*pfpu);	   /* Pointer to FPU register block. */
 
 /*
  * fp_traps handles passing exception conditions to the kernel.

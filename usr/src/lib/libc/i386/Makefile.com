@@ -20,6 +20,9 @@
 #
 #
 # Copyright (c) 2004, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2016 Joyent, Inc.
+# Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
+# Copyright 2013 Garrett D'Amore <garrett@damore.org>
 #
 # Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
 # Use is subject to license terms.
@@ -67,23 +70,27 @@ FPOBJS=				\
 	_X_cplx_lr_div_ix.o	\
 	_X_cplx_lr_div_rx.o	\
 	_X_cplx_mul.o		\
-	_base_il.o		\
 	fpgetmask.o		\
 	fpgetround.o		\
 	fpgetsticky.o		\
 	fpsetmask.o		\
 	fpsetround.o		\
 	fpsetsticky.o		\
-	fpstart.o
+	fpstart.o		\
+	ieee.o
 
 FPASMOBJS=			\
 	__xgetRD.o		\
+	_base_il.o		\
 	_xtoll.o		\
 	_xtoull.o		\
 	fpcw.o
 
 ATOMICOBJS=			\
 	atomic.o
+
+CHACHAOBJS=			\
+	chacha.o
 
 XATTROBJS=			\
 	xattr_common.o
@@ -109,10 +116,13 @@ GENOBJS=			\
 	_mul64.o		\
 	abs.o			\
 	alloca.o		\
+	arc4random.o		\
+	arc4random_uniform.o	\
 	byteorder.o		\
 	byteorder64.o		\
 	cuexit.o		\
 	ecvt.o			\
+	endian.o		\
 	errlst.o		\
 	i386_data.o		\
 	ladd.o			\
@@ -152,7 +162,9 @@ COMSYSOBJS64=			\
 	lseek64.o		\
 	mmap64.o		\
 	pread64.o		\
+	preadv64.o		\
 	pwrite64.o		\
+	pwritev64.o		\
 	setrlimit64.o		\
 	statvfs64.o
 
@@ -220,6 +232,7 @@ COMSYSOBJS=			\
 	getpid.o		\
 	getpmsg.o		\
 	getppid.o		\
+	getrandom.o		\
 	getrlimit.o		\
 	getuid.o		\
 	gtty.o			\
@@ -244,8 +257,10 @@ COMSYSOBJS=			\
 	pathconf.o		\
 	pause.o			\
 	pcsample.o		\
+	pipe2.o			\
 	pollsys.o		\
 	pread.o			\
+	preadv.o		\
 	priocntlset.o		\
 	processor_bind.o	\
 	processor_info.o	\
@@ -253,6 +268,7 @@ COMSYSOBJS=			\
 	putmsg.o		\
 	putpmsg.o		\
 	pwrite.o		\
+	pwritev.o		\
 	read.o			\
 	readv.o			\
 	resolvepath.o		\
@@ -300,7 +316,6 @@ SYSOBJS=			\
 	gettimeofday.o		\
 	lwp_private.o		\
 	nuname.o		\
-	pipe.o			\
 	ptrace.o		\
 	syscall.o		\
 	sysi86.o		\
@@ -399,10 +414,12 @@ PORTGEN=			\
 	euclen.o		\
 	event_port.o		\
 	execvp.o		\
+	explicit_bzero.o	\
 	fattach.o		\
 	fdetach.o		\
 	fdopendir.o		\
 	ffs.o			\
+	flock.o			\
 	fls.o			\
 	fmtmsg.o		\
 	ftime.o			\
@@ -413,6 +430,7 @@ PORTGEN=			\
 	getcwd.o		\
 	getdate_err.o		\
 	getdtblsize.o		\
+	getentropy.o		\
 	getenv.o		\
 	getexecname.o		\
 	getgrnam.o		\
@@ -498,6 +516,7 @@ PORTGEN=			\
 	pfmt.o			\
 	pfmt_data.o		\
 	pfmt_print.o		\
+	pipe.o			\
 	plock.o			\
 	poll.o			\
 	posix_fadvise.o		\
@@ -577,6 +596,7 @@ PORTGEN=			\
 	tfind.o			\
 	time_data.o		\
 	time_gdata.o		\
+	timespec_get.o		\
 	tls_data.o		\
 	truncate.o		\
 	tsdalloc.o		\
@@ -694,9 +714,6 @@ PORTI18N=			\
 	getwchar.o		\
 	putwchar.o		\
 	putws.o			\
-	strcasecmp.o		\
-	strcasestr.o		\
-	strncasecmp.o		\
 	strtows.o		\
 	wcsnlen.o		\
 	wcsstr.o		\
@@ -709,7 +726,6 @@ PORTI18N=			\
 	wmemcpy.o		\
 	wmemmove.o		\
 	wmemset.o		\
-	wscasecmp.o		\
 	wscat.o			\
 	wschr.o			\
 	wscmp.o			\
@@ -717,7 +733,6 @@ PORTI18N=			\
 	wscspn.o		\
 	wsdup.o			\
 	wslen.o			\
-	wsncasecmp.o		\
 	wsncat.o		\
 	wsncmp.o		\
 	wsncpy.o		\
@@ -735,7 +750,6 @@ PORTI18N=			\
 	gettext_gnu.o		\
 	gettext_real.o		\
 	gettext_util.o		\
-	isdigit.o		\
 	plural_parser.o		\
 	wdresolve.o		\
 	_ctype.o		\
@@ -763,12 +777,14 @@ PORTLOCALE=			\
 	gb2312.o		\
 	gbk.o			\
 	getdate.o		\
+	isdigit.o		\
 	iswctype.o		\
 	ldpart.o		\
 	lmessages.o		\
 	lnumeric.o		\
 	lmonetary.o		\
 	localeconv.o		\
+	localeimpl.o		\
 	mbftowc.o		\
 	mblen.o			\
 	mbrlen.o		\
@@ -790,9 +806,12 @@ PORTLOCALE=			\
 	runetype.o		\
 	setlocale.o		\
 	setrunelocale.o		\
+	strcasecmp.o		\
+	strcasestr.o		\
 	strcoll.o		\
 	strfmon.o		\
 	strftime.o		\
+	strncasecmp.o		\
 	strptime.o		\
 	strxfrm.o		\
 	table.o			\
@@ -802,6 +821,7 @@ PORTLOCALE=			\
 	ungetwc.o		\
 	utf8.o			\
 	wcrtomb.o		\
+	wcscasecmp.o		\
 	wcscoll.o		\
 	wcsftime.o		\
 	wcsnrtombs.o		\
@@ -837,7 +857,9 @@ THREADSOBJS=			\
 	alloc.o			\
 	assfail.o		\
 	cancel.o		\
+	c11_thr.o		\
 	door_calls.o		\
+	tmem.o			\
 	pthr_attr.o		\
 	pthr_barrier.o		\
 	pthr_cond.o		\
@@ -885,6 +907,8 @@ PORTSYS=			\
 	chmod.o			\
 	chown.o			\
 	corectl.o		\
+	epoll.o			\
+	eventfd.o		\
 	exacctsys.o		\
 	execl.o			\
 	execle.o		\
@@ -922,6 +946,7 @@ PORTSYS=			\
 	sidsys.o		\
 	siginterrupt.o		\
 	signal.o		\
+	signalfd.o		\
 	sigpending.o		\
 	sigstack.o		\
 	stat.o			\
@@ -929,6 +954,7 @@ PORTSYS=			\
 	tasksys.o		\
 	time.o			\
 	time_util.o		\
+	timerfd.o		\
 	ucontext.o		\
 	unlink.o		\
 	ustat.o			\
@@ -941,6 +967,9 @@ PORTREGEX=			\
 	regex.o			\
 	wordexp.o
 
+PORTREGEX64=			\
+	glob64.o
+
 MOSTOBJS=			\
 	$(STRETS)		\
 	$(CRTOBJS)		\
@@ -948,6 +977,7 @@ MOSTOBJS=			\
 	$(FPOBJS)		\
 	$(FPASMOBJS)		\
 	$(ATOMICOBJS)		\
+	$(CHACHAOBJS)		\
 	$(XATTROBJS)		\
 	$(COMOBJS)		\
 	$(DTRACEOBJS)		\
@@ -962,6 +992,7 @@ MOSTOBJS=			\
 	$(PORTPRINT_C89)	\
 	$(PORTPRINT_W)		\
 	$(PORTREGEX)		\
+	$(PORTREGEX64)		\
 	$(PORTSTDIO)		\
 	$(PORTSTDIO64)		\
 	$(PORTSTDIO_C89)	\
@@ -1013,6 +1044,18 @@ CFLAGS += $(CCVERBOSE) $(CTF_FLAGS)
 # We probably don't want any inlining anyway.
 XINLINE = -xinline=
 CFLAGS += $(XINLINE)
+
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-switch
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-unused-value
+CERRWARN += -_gcc=-Wno-unused-label
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-type-limits
+CERRWARN += -_gcc=-Wno-char-subscripts
+CERRWARN += -_gcc=-Wno-clobbered
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-address
 
 # Setting THREAD_DEBUG = -DTHREAD_DEBUG (make THREAD_DEBUG=-DTHREAD_DEBUG ...)
 # enables ASSERT() checking in the threads portion of the library.
@@ -1163,6 +1206,7 @@ TIL=				\
 	thread_pool.o		\
 	tls.o			\
 	tsd.o			\
+	tmem.o			\
 	unwind.o
 
 THREADS_INLINES = $(LIBCBASE)/threads/i386.il
@@ -1179,6 +1223,9 @@ $(SYSOBJS64:%=pics/%) := \
 	CPPFLAGS += -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
 
 $(PORTGEN64:%=pics/%) := \
+	CPPFLAGS += -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
+
+$(PORTREGEX64:%=pics/%) := \
 	CPPFLAGS += -D_LARGEFILE_SOURCE -D_FILE_OFFSET_BITS=64
 
 $(PORTSTDIO64:%=pics/%) := \
@@ -1201,6 +1248,8 @@ $(PORTSTDIO_C89:%=pics/%) := \
 
 $(PORTI18N_COND:%=pics/%) := \
 	CPPFLAGS += -D_WCS_LONGLONG
+
+pics/arc4random.o :=	CPPFLAGS += -I$(SRC)/common/crypto/chacha
 
 .KEEP_STATE:
 
@@ -1262,7 +1311,7 @@ $(ASSYMDEP_OBJS:%=pics/%): assym.h
 GENASSYM_C = $(LIBCDIR)/$(MACH)/genassym.c
 
 genassym: $(GENASSYM_C)
-	$(NATIVECC) -I$(LIBCBASE)/inc -I$(LIBCDIR)/inc	\
+	$(NATIVECC) $(NATIVE_CFLAGS) -I$(LIBCBASE)/inc -I$(LIBCDIR)/inc	\
 		-D__EXTENSIONS__ $(CPPFLAGS.native) -o $@ $(GENASSYM_C)
 
 OFFSETS = $(LIBCDIR)/$(MACH)/offsets.in

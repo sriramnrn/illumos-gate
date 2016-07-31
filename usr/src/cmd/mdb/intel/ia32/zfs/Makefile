@@ -23,8 +23,6 @@
 # Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 
 MODULE = zfs.so
 MDBTGT = kvm
@@ -34,8 +32,11 @@ MODSRCS = zfs.c
 include ../../../../Makefile.cmd
 include ../../Makefile.ia32
 include ../../../Makefile.module
+include ../../../common/modules/zfs/Makefile.zfs
 
 CPPFLAGS += -I../../../../../uts/common/fs/zfs
 
 C99MODE=	-xc99=%all
 C99LMODE=	-Xc99=%all
+
+CERRWARN 	+= -_gcc=-Wno-type-limits

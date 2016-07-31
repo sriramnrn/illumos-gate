@@ -19,8 +19,6 @@
 # CDDL HEADER END
 #
 #
-#ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -39,18 +37,10 @@ LINT_KMODS_X1	= $(LINT_KMODS:nsmb=)
 LINT_KMODS_X2	= $(LINT_KMODS_X1:smbfs=)
 LINT_KMODLIBS	= $(LINT_KMODS_X2:e1000g=)
 LINT_LIBS	= $(LINT_LIB) $(GEN_LINT_LIB) \
-		  $(LINT_KMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln)
-
-$(CLOSED_BUILD)LINT_LIBS += $(CLOSED_LINT_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln)
-
-# EXPORT DELETE START
-$(CLOSED_BUILD)LINT_LIBS	+= $(SVVS_KMODS:%=$(LINT_LIB_DIR)/llib-l%.ln)
-LINT_LIBS	+= $(LINT_XMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln)
-$(CLOSED_BUILD)LINT_LIBS += $(CLOSED_XMODS:%=$(LINT_LIB_DIR)/llib-l%.ln)
+		  $(LINT_KMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln) \
+		  $(LINT_XMODLIBS:%=$(LINT_LIB_DIR)/llib-l%.ln)
 
 DRV_KMODS	+= dprov
-
-# EXPORT DELETE END
 
 def		:=	TARGET= def
 all		:=	TARGET= all
@@ -67,32 +57,18 @@ install_h	:=	TARGET= install_h
 
 .KEEP_STATE:
 
-.PARALLEL:	$(PARALLEL_KMODS) $(CLOSED_KMODS) $(SVVS) $(XMODS) \
-		$(CLOSED_XMODS) config $(LINT_DEPS)
+.PARALLEL:	$(PARALLEL_KMODS) $(XMODS) config $(LINT_DEPS)
 
-def all install clean clobber modlist: $(KMODS) $(CLOSED_KMODS) $(SVVS) \
-	$(XMODS) $(CLOSED_XMODS) config
+def all install clean clobber modlist: $(KMODS) $(XMODS) config
 
-modlintlib clean.lint: $(LINT_KMODS) $(CLOSED_LINT_KMODS) $(SVVS) \
-	$(XMODS) $(CLOSED_XMODS)
+modlintlib clean.lint: $(LINT_KMODS) $(XMODS)
 
 $(KMODS) config:	FRC
 	@cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
 
-$(CLOSED_KMODS):	FRC
-	cd $(CLOSED)/uts/sparc/$@; pwd; $(MAKE) $(NO_STATE) $(TARGET)
-
 $(XMODS):	FRC
 	@if [ -f $@/Makefile  ]; then \
 		cd $@; pwd; $(MAKE) $(NO_STATE) $(TARGET); \
-	else \
-		true; \
-	fi
-
-$(SVVS) $(CLOSED_XMODS):	FRC
-	@if [ -f $(CLOSED)/uts/sparc/$@/Makefile  ]; then \
-		cd $(CLOSED)/uts/sparc/$@; pwd; \
-		    $(MAKE) $(NO_STATE) $(TARGET); \
 	else \
 		true; \
 	fi
@@ -113,16 +89,5 @@ globallint:
 	@-$(LINT) $(LINTFLAGS) $(LINT_LIBS) 2>&1 | $(LGREP.2)
 
 lint:	modlintlib .WAIT $(LINT_DEPS)
-
-# EXPORT DELETE START
-
-EXPORT_SRC:
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-	    < Makefile > Makefile+
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-
-# EXPORT DELETE END
 
 include ../Makefile.targ

@@ -21,7 +21,9 @@
 
 /*
  * Copyright (c) 2006, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2016 Martin Matuska. All rights reserved.
  */
 
 /*
@@ -69,34 +71,6 @@ typedef struct clone_data {
 	time_t		origin_creation; /* snapshot creation time of clone */
 	const char	*snapshot;	/* snapshot of dataset being demoted */
 } clone_data_t;
-
-/*
- * A ZFS file system iterator call-back function which is used to validate
- * datasets imported into the zone.
- */
-/* ARGSUSED */
-static int
-check_zvol(zfs_handle_t *zhp, void *unused)
-{
-	int ret;
-
-	if (zfs_get_type(zhp) == ZFS_TYPE_VOLUME) {
-		/*
-		 * TRANSLATION_NOTE
-		 * zfs and dataset are literals that should not be translated.
-		 */
-		(void) fprintf(stderr, gettext("cannot verify zfs dataset %s: "
-		    "volumes cannot be specified as a zone dataset resource\n"),
-		    zfs_get_name(zhp));
-		ret = -1;
-	} else {
-		ret = zfs_iter_children(zhp, check_zvol, NULL);
-	}
-
-	zfs_close(zhp);
-
-	return (ret);
-}
 
 /*
  * A ZFS file system iterator call-back function which returns the
@@ -274,7 +248,7 @@ get_snap_max(zfs_handle_t *zhp, void *data)
 			cbp->max = num;
 	}
 
-	res = zfs_iter_snapshots(zhp, get_snap_max, data);
+	res = zfs_iter_snapshots(zhp, B_FALSE, get_snap_max, data);
 	zfs_close(zhp);
 	return (res);
 }
@@ -287,7 +261,7 @@ take_snapshot(zfs_handle_t *zhp, char *snapshot_name, int snap_size,
     char *presnapbuf, char *postsnapbuf)
 {
 	int			res;
-	char			template[ZFS_MAXNAMELEN];
+	char			template[ZFS_MAX_DATASET_NAME_LEN];
 	zfs_snapshot_data_t	cb;
 
 	/*
@@ -303,7 +277,7 @@ take_snapshot(zfs_handle_t *zhp, char *snapshot_name, int snap_size,
 	cb.len = strlen(template);
 	cb.max = 0;
 
-	if (zfs_iter_snapshots(zhp, get_snap_max, &cb) != 0)
+	if (zfs_iter_snapshots(zhp, B_FALSE, get_snap_max, &cb) != 0)
 		return (Z_ERR);
 
 	cb.max++;
@@ -408,8 +382,7 @@ clone_snap(char *snapshot_name, char *zonepath)
 	    "off") != 0) ||
 	    (nvlist_add_string(props, zfs_prop_to_name(ZFS_PROP_SHARESMB),
 	    "off") != 0)) {
-		if (props != NULL)
-			nvlist_free(props);
+		nvlist_free(props);
 		(void) fprintf(stderr, gettext("could not create ZFS clone "
 		    "%s: out of memory\n"), zonepath);
 		return (Z_ERR);
@@ -590,8 +563,8 @@ static int
 get_direct_clone(zfs_handle_t *zhp, void *data)
 {
 	clone_data_t	*cd = data;
-	char		origin[ZFS_MAXNAMELEN];
-	char		ds_path[ZFS_MAXNAMELEN];
+	char		origin[ZFS_MAX_DATASET_NAME_LEN];
+	char		ds_path[ZFS_MAX_DATASET_NAME_LEN];
 
 	if (zfs_get_type(zhp) != ZFS_TYPE_FILESYSTEM) {
 		zfs_close(zhp);
@@ -695,7 +668,7 @@ rename_snap(zfs_handle_t *zhp, void *data)
 {
 	int			res;
 	zfs_snapshot_data_t	*cbp;
-	char			template[ZFS_MAXNAMELEN];
+	char			template[ZFS_MAX_DATASET_NAME_LEN];
 
 	cbp = (zfs_snapshot_data_t *)data;
 
@@ -751,8 +724,8 @@ static int
 promote_clone(zfs_handle_t *src_zhp, zfs_handle_t *cln_zhp)
 {
 	zfs_snapshot_data_t	sd;
-	char			nm[ZFS_MAXNAMELEN];
-	char			template[ZFS_MAXNAMELEN];
+	char			nm[ZFS_MAX_DATASET_NAME_LEN];
+	char			template[ZFS_MAX_DATASET_NAME_LEN];
 
 	(void) strlcpy(nm, zfs_get_name(cln_zhp), sizeof (nm));
 	/*
@@ -764,7 +737,7 @@ promote_clone(zfs_handle_t *src_zhp, zfs_handle_t *cln_zhp)
 	sd.len = strlen(template);
 	sd.max = 0;
 
-	if (zfs_iter_snapshots(cln_zhp, get_snap_max, &sd) != 0)
+	if (zfs_iter_snapshots(cln_zhp, B_FALSE, get_snap_max, &sd) != 0)
 		return (Z_ERR);
 
 	/*
@@ -777,7 +750,7 @@ promote_clone(zfs_handle_t *src_zhp, zfs_handle_t *cln_zhp)
 	sd.len = strlen(template);
 	sd.num = 0;
 
-	if (zfs_iter_snapshots(src_zhp, get_snap_max, &sd) != 0)
+	if (zfs_iter_snapshots(src_zhp, B_FALSE, get_snap_max, &sd) != 0)
 		return (Z_ERR);
 
 	/*
@@ -786,7 +759,7 @@ promote_clone(zfs_handle_t *src_zhp, zfs_handle_t *cln_zhp)
 	 */
 	sd.max++;
 	sd.cntr = 0;
-	if (zfs_iter_snapshots(src_zhp, rename_snap, &sd) != 0)
+	if (zfs_iter_snapshots(src_zhp, B_FALSE, rename_snap, &sd) != 0)
 		return (Z_ERR);
 
 	/* close and reopen the clone dataset to get the latest info */
@@ -812,13 +785,13 @@ int
 promote_all_clones(zfs_handle_t *zhp)
 {
 	clone_data_t	cd;
-	char		nm[ZFS_MAXNAMELEN];
+	char		nm[ZFS_MAX_DATASET_NAME_LEN];
 
 	cd.clone_zhp = NULL;
 	cd.origin_creation = 0;
 	cd.snapshot = NULL;
 
-	if (zfs_iter_snapshots(zhp, find_clone, &cd) != 0) {
+	if (zfs_iter_snapshots(zhp, B_FALSE, find_clone, &cd) != 0) {
 		zfs_close(zhp);
 		return (Z_ERR);
 	}
@@ -1015,8 +988,7 @@ create_zfs_zonepath(char *zonepath)
 	    "off") != 0) ||
 	    (nvlist_add_string(props, zfs_prop_to_name(ZFS_PROP_SHARESMB),
 	    "off") != 0)) {
-		if (props != NULL)
-			nvlist_free(props);
+		nvlist_free(props);
 		(void) fprintf(stderr, gettext("cannot create ZFS dataset %s: "
 		    "out of memory\n"), zfs_name);
 	}
@@ -1070,7 +1042,7 @@ destroy_zfs(char *zonepath)
 		return (Z_ERR);
 
 	/* Now cleanup any snapshots remaining. */
-	if (zfs_iter_snapshots(zhp, rm_snap, NULL) != 0) {
+	if (zfs_iter_snapshots(zhp, B_FALSE, rm_snap, NULL) != 0) {
 		zfs_close(zhp);
 		return (Z_ERR);
 	}
@@ -1223,7 +1195,7 @@ verify_datasets(zone_dochandle_t handle)
 	struct zone_dstab dstab;
 	zfs_handle_t *zhp;
 	char propbuf[ZFS_MAXPROPLEN];
-	char source[ZFS_MAXNAMELEN];
+	char source[ZFS_MAX_DATASET_NAME_LEN];
 	zprop_source_t srctype;
 
 	if (zonecfg_setdsent(handle) != Z_OK) {
@@ -1258,17 +1230,6 @@ verify_datasets(zone_dochandle_t handle)
 			zfs_close(zhp);
 			continue;
 		}
-
-		if (zfs_get_type(zhp) == ZFS_TYPE_VOLUME) {
-			(void) fprintf(stderr, gettext("cannot verify zfs "
-			    "dataset %s: volumes cannot be specified as a "
-			    "zone dataset resource\n"),
-			    dstab.zone_dataset_name);
-			return_code = Z_ERR;
-		}
-
-		if (zfs_iter_children(zhp, check_zvol, NULL) != 0)
-			return_code = Z_ERR;
 
 		zfs_close(zhp);
 	}

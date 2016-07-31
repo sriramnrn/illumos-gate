@@ -22,12 +22,12 @@
 /*
  * Copyright 2007 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ * Copyright 2012 Joshua M. Clulow <josh@sysmgr.org>
+ * Copyright 2015 Josef 'Jeff' Sipek <jeffpc@josefsipek.net>
  */
 
 #ifndef	_LIBDISASM_H
 #define	_LIBDISASM_H
-
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
 
 #include <sys/types.h>
 
@@ -40,19 +40,29 @@ typedef struct dis_handle dis_handle_t;
 #define	DIS_DEFAULT		0x0
 
 /* SPARC disassembler flags */
-#define	DIS_SPARC_V8		0x01
-#define	DIS_SPARC_V9		0x02
-#define	DIS_SPARC_V9_SGI	0x04
-#define	DIS_SPARC_V9_OPL	0x08
+#define	DIS_SPARC_V8		0x001
+#define	DIS_SPARC_V9		0x002
+#define	DIS_SPARC_V9_SGI	0x004
+#define	DIS_SPARC_V9_OPL	0x008
 
-/* x86 diassembler flags (mutually exclusive) */
-#define	DIS_X86_SIZE16		0x08
-#define	DIS_X86_SIZE32		0x10
-#define	DIS_X86_SIZE64		0x20
+/* x86 diassembler flags */
+#define	DIS_X86_SIZE16		0x100
+#define	DIS_X86_SIZE32		0x010
+#define	DIS_X86_SIZE64		0x020
+
+/* s390 disassembler flags */
+#define	DIS_S370		0x200
+#define	DIS_S390_31		0x400
+#define	DIS_S390_64		0x800
 
 /* generic disassembler flags */
-#define	DIS_OCTAL		0x40
-#define	DIS_NOIMMSYM		0x80
+#define	DIS_OCTAL		0x040
+#define	DIS_NOIMMSYM		0x080
+
+#define	DIS_ARCH_MASK		(DIS_SPARC_V8 | \
+		DIS_SPARC_V9 | DIS_SPARC_V9_SGI | DIS_SPARC_V9_OPL | \
+		DIS_X86_SIZE16 | DIS_X86_SIZE32 | DIS_X86_SIZE64 | \
+		DIS_S370 | DIS_S390_31 | DIS_S390_64)
 
 typedef int (*dis_lookup_f)(void *, uint64_t, char *, size_t, uint64_t *,
     size_t *);
@@ -67,10 +77,13 @@ extern void dis_set_data(dis_handle_t *, void *);
 extern void dis_flags_set(dis_handle_t *, int f);
 extern void dis_flags_clear(dis_handle_t *, int f);
 extern int dis_max_instrlen(dis_handle_t *);
+extern int dis_min_instrlen(dis_handle_t *);
+extern int dis_instrlen(dis_handle_t *, uint64_t);
 
 /* libdisasm errors */
 #define	E_DIS_NOMEM		1	/* Out of memory */
 #define	E_DIS_INVALFLAG		2	/* Invalid flag for this architecture */
+#define	E_DIS_UNSUPARCH		3	/* Unsupported architecture */
 
 extern int dis_errno(void);
 extern const char *dis_strerror(int);

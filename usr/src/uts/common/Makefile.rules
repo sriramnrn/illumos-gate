@@ -21,10 +21,10 @@
 
 #
 # Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
-#
-
-#
-# Copyright 2011 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2016 Garrett D'Amore <garrett@damore.org>
+# Copyright 2015 Nexenta Systems, Inc.  All rights reserved.
+# Copyright 2013 Saso Kiselkov. All rights reserved.
+# Copyright 2016 Joyent, Inc.
 #
 
 #
@@ -209,7 +209,7 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/fs/autofs/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/fs/cachefs/%.c
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/fs/bootfs/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -508,6 +508,10 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/inet/ipf/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/inet/ipd/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(COMMONBASE)/net/patricia/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -660,6 +664,38 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/blkdev/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/common/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/ecore/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/fw/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l4/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l5/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/bpf/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -701,6 +737,10 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/comstar/port/pppt/%.c
 	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/comstar/lu/stmf_sbd/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/cpqary3/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -952,6 +992,10 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/nge/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/nvme/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/nxge/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -967,19 +1011,7 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/pci-ide/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/pcmcia/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/pcan/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/pcn/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/pcwl/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -1159,10 +1191,6 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/video/usbvc/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/hwarc/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/hid/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -1211,18 +1239,6 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/usbser/usbsprl/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/wusb_df/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/hwa1480_fw/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/wusb_ca/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/clients/usbecm/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -1263,14 +1279,6 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/usba10/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/usb/hwa/hwahc/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
-$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/uwb/uwba/%.c
-	$(COMPILE.c) -o $@ $<
-	$(CTFCONVERT_O)
-
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/vuidmice/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -1295,6 +1303,26 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/chxge/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/cxgbe/common/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/cxgbe/shared/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/cxgbe/firmware/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/cxgbe/t4nex/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/cxgbe/cxgbe/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/ixgb/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -1304,6 +1332,10 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/xge/drv/%.c
 	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/xge/hal/xgehal/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/e1000api/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -1320,6 +1352,18 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/iprb/%.c
 	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/ixgbe/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/ixgbe/core/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/i40e/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/i40e/core/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -1375,6 +1419,10 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/kiconv/kiconv_tc/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/klm/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(UTSBASE)/common/kmdb/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
@@ -1403,6 +1451,29 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/yge/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/sfxge/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/sfxge/common/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/skd/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/virtio/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/vioblk/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(UTSBASE)/common/io/vioif/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
 #
 # krtld must refer to its own bzero/bcopy until the kernel is fully linked
 #
@@ -1483,11 +1554,19 @@ $(OBJS_DIR)/%.o:		$(UTSBASE)/common/rpc/sec_gss/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
+$(OBJS_DIR)/%.o:		$(COMMONBASE)/crypto/edonr/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
 $(OBJS_DIR)/%.o:		$(COMMONBASE)/crypto/sha1/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
 $(OBJS_DIR)/%.o:		$(COMMONBASE)/crypto/sha2/%.c
+	$(COMPILE.c) -o $@ $<
+	$(CTFCONVERT_O)
+
+$(OBJS_DIR)/%.o:		$(COMMONBASE)/crypto/skein/%.c
 	$(COMPILE.c) -o $@ $<
 	$(CTFCONVERT_O)
 
@@ -1543,24 +1622,6 @@ BZ2LINT = -erroff=%all -I$(UTSBASE)/common/bzip2
 
 $(LINTS_DIR)/bz2%.ln:		$(COMMONBASE)/bzip2/%.c
 	 @($(LHEAD) $(LINT.c) -C $(LINTS_DIR)/`basename $@ .ln` $(BZ2LINT) $< $(LTAIL))
-
-#
-# SVM
-#
-
-MD_XDR_CSRC	=	$(UTSBASE)/common/io/lvm/md
-MD_XDR_XSRC	=	$(UTSBASE)/common/sys/lvm
-RPCGENFLAGS	+=	-C -M -D_KERNEL -DSYSV
-
-$(MD_XDR_CSRC)/meta_basic_xdr.c:	$(MD_XDR_XSRC)/meta_basic.x
-	$(RPCGEN) $(RPCGENFLAGS) -c -i 100 $(MD_XDR_XSRC)/meta_basic.x | \
-	nawk '{sub(/^#include "(\.\.\/\.\.\/)/,"#include \"\.\.\/\.\.\/\.\.\/\.\.\/"); print $$0}'  | \
-	nawk '{sub(/meta_basic.h/, "md_basic.h"); print $$0}' >$@
-
-$(MD_XDR_CSRC)/metamed_xdr.c:	$(MD_XDR_XSRC)/metamed.x
-	$(RPCGEN) $(RPCGENFLAGS) -c -i 100 $(MD_XDR_XSRC)/metamed.x |  \
-	nawk '{sub(/^#include "(\.\.\/\.\.\/)/,"#include \"\.\.\/\.\.\/\.\.\/\.\.\/"); print $$0}' | \
-	nawk '{sub(/metamed.h/, "mdmed.h"); print $$0}' >$@
 
 #
 #	Section 1b:	Lint `objects'
@@ -1712,7 +1773,7 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/fs/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/fs/autofs/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/fs/cachefs/%.c
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/fs/bootfs/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/fs/ctfs/%.c
@@ -1886,6 +1947,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/inet/ipnet/%.c
 $(LINTS_DIR)/%.ln: 	     	$(UTSBASE)/common/inet/iptun/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/inet/ipd/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/inet/ipf/%.c
 	@($(LHEAD) $(LINT.c) $(IPFFLAGS) $< $(LTAIL))
 
@@ -2015,6 +2079,30 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bge/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/blkdev/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/common/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/ecore/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/fw/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l4/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/l5/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/bnxe/577xx/drivers/common/lm/device/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cardbus/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2043,6 +2131,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/comstar/port/pppt/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/comstar/stmf/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cpqary3/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/dld/%.c
@@ -2231,6 +2322,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/net80211/%.c
 $(LINTS_DIR)/%.ln:              $(UTSBASE)/common/io/nge/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/nvme/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/nxge/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2243,16 +2337,7 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/nxge/npi/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/pci-ide/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/pcmcia/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/pcan/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/pcn/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/pcwl/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/ppp/sppp/%.c
@@ -2390,9 +2475,6 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/usbskel/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/video/usbvc/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/hwarc/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/hid/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2429,15 +2511,6 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/usbser/usbser_keyspan/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/usbser/usbsprl/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/wusb_df/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/hwa1480_fw/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/wusb_ca/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/clients/usbecm/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2468,12 +2541,6 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/usba/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/usba10/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/uwb/uwba/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
-$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/usb/hwa/hwahc/%.c
-	@($(LHEAD) $(LINT.c) $< $(LTAIL))
-
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vuidmice/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2492,6 +2559,21 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/chxge/com/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/chxge/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cxgbe/common/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cxgbe/shared/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cxgbe/firmware/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cxgbe/t4nex/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/cxgbe/cxgbe/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/ixgb/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2504,6 +2586,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/xge/hal/xgehal/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/e1000g/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/e1000api/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/igb/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
@@ -2511,6 +2596,12 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/iprb/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/ixgbe/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/ixgbe/core/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/i40e/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/ntxn/%.c
@@ -2550,6 +2641,9 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/kiconv/kiconv_sc/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/kiconv/kiconv_tc/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/klm/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/kmdb/%.c
@@ -2609,10 +2703,16 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/rpc/sec/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/rpc/sec_gss/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(COMMONBASE)/crypto/edonr/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 $(LINTS_DIR)/%.ln:		$(COMMONBASE)/crypto/sha1/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(COMMONBASE)/crypto/sha2/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(COMMONBASE)/crypto/skein/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/syscall/%.c
@@ -2642,6 +2742,15 @@ $(LINTS_DIR)/%.ln:		$(COMMONBASE)/iscsi/%.c
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/inet/kifconf/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/virtio/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vioblk/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vioif/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
 ZMODLINTFLAGS = -erroff=E_CONSTANT_CONDITION
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/zmod/%.c
@@ -2665,6 +2774,15 @@ $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/vr/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/yge/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/sfxge/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/sfxge/common/%.c
+	@($(LHEAD) $(LINT.c) $< $(LTAIL))
+
+$(LINTS_DIR)/%.ln:		$(UTSBASE)/common/io/skd/%.c
 	@($(LHEAD) $(LINT.c) $< $(LTAIL))
 
 $(LINTS_DIR)/%.ln:		$(COMMONBASE)/fsreparse/%.c

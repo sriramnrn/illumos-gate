@@ -20,6 +20,8 @@
  */
 
 /*
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright (c) 2013, OmniTI Computer Consulting, Inc. All rights reserved.
  * Copyright (c) 2009, 2010, Oracle and/or its affiliates. All rights reserved.
  */
 
@@ -59,6 +61,7 @@
 #include <sys/lofi.h>
 #include <atomic.h>
 #include <sys/acl.h>
+#include <sys/socket.h>
 
 #include <s10_brand.h>
 #include <brand_misc.h>
@@ -620,7 +623,7 @@ zfs_ioctl(sysret_t *rval, int fdes, int cmd, intptr_t arg)
 }
 
 struct s10_lofi_ioctl {
-	uint32_t li_minor;
+	uint32_t li_id;
 	boolean_t li_force;
 	char li_filename[MAXPATHLEN + 1];
 };
@@ -650,7 +653,7 @@ lofi_ioctl(sysret_t *rval, int fdes, int cmd, intptr_t arg)
 
 	bzero(&native_param, sizeof (native_param));
 
-	struct_assign(native_param, s10_param, li_minor);
+	struct_assign(native_param, s10_param, li_id);
 	struct_assign(native_param, s10_param, li_force);
 
 	/*
@@ -663,7 +666,7 @@ lofi_ioctl(sysret_t *rval, int fdes, int cmd, intptr_t arg)
 
 	err = __systemcall(rval, SYS_ioctl + 1024, fdes, cmd, &native_param);
 
-	struct_assign(s10_param, native_param, li_minor);
+	struct_assign(s10_param, native_param, li_id);
 	/* li_force is input-only */
 
 	bcopy(native_param.li_filename, s10_param.li_filename,
@@ -1386,6 +1389,47 @@ s10_issetugid(sysret_t *rval)
 	    0, 0, 0, 0, 0));
 }
 
+/*
+ * S10's socket() syscall does not split type and flags
+ */
+static int
+s10_so_socket(sysret_t *rval, int domain, int type, int protocol,
+    char *devpath, int version)
+{
+	if ((type & ~SOCK_TYPE_MASK) != 0) {
+		errno = EINVAL;
+		return (-1);
+	}
+	return (__systemcall(rval, SYS_so_socket + 1024, domain, type,
+	    protocol, devpath, version));
+}
+
+/*
+ * S10's pipe() syscall has a different calling convention
+ */
+static int
+s10_pipe(sysret_t *rval)
+{
+	int fds[2], err;
+	if ((err = __systemcall(rval, SYS_pipe + 1024, fds, 0)) != 0)
+		return (err);
+
+	rval->sys_rval1 = fds[0];
+	rval->sys_rval2 = fds[1];
+	return (0);
+}
+
+/*
+ * S10's accept() syscall takes three arguments
+ */
+static int
+s10_accept(sysret_t *rval, int sock, struct sockaddr *addr, uint_t *addrlen,
+    int version)
+{
+	return (__systemcall(rval, SYS_accept + 1024, sock, addr, addrlen,
+	    version, 0));
+}
+
 static long
 s10_uname(sysret_t *rv, uintptr_t p1)
 {
@@ -1900,7 +1944,7 @@ brand_sysent_table_t brand_sysent_table[] = {
 	NOSYS,					/*  39 */
 	NOSYS,					/*  40 */
 	EMULATE(s10_dup, 1 | RV_DEFAULT),	/*  41 */
-	NOSYS,					/*  42 */
+	EMULATE(s10_pipe, 0 | RV_32RVAL2),	/*  42 */
 	NOSYS,					/*  43 */
 	NOSYS,					/*  44 */
 	NOSYS,					/*  45 */
@@ -2115,11 +2159,11 @@ brand_sysent_table_t brand_sysent_table[] = {
 	EMULATE(s10_zone, 5 | RV_DEFAULT),	/* 227 */
 	NOSYS,					/* 228 */
 	NOSYS,					/* 229 */
-	NOSYS,					/* 230 */
+	EMULATE(s10_so_socket, 5 | RV_DEFAULT),	/* 230 */
 	NOSYS,					/* 231 */
 	NOSYS,					/* 232 */
 	NOSYS,					/* 233 */
-	NOSYS,					/* 234 */
+	EMULATE(s10_accept, 4 | RV_DEFAULT),	/* 234 */
 	NOSYS,					/* 235 */
 	NOSYS,					/* 236 */
 	NOSYS,					/* 237 */

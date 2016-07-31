@@ -405,6 +405,7 @@ struct ofl_desc {
 	APlist		*ofl_mapdata;	/* mapfile added data sections */
 	avl_tree_t	*ofl_wrap;	/* -z wrap symbols */
 	ofl_guideflag_t	ofl_guideflags;	/* -z guide flags */
+	APlist		*ofl_assdeflib;	/* -z assert-deflib exceptions */
 };
 
 #define	FLG_OF_DYNAMIC	0x00000001	/* generate dynamic output module */
@@ -463,6 +464,7 @@ struct ofl_desc {
 #define	FLG_OF_CAPSTRS	0x100000000000	/* capability strings are required */
 #define	FLG_OF_EHFRAME	0x200000000000	/* output contains .eh_frame section */
 #define	FLG_OF_FATWARN	0x400000000000	/* make warnings fatal */
+#define	FLG_OF_ADEFLIB	0x800000000000	/* no libraries in default path */
 
 /*
  * In the flags1 arena, establish any options that are applicable to archive
@@ -889,6 +891,7 @@ struct ifl_desc {			/* input file descriptor */
 					/*	symbol capabilities */
 #define	FLG_IF_DEFERRED	0x00080000	/* dependency is deferred */
 #define	FLG_IF_RTLDINF	0x00100000	/* dependency has DT_SUNW_RTLTINF set */
+#define	FLG_IF_GROUPS	0x00200000	/* input file has groups to process */
 
 /*
  * Symbol states that require the generation of a DT_POSFLAG_1 .dynamic entry.
@@ -932,7 +935,7 @@ struct is_desc {			/* input section descriptor */
 #define	FLG_IS_EXTERNAL	0x0040		/* isp from a user file */
 #define	FLG_IS_INSTRMRG	0x0080		/* Usable SHF_MERGE|SHF_STRINGS sec */
 #define	FLG_IS_GNSTRMRG	0x0100		/* Generated mergeable string section */
-#define	FLG_IS_GROUPS	0x0200		/* section has groups to process */
+
 #define	FLG_IS_PLACE	0x0400		/* section requires to be placed */
 #define	FLG_IS_COMDAT	0x0800		/* section is COMDAT */
 #define	FLG_IS_EHFRAME	0x1000		/* section is .eh_frame */

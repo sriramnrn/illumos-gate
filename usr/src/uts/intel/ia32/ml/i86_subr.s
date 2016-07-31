@@ -21,6 +21,8 @@
 
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014 Nexenta Systems, Inc.  All rights reserved.
+ * Copyright (c) 2014 by Delphix. All rights reserved.
  */
 
 /*
@@ -69,9 +71,12 @@
 
 /*
  * on_fault()
+ *
  * Catch lofault faults. Like setjmp except it returns one
  * if code following causes uncorrectable fault. Turned off
- * by calling no_fault().
+ * by calling no_fault(). Note that while under on_fault(),
+ * SMAP is disabled. For more information see
+ * uts/intel/ia32/ml/copy.s.
  */
 
 #if defined(__lint)
@@ -94,6 +99,7 @@ no_fault(void)
 	leaq	catch_fault(%rip), %rdx
 	movq	%rdi, T_ONFAULT(%rsi)		/* jumpbuf in t_onfault */
 	movq	%rdx, T_LOFAULT(%rsi)		/* catch_fault in t_lofault */
+	call	smap_disable			/* allow user accesses */
 	jmp	setjmp				/* let setjmp do the rest */
 
 catch_fault:
@@ -102,6 +108,7 @@ catch_fault:
 	xorl	%eax, %eax
 	movq	%rax, T_ONFAULT(%rsi)		/* turn off onfault */
 	movq	%rax, T_LOFAULT(%rsi)		/* turn off lofault */
+	call	smap_enable			/* disallow user accesses */
 	jmp	longjmp				/* let longjmp do the rest */
 	SET_SIZE(on_fault)
 
@@ -110,6 +117,7 @@ catch_fault:
 	xorl	%eax, %eax
 	movq	%rax, T_ONFAULT(%rsi)		/* turn off onfault */
 	movq	%rax, T_LOFAULT(%rsi)		/* turn off lofault */
+	call	smap_enable			/* disallow user accesses */
 	ret
 	SET_SIZE(no_fault)
 
@@ -2799,7 +2807,8 @@ lowbit(ulong_t i)
 
 	ENTRY(lowbit)
 	movl	$-1, %eax
-	bsfq	%rdi, %rax
+	bsfq	%rdi, %rdi
+	cmovnz	%edi, %eax
 	incl	%eax
 	ret
 	SET_SIZE(lowbit)
@@ -2807,9 +2816,12 @@ lowbit(ulong_t i)
 #elif defined(__i386)
 
 	ENTRY(lowbit)
-	movl	$-1, %eax
 	bsfl	4(%esp), %eax
+	jz	0f
 	incl	%eax
+	ret
+0:
+	xorl	%eax, %eax
 	ret
 	SET_SIZE(lowbit)
 
@@ -2823,25 +2835,43 @@ int
 highbit(ulong_t i)
 { return (0); }
 
+/*ARGSUSED*/
+int
+highbit64(uint64_t i)
+{ return (0); }
+
 #else	/* __lint */
 
 #if defined(__amd64)
 
 	ENTRY(highbit)
+	ALTENTRY(highbit64)
 	movl	$-1, %eax
-	bsrq	%rdi, %rax
+	bsrq	%rdi, %rdi
+	cmovnz	%edi, %eax
 	incl	%eax
 	ret
+	SET_SIZE(highbit64)
 	SET_SIZE(highbit)
 
 #elif defined(__i386)
 
 	ENTRY(highbit)
-	movl	$-1, %eax
 	bsrl	4(%esp), %eax
+	jz	0f
 	incl	%eax
 	ret
+0:
+	xorl	%eax, %eax
+	ret    
 	SET_SIZE(highbit)
+
+	ENTRY(highbit64)
+	bsrl	8(%esp), %eax
+	jz	highbit
+	addl	$33, %eax
+	ret
+	SET_SIZE(highbit64)
 
 #endif	/* __i386 */
 #endif	/* __lint */
@@ -3909,6 +3939,8 @@ bcmp(const void *s1, const void *s2, size_t count)
 	pushq	%rbp
 	movq	%rsp, %rbp
 #ifdef DEBUG
+	testq	%rdx,%rdx
+	je	1f
 	movq	postbootkernelbase(%rip), %r11
 	cmpq	%r11, %rdi
 	jb	0f
@@ -3937,6 +3969,8 @@ bcmp(const void *s1, const void *s2, size_t count)
 	pushl	%ebp
 	movl	%esp, %ebp	/ create new stack frame
 #ifdef DEBUG
+	cmpl	$0, ARG_LENGTH(%ebp)
+	je	1f
 	movl    postbootkernelbase, %eax
 	cmpl    %eax, ARG_S1(%ebp)
 	jb	0f
@@ -4339,62 +4373,58 @@ mfence_insn(void)
 #endif /* __lint */
 
 /*
- * This is how VMware lets the guests figure that they are running
- * on top of VMWare platform :
- * Write 0xA in the ECX register and put the I/O port address value of
- * 0x564D5868 in the EAX register. Then read a word from port 0x5658.
- * If VMWare is installed than this code will be executed correctly and
- * the EBX register will contain the same I/O port address value of 0x564D5868.
- * If VMWare is not installed then OS will return an exception on port access. 
+ * VMware implements an I/O port that programs can query to detect if software
+ * is running in a VMware hypervisor. This hypervisor port behaves differently
+ * depending on magic values in certain registers and modifies some registers
+ * as a side effect.
+ *
+ * References: http://kb.vmware.com/kb/1009458 
  */
+
 #if defined(__lint)
 
-int
-vmware_platform(void) { return (1); }
+/* ARGSUSED */
+void
+vmware_port(int cmd, uint32_t *regs) { return; }
 
 #else
 
 #if defined(__amd64)
 
-	ENTRY(vmware_platform)
+	ENTRY(vmware_port)
 	pushq	%rbx
-	xorl	%ebx, %ebx
-	movl	$0x564d5868, %eax
-	movl	$0xa, %ecx
-	movl	$0x5658, %edx
+	movl	$VMWARE_HVMAGIC, %eax
+	movl	$0xffffffff, %ebx
+	movl	%edi, %ecx
+	movl	$VMWARE_HVPORT, %edx
 	inl	(%dx)
-	movl	$0x564d5868, %ecx
-	xorl	%eax, %eax
-	cmpl	%ecx, %ebx
-	jne	1f
-	incl	%eax
-1:
+	movl	%eax, (%rsi)
+	movl	%ebx, 4(%rsi)
+	movl	%ecx, 8(%rsi)
+	movl	%edx, 12(%rsi)
 	popq	%rbx
 	ret
-	SET_SIZE(vmware_platform)
+	SET_SIZE(vmware_port)
 
 #elif defined(__i386)
 
-	ENTRY(vmware_platform)
+	ENTRY(vmware_port)
 	pushl	%ebx
-	pushl	%ecx
-	pushl	%edx
-	xorl	%ebx, %ebx
-	movl	$0x564d5868, %eax
-	movl	$0xa, %ecx
-	movl	$0x5658, %edx
+	pushl	%esi
+	movl	$VMWARE_HVMAGIC, %eax
+	movl	$0xffffffff, %ebx
+	movl	12(%esp), %ecx
+	movl	$VMWARE_HVPORT, %edx
 	inl	(%dx)
-	movl	$0x564d5868, %ecx
-	xorl	%eax, %eax
-	cmpl	%ecx, %ebx
-	jne	1f
-	incl	%eax
-1:
-	popl	%edx
-	popl	%ecx
+	movl	16(%esp), %esi
+	movl	%eax, (%esi)
+	movl	%ebx, 4(%esi)
+	movl	%ecx, 8(%esi)
+	movl	%edx, 12(%esi)
+	popl	%esi
 	popl	%ebx
 	ret
-	SET_SIZE(vmware_platform)
+	SET_SIZE(vmware_port)
 
 #endif /* __i386 */
 #endif /* __lint */

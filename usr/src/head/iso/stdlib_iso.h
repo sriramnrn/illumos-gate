@@ -20,6 +20,9 @@
  * CDDL HEADER END
  */
 /*
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2014 PALO, Richard.
+ *
  * Copyright 2005 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
  */
@@ -43,20 +46,16 @@
 #ifndef _ISO_STDLIB_ISO_H
 #define	_ISO_STDLIB_ISO_H
 
-#pragma ident	"%Z%%M%	%I%	%E% SMI"
-
 #include <sys/feature_tests.h>
+#include <sys/null.h>
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
-#if defined(__STDC__)
-extern unsigned char	__ctype[];
-#define	MB_CUR_MAX	__ctype[520]
-#else
-extern unsigned char	_ctype[];
-#define	MB_CUR_MAX	_ctype[520]
+unsigned char __mb_cur_max(void);
+#ifndef MB_CUR_MAX
+#define	MB_CUR_MAX	(__mb_cur_max())
 #endif
 
 #if __cplusplus >= 199711L
@@ -81,14 +80,6 @@ typedef unsigned long	size_t;		/* size of something in bytes */
 typedef unsigned int    size_t;		/* (historical version) */
 #endif
 #endif	/* !_SIZE_T */
-
-#ifndef	NULL
-#if defined(_LP64)
-#define	NULL	0L
-#else
-#define	NULL	0
-#endif
-#endif
 
 #define	EXIT_FAILURE	1
 #define	EXIT_SUCCESS    0
@@ -118,9 +109,15 @@ typedef long	wchar_t;
 #endif	/* !_WCHAR_T */
 #endif	/* !defined(__cplusplus) ... */
 
-#if defined(__STDC__)
+#if !defined(_NORETURN_KYWD)
+#if __STDC_VERSION__ - 0 >= 201112L
+#define	_NORETURN_KYWD	_Noreturn
+#else
+#define	_NORETURN_KYWD
+#endif	/* __STDC_VERSION__ - 0 >= 201112L */
+#endif	/* !defined(_NORETURN_KYWD) */
 
-extern void abort(void) __NORETURN;
+extern _NORETURN_KYWD void abort(void) __NORETURN;
 extern int abs(int);
 extern int atexit(void (*)(void));
 extern double atof(const char *);
@@ -128,15 +125,15 @@ extern int atoi(const char *);
 extern long int atol(const char *);
 extern void *bsearch(const void *, const void *, size_t, size_t,
 	int (*)(const void *, const void *));
-#if __cplusplus >= 199711L
+#if __cplusplus >= 199711L && defined(__SUNPRO_CC)
 extern "C++" {
 	void *bsearch(const void *, const void *, size_t, size_t,
 		int (*)(const void *, const void *));
 }
-#endif /* __cplusplus >= 199711L */
+#endif /* __cplusplus >= 199711L && defined(__SUNPRO_CC) */
 extern void *calloc(size_t, size_t);
 extern div_t div(int, int);
-extern void exit(int)
+extern _NORETURN_KYWD void exit(int)
 	__NORETURN;
 extern void free(void *);
 extern char *getenv(const char *);
@@ -148,11 +145,11 @@ extern size_t mbstowcs(wchar_t *_RESTRICT_KYWD, const char *_RESTRICT_KYWD,
 	size_t);
 extern int mbtowc(wchar_t *_RESTRICT_KYWD, const char *_RESTRICT_KYWD, size_t);
 extern void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
-#if __cplusplus >= 199711L
+#if __cplusplus >= 199711L && defined(__SUNPRO_CC)
 extern "C++" {
 	void qsort(void *, size_t, size_t, int (*)(const void *, const void *));
 }
-#endif /* __cplusplus >= 199711L */
+#endif /* __cplusplus >= 199711L && defined(__SUNPRO_CC) */
 extern int rand(void);
 extern void *realloc(void *, size_t);
 extern void srand(unsigned int);
@@ -171,39 +168,6 @@ extern "C++" {
 	inline ldiv_t div(long _l1, long _l2) { return ldiv(_l1, _l2); }
 }
 #endif /* __cplusplus */
-
-#else /* not __STDC__ */
-
-extern void abort();
-extern int abs();
-extern int atexit();
-extern double atof();
-extern int atoi();
-extern long int atol();
-extern void *bsearch();
-extern void *calloc();
-extern div_t div();
-extern void exit();
-extern void free();
-extern char *getenv();
-extern long int labs();
-extern ldiv_t ldiv();
-extern void *malloc();
-extern int mblen();
-extern size_t mbstowcs();
-extern int mbtowc();
-extern void qsort();
-extern int rand();
-extern void *realloc();
-extern void srand();
-extern double strtod();
-extern long int strtol();
-extern unsigned long strtoul();
-extern int system();
-extern int wctomb();
-extern size_t wcstombs();
-
-#endif	/* __STDC__ */
 
 #if __cplusplus >= 199711L
 }

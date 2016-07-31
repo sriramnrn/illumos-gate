@@ -19,8 +19,6 @@
 # CDDL HEADER END
 #
 #
-# ident	"%Z%%M%	%I%	%E% SMI"
-#
 # Copyright 2008 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
@@ -42,11 +40,13 @@ MYCPPFLAGS = 	-I.. -I../../sharemgr
 CPPFLAGS += $(MYCPPFLAGS)
 LDLIBS += -lshare -lumem
 
+CERRWARN += -_gcc=-Wno-uninitialized
+
 SRCS = $(SHARECTL_SRC)
 OBJS = $(SHARECTL_OBJ)
 MODS = $(SHARECTL_MOD)
 
-CLOBBERFILES = $(MODS)
+CLOBBERFILES = $(MODS) $(POFILE) $(POFILES) shareutil.c
 
 POFILES = $(SHARECTL_SRC:.c=.po)
 POFILE  = sharectl.po

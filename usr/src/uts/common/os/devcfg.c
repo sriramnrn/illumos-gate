@@ -22,6 +22,7 @@
  * Copyright (c) 2000, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
  * Copyright 2012 Garrett D'Amore <garrett@damore.org>.  All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/note.h>
@@ -1611,10 +1612,10 @@ i_ndi_config_node(dev_info_t *dip, ddi_node_state_t state, uint_t flag)
 				rv = DDI_FAILURE;
 				break;
 			}
-			atomic_add_long(&devinfo_attach_detach, 1);
+			atomic_inc_ulong(&devinfo_attach_detach);
 			if ((rv = attach_node(dip)) == DDI_SUCCESS)
 				i_ddi_set_node_state(dip, DS_ATTACHED);
-			atomic_add_long(&devinfo_attach_detach, -1);
+			atomic_dec_ulong(&devinfo_attach_detach);
 			break;
 		case DS_ATTACHED:
 			if ((rv = postattach_node(dip)) == DDI_SUCCESS)
@@ -1680,7 +1681,7 @@ i_ndi_unconfig_node(dev_info_t *dip, ddi_node_state_t state, uint_t flag)
 				i_ddi_set_node_state(dip, DS_INITIALIZED);
 			break;
 		case DS_ATTACHED:
-			atomic_add_long(&devinfo_attach_detach, 1);
+			atomic_inc_ulong(&devinfo_attach_detach);
 
 			mutex_enter(&(DEVI(dip)->devi_lock));
 			DEVI_SET_DETACHING(dip);
@@ -1695,7 +1696,7 @@ i_ndi_unconfig_node(dev_info_t *dip, ddi_node_state_t state, uint_t flag)
 			DEVI_CLR_DETACHING(dip);
 			mutex_exit(&(DEVI(dip)->devi_lock));
 
-			atomic_add_long(&devinfo_attach_detach, -1);
+			atomic_dec_ulong(&devinfo_attach_detach);
 			break;
 		case DS_READY:
 			if ((rv = predetach_node(dip, flag)) == DDI_SUCCESS)
@@ -5889,6 +5890,13 @@ devi_detach_node(dev_info_t *dip, uint_t flags)
 				(void) ndi_post_event(dip, dip, cookie, NULL);
 		}
 	}
+
+	/*
+	 * dv_mknod places a hold on the dev_info_t for each devfs node
+	 * created.  If we're to succeed in detaching this device, we must
+	 * first release all outstanding references held by devfs.
+	 */
+	(void) devfs_clean(pdip, NULL, DV_CLEAN_FORCE);
 
 	if (i_ddi_detachchild(dip, flags) != DDI_SUCCESS) {
 		if (flags & NDI_DEVI_OFFLINE) {

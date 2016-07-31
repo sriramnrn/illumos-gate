@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright (c) 2012 by Delphix. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
  */
 
 #ifndef	_SYS_ZAP_H
@@ -80,24 +80,29 @@
  */
 
 #include <sys/dmu.h>
+#include <sys/refcount.h>
 
 #ifdef	__cplusplus
 extern "C" {
 #endif
 
 /*
- * The matchtype specifies which entry will be accessed.
- * MT_EXACT: only find an exact match (non-normalized)
- * MT_FIRST: find the "first" normalized (case and Unicode
- *     form) match; the designated "first" match will not change as long
- *     as the set of entries with this normalization doesn't change
- * MT_BEST: if there is an exact match, find that, otherwise find the
- *     first normalized match
+ * Specifies matching criteria for ZAP lookups.
  */
 typedef enum matchtype
 {
+	/* Only find an exact match (non-normalized) */
 	MT_EXACT,
+	/*
+	 * If there is an exact match, find that, otherwise find the
+	 * first normalized match.
+	 */
 	MT_BEST,
+	/*
+	 * Find the "first" normalized (case and Unicode form) match;
+	 * the designated "first" match will not change as long as the
+	 * set of entries with this normalization doesn't change.
+	 */
 	MT_FIRST
 } matchtype_t;
 
@@ -137,6 +142,12 @@ uint64_t zap_create_link(objset_t *os, dmu_object_type_t ot,
     uint64_t parent_obj, const char *name, dmu_tx_t *tx);
 
 /*
+ * Initialize an already-allocated object.
+ */
+void mzap_create_impl(objset_t *os, uint64_t obj, int normflags,
+    zap_flags_t flags, dmu_tx_t *tx);
+
+/*
  * Create a new zapobj with no attributes from the given (unallocated)
  * object number.
  */
@@ -174,16 +185,21 @@ int zap_destroy(objset_t *ds, uint64_t zapobj, dmu_tx_t *tx);
  * call will fail and return EINVAL.
  *
  * If 'integer_size' is equal to or larger than the attribute's integer
- * size, the call will succeed and return 0.  * When converting to a
- * larger integer size, the integers will be treated as unsigned (ie. no
- * sign-extension will be performed).
+ * size, the call will succeed and return 0.
+ *
+ * When converting to a larger integer size, the integers will be treated as
+ * unsigned (ie. no sign-extension will be performed).
  *
  * 'num_integers' is the length (in integers) of 'buf'.
  *
  * If the attribute is longer than the buffer, as many integers as will
  * fit will be transferred to 'buf'.  If the entire attribute was not
  * transferred, the call will return EOVERFLOW.
- *
+ */
+int zap_lookup(objset_t *ds, uint64_t zapobj, const char *name,
+    uint64_t integer_size, uint64_t num_integers, void *buf);
+
+/*
  * If rn_len is nonzero, realname will be set to the name of the found
  * entry (which may be different from the requested name if matchtype is
  * not MT_EXACT).
@@ -191,8 +207,6 @@ int zap_destroy(objset_t *ds, uint64_t zapobj, dmu_tx_t *tx);
  * If normalization_conflictp is not NULL, it will be set if there is
  * another name with the same case/unicode normalized form.
  */
-int zap_lookup(objset_t *ds, uint64_t zapobj, const char *name,
-    uint64_t integer_size, uint64_t num_integers, void *buf);
 int zap_lookup_norm(objset_t *ds, uint64_t zapobj, const char *name,
     uint64_t integer_size, uint64_t num_integers, void *buf,
     matchtype_t mt, char *realname, int rn_len,
@@ -204,7 +218,7 @@ int zap_prefetch_uint64(objset_t *os, uint64_t zapobj, const uint64_t *key,
     int key_numints);
 
 int zap_count_write(objset_t *os, uint64_t zapobj, const char *name,
-    int add, uint64_t *towrite, uint64_t *tooverwrite);
+    int add, refcount_t *towrite, refcount_t *tooverwrite);
 
 /*
  * Create an attribute with the given name and value.
@@ -300,6 +314,8 @@ int zap_increment_int(objset_t *os, uint64_t obj, uint64_t key, int64_t delta,
 /* Here the key is an int and the value is a different int. */
 int zap_add_int_key(objset_t *os, uint64_t obj,
     uint64_t key, uint64_t value, dmu_tx_t *tx);
+int zap_update_int_key(objset_t *os, uint64_t obj,
+    uint64_t key, uint64_t value, dmu_tx_t *tx);
 int zap_lookup_int_key(objset_t *os, uint64_t obj,
     uint64_t key, uint64_t *valuep);
 
@@ -328,7 +344,7 @@ typedef struct {
 	boolean_t za_normalization_conflict;
 	uint64_t za_num_integers;
 	uint64_t za_first_integer;	/* no sign extension for <8byte ints */
-	char za_name[MAXNAMELEN];
+	char za_name[ZAP_MAXNAMELEN];
 } zap_attribute_t;
 
 /*
@@ -364,11 +380,6 @@ void zap_cursor_advance(zap_cursor_t *zc);
  * fewer than 2^22 (4.2 million) entries in the zap object.
  */
 uint64_t zap_cursor_serialize(zap_cursor_t *zc);
-
-/*
- * Advance the cursor to the attribute having the given key.
- */
-int zap_cursor_move_to_key(zap_cursor_t *zc, const char *name, matchtype_t mt);
 
 /*
  * Initialize a zap cursor pointing to the position recorded by

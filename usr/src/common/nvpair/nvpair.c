@@ -36,16 +36,15 @@
 #include <sys/varargs.h>
 #include <sys/ddi.h>
 #include <sys/sunddi.h>
+#include <sys/sysmacros.h>
 #else
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
+#include <stddef.h>
 #endif
 
-#ifndef	offsetof
-#define	offsetof(s, m)		((size_t)(&(((s *)0)->m)))
-#endif
 #define	skip_whitespace(p)	while ((*(p) == ' ') || (*(p) == '\t')) p++
 
 /*
@@ -540,8 +539,7 @@ nvpair_free(nvpair_t *nvp)
 		int i;
 
 		for (i = 0; i < NVP_NELEM(nvp); i++)
-			if (nvlp[i] != NULL)
-				nvlist_free(nvlp[i]);
+			nvlist_free(nvlp[i]);
 		break;
 	}
 	default:
@@ -1231,6 +1229,7 @@ nvpair_type_is_array(nvpair_t *nvp)
 	data_type_t type = NVP_TYPE(nvp);
 
 	if ((type == DATA_TYPE_BYTE_ARRAY) ||
+	    (type == DATA_TYPE_INT8_ARRAY) ||
 	    (type == DATA_TYPE_UINT8_ARRAY) ||
 	    (type == DATA_TYPE_INT16_ARRAY) ||
 	    (type == DATA_TYPE_UINT16_ARRAY) ||
@@ -1625,6 +1624,8 @@ nvlist_lookup_nvpair_ei_sep(nvlist_t *nvl, const char *name, const char sep,
 	if ((nvl == NULL) || (name == NULL))
 		return (EINVAL);
 
+	sepp = NULL;
+	idx = 0;
 	/* step through components of name */
 	for (np = name; np && *np; np = sepp) {
 		/* ensure unique names */
@@ -2382,7 +2383,7 @@ nvlist_xpack(nvlist_t *nvl, char **bufp, size_t *buflen, int encoding,
 	 */
 	nv_priv_init(&nvpriv, nva, 0);
 
-	if (err = nvlist_size(nvl, &alloc_size, encoding))
+	if ((err = nvlist_size(nvl, &alloc_size, encoding)))
 		return (err);
 
 	if ((buf = nv_mem_zalloc(&nvpriv, alloc_size)) == NULL)

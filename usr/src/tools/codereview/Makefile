@@ -22,7 +22,6 @@
 # Copyright 1999 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
-#	ident	"%Z%%M%	%I%	%E% SMI"
 
 PROG= codereview
 
@@ -33,9 +32,11 @@ TMPDIR= /tmp
 
 include ../Makefile.tools
 
-MAN1FILES= codereview.1
+CERRWARN += -_gcc=-Wno-parentheses
 
-$(ROOTONBLDMAN1FILES) := FILEMODE=      644
+MAN1ONBLDFILES= codereview.1onbld
+
+$(ROOTONBLDMAN1ONBLDFILES) := FILEMODE=      644
 
 COPTS=	-O
 
@@ -49,7 +50,7 @@ $(PROG): $(OBJS)
 	$(LINK.c) -o $@ $(OBJS) $(LDLIBS)
 	$(POST_PROCESS)
 
-install: all .WAIT  $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1FILES)
+install: all .WAIT  $(ROOTONBLDMACHPROG) $(ROOTONBLDMAN1ONBLDFILES)
 
 clean:
 	$(RM) $(CLEANFILES)

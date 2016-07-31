@@ -18,10 +18,12 @@
 #
 # CDDL HEADER END
 #
-#
 # Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
-# Copyright 2010 Nexenta Systems, Inc. All rights reserved.
 # Use is subject to license terms.
+#
+# Copyright 2010 Nexenta Systems, Inc. All rights reserved.
+# Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+# Copyright 2016 Igor Kozhukhov <ikozhukhov@gmail.com>.
 #
 
 PROG=		zfs
@@ -38,7 +40,7 @@ LINKPROGS=	mount umount
 ROOTETCFSTYPE=  $(ROOTETC)/fs/$(FSTYPE)
 USRLIBFSTYPE=	$(ROOTLIB)/fs/$(FSTYPE)
 
-LDLIBS += -lzfs -luutil -lumem -lnvpair -lsec -lidmap
+LDLIBS += -lzfs_core -lzfs -luutil -lumem -lnvpair -lsec -lidmap
 
 INCS += -I../../common/zfs
 
@@ -49,8 +51,8 @@ CPPFLAGS += -D_LARGEFILE64_SOURCE=1 -D_REENTRANT $(INCS)
 $(NOT_RELEASE_BUILD)CPPFLAGS += -DDEBUG
 
 # lint complains about unused _umem_* functions
-LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2 
-LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2 
+LINTFLAGS += -xerroff=E_NAME_DEF_NOT_USED2
+LINTFLAGS64 += -xerroff=E_NAME_DEF_NOT_USED2
 
 ROOTUSRSBINLINKS = $(PROG:%=$(ROOTUSRSBIN)/%)
 USRLIBFSTYPELINKS = $(LINKPROGS:%=$(USRLIBFSTYPE)/%)

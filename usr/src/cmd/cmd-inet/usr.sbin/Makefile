@@ -21,19 +21,15 @@
 
 #
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
 #
 
 SYNCPROG=	syncinit syncloop syncstat
-DHCPPROG=	dhcpconfig dhtadm pntadm
 
-# EXPORT DELETE START
-XMODPROG=	wanbootutil
-# EXPORT DELETE END
-
-PROG=		6to4relay arp gettable if_mpadm \
+PROG=		6to4relay arp if_mpadm \
 		in.comsat in.fingerd in.rarpd in.rexecd in.rlogind \
 		in.rshd in.rwhod in.telnetd in.tftpd ipaddrsel \
-		ndd $(SYNCPROG) $(DHCPPROG) $(XMODPROG)
+		ndd ndp $(SYNCPROG) wanbootutil
 
 MANIFEST=	rarp.xml telnet.xml comsat.xml finger.xml \
 		login.xml shell.xml rexec.xml socket-filter-kssl.xml
@@ -45,12 +41,12 @@ SBINLINKS=	hostconfig route
 RPCSVCPROG=	hostconfig
 AUDITPROG=	in.rexecd in.rlogind in.rshd in.telnetd
 PAMPROG=	in.rexecd in.rlogind in.rshd in.telnetd
-SOCKETPROG=	6to4relay arp gettable hostconfig if_mpadm in.comsat \
+SOCKETPROG=	6to4relay arp hostconfig if_mpadm in.comsat \
 		in.fingerd in.rarpd in.rexecd in.rlogind in.rshd \
-		in.rwhod in.telnetd in.tftpd ipaddrsel route
-NSLPROG=	6to4relay arp gettable hostconfig in.comsat in.rarpd \
+		in.rwhod in.telnetd in.tftpd ipaddrsel ndp route
+NSLPROG=	6to4relay arp hostconfig in.comsat in.rarpd \
 		in.rexecd in.rlogind in.rshd in.rwhod in.telnetd \
-		in.tftpd ipaddrsel route
+		in.tftpd ipaddrsel ndp route
 CMDPROG=	in.telnetd
 K5PROGS=	in.telnetd in.rlogind in.rshd
 TSNETPROG=	route
@@ -65,12 +61,12 @@ K5RSHDOBJS=	in.rshd.o
 K5TELNETOBJS=	in.telnetd.o
 SRCS=		$(PROGSRCS) $(OTHERSRC)
 
-SUBDIRS=	bootconfchk htable ifconfig ilbadm in.ftpd in.rdisc in.routed \
+SUBDIRS=	bootconfchk ifconfig ilbadm in.rdisc in.routed \
 		in.talkd inetadm inetconv ipadm ipmpstat ipqosconf ipsecutils \
 		kssl/kssladm kssl/ksslcfg nwamadm nwamcfg ping routeadm \
 		snoop sppptun traceroute wificonfig
 
-MSGSUBDIRS=	bootconfchk htable ifconfig ilbadm in.ftpd in.routed in.talkd \
+MSGSUBDIRS=	bootconfchk ifconfig ilbadm in.routed in.talkd \
 		inetadm inetconv ipadm ipmpstat ipqosconf ipsecutils \
 		kssl/ksslcfg nwamadm nwamcfg routeadm sppptun snoop wificonfig
 
@@ -78,7 +74,7 @@ MSGSUBDIRS=	bootconfchk htable ifconfig ilbadm in.ftpd in.routed in.talkd \
 # Eventually this hack should go away, and all in PROG should be
 # lint-clean.
 LINTCLEAN=	6to4relay arp in.rlogind in.rshd in.telnetd in.tftpd \
-		ipaddrsel route \
+		ipaddrsel ndp route \
 		in.rarpd if_mpadm $(SYNCPROG)
 # Likewise, as subdirs get lint-clean, add them here.  Once
 # they're all clean, replace the dependency of the lint target
@@ -104,6 +100,15 @@ COMMONOBJS=	addr_match.o kcmd.o store_forw_creds.o
 COMMONSRCS=	$(COMMONOBJS:%.o=$(CMDINETCOMMONDIR)/%.c)
 SRCS+=		$(COMMONSRCS)
 
+CERRWARN += -_gcc=-Wno-implicit-function-declaration
+CERRWARN += -_gcc=-Wno-uninitialized
+CERRWARN += -_gcc=-Wno-unused-variable
+CERRWARN += -_gcc=-Wno-unused-function
+CERRWARN += -_gcc=-Wno-parentheses
+CERRWARN += -_gcc=-Wno-char-subscripts
+CERRWARN += -_gcc=-Wno-extra
+CERRWARN += -_gcc=-Wno-address
+
 #
 # Message catalog
 #
@@ -119,7 +124,8 @@ lint:=		TARGET= lint
 _msg:=		TARGET= _msg
 
 CLOBBERFILES +=	$(ROOTFS_PROG) $(PROG)
-CLEANFILES += $(COMMONOBJS) $(K5RLOGINOBJS) $(K5RSHDOBJS) $(TFTPDOBJS)
+CLEANFILES += $(COMMONOBJS) $(K5RLOGINOBJS) $(K5RSHDOBJS) $(TFTPDOBJS) \
+		$(K5TELNETOBJS)
 
 CPPFLAGS +=	-DSYSV -DBSD_COMP -I$(CMDINETCOMMONDIR) -I
 
@@ -154,7 +160,7 @@ if_mpadm		:=	LDLIBS += -linetutil -lipmp
 if_mpadm.po		:=	XGETFLAGS += -a
 route			:=	CPPFLAGS += -DNDEBUG
 ndd			:=	LDLIBS += -ldladm -lipadm
-gettable in.comsat	:=	LDFLAGS += $(MAPFILE.NGB:%=-M%)
+in.comsat		:=	LDFLAGS += $(MAPFILE.NGB:%=-M%)
 
 .KEEP_STATE:
 
@@ -224,11 +230,13 @@ FRC:
 
 check:	$(CHKMANIFEST)
 
-clean:	$(SUBDIRS)
-	-$(RM) $(CLEANFILES)
+clean: $(SUBDIRS) clean_local
+clean_local:
+	$(RM) $(CLEANFILES)
 
-clobber: $(SUBDIRS)
-	-$(RM) $(CLEANFILES) $(CLOBBERFILES)
+clobber: $(SUBDIRS) clobber_local
+clobber_local: clean_local
+	$(RM) $(CLOBBERFILES)
 
 lint: $(LINTSUBDIRS)
 	$(LINT.c) 6to4relay.c $(LDLIBS) -lsocket -ldladm
@@ -261,15 +269,7 @@ lint: $(LINTSUBDIRS)
 	$(LINT.c) syncstat.c $(LDLIBS) -ldlpi
 	$(LINT.c) -erroff=E_NAME_USED_NOT_DEF2 in.rarpd.c $(LDLIBS) \
 	    -lsocket -lnsl
+	$(LINT.c) ndp.c $(LDLIBS) \
+	    -lsocket -lnsl
 	$(LINT.c) in.tftpd.c ../usr.bin/tftp/tftpsubs.c $(LDLIBS) \
 	    -lsocket -lnsl
-
-# EXPORT DELETE START
-EXPORT_SRC:
-	$(RM) Makefile+
-	sed -e "/^# EXPORT DELETE START/,/^# EXPORT DELETE END/d" \
-		< Makefile > Makefile+
-	$(RM) Makefile
-	$(MV) Makefile+ Makefile
-	$(CHMOD) 444 Makefile
-# EXPORT DELETE END

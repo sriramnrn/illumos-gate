@@ -27,6 +27,9 @@
  *	Copyright (c) 1988 AT&T
  *	  All Rights Reserved
  */
+/*
+ * Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+ */
 
 /*
  * Run time linker common setup.
@@ -104,8 +107,10 @@ preload(const char *str, Rt_map *mlmp, Rt_map **clmp)
 	lddstub = (lmflags & LML_FLG_TRC_ENABLE) &&
 	    (FLAGS1(*clmp) & FL1_RT_LDDSTUB);
 
-	ptr = strtok_r(objs, MSG_ORIG(MSG_STR_DELIMIT), &next);
-	do {
+
+	for (ptr = strtok_r(objs, MSG_ORIG(MSG_STR_DELIMIT), &next);
+	    ptr != NULL;
+	    ptr = strtok_r(NULL, MSG_ORIG(MSG_STR_DELIMIT), &next)) {
 		Rt_map	*nlmp = NULL;
 		uint_t	flags;
 
@@ -179,8 +184,7 @@ preload(const char *str, Rt_map *mlmp, Rt_map **clmp)
 		if (flags & FLG_RT_OBJINTPO)
 			lml_main.lm_flags |= LML_FLG_INTRPOSE;
 
-	} while ((ptr = strtok_r(NULL,
-	    MSG_ORIG(MSG_STR_DELIMIT), &next)) != NULL);
+	}
 
 	free(palp);
 	free(objs);
@@ -191,7 +195,7 @@ Rt_map *
 setup(char **envp, auxv_t *auxv, Word _flags, char *_platform, int _syspagsz,
     char *_rtldname, ulong_t ld_base, ulong_t interp_base, int fd, Phdr *phdr,
     char *execname, char **argv, uid_t uid, uid_t euid, gid_t gid, gid_t egid,
-    void *aoutdyn, int auxflags, uint_t hwcap_1)
+    void *aoutdyn, int auxflags, uint_t *hwcap)
 {
 	Rt_map			*rlmp, *mlmp, *clmp, **tobj = NULL;
 	Ehdr			*ehdr;
@@ -404,7 +408,8 @@ setup(char **envp, auxv_t *auxv, Word _flags, char *_platform, int _syspagsz,
 	 */
 	if (auxflags & AF_SUN_HWCAPVERIFY) {
 		rtld_flags2 |= RT_FL2_HWCAP;
-		org_scapset->sc_hw_1 = (Xword)hwcap_1;
+		org_scapset->sc_hw_1 = (Xword)hwcap[0];
+		org_scapset->sc_hw_2 = (Xword)hwcap[1];
 	}
 
 	/*

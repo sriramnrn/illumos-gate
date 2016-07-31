@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2012, 2015 by Delphix. All rights reserved.
+ * Copyright (c) 2014 Integros [integros.com]
  */
 
 #ifndef	_SYS_FS_ZFS_ZNODE_H
@@ -135,18 +137,6 @@ extern "C" {
 #define	ZFS_SHARES_DIR		"SHARES"
 #define	ZFS_SA_ATTRS		"SA_ATTRS"
 
-#define	ZFS_MAX_BLOCKSIZE	(SPA_MAXBLOCKSIZE)
-
-/* Path component length */
-/*
- * The generic fs code uses MAXNAMELEN to represent
- * what the largest component length is.  Unfortunately,
- * this length includes the terminating NULL.  ZFS needs
- * to tell the users via pathconf() and statvfs() what the
- * true maximum length of a component is, excluding the NULL.
- */
-#define	ZFS_MAXNAMELEN	(MAXNAMELEN - 1)
-
 /*
  * Convert mode bits (zp_mode) to BSD-style DT_* values for storing in
  * the directory entries.
@@ -233,22 +223,20 @@ typedef struct znode {
 #define	ZTOV(ZP)	((ZP)->z_vnode)
 #define	VTOZ(VP)	((znode_t *)(VP)->v_data)
 
-/*
- * ZFS_ENTER() is called on entry to each ZFS vnode and vfs operation.
- * ZFS_EXIT() must be called before exitting the vop.
- * ZFS_VERIFY_ZP() verifies the znode is valid.
- */
+/* Called on entry to each ZFS vnode and vfs operation  */
 #define	ZFS_ENTER(zfsvfs) \
 	{ \
-		rrw_enter(&(zfsvfs)->z_teardown_lock, RW_READER, FTAG); \
+		rrm_enter_read(&(zfsvfs)->z_teardown_lock, FTAG); \
 		if ((zfsvfs)->z_unmounted) { \
 			ZFS_EXIT(zfsvfs); \
 			return (EIO); \
 		} \
 	}
 
-#define	ZFS_EXIT(zfsvfs) rrw_exit(&(zfsvfs)->z_teardown_lock, FTAG)
+/* Must be called before exiting the vop */
+#define	ZFS_EXIT(zfsvfs) rrm_exit(&(zfsvfs)->z_teardown_lock, FTAG)
 
+/* Verifies the znode is valid */
 #define	ZFS_VERIFY_ZP(zp) \
 	if ((zp)->z_sa_hdl == NULL) { \
 		ZFS_EXIT((zp)->z_zfsvfs); \
@@ -268,15 +256,14 @@ typedef struct znode {
 #define	ZFS_OBJ_HOLD_EXIT(zfsvfs, obj_num) \
 	mutex_exit(ZFS_OBJ_MUTEX((zfsvfs), (obj_num)))
 
-/*
- * Macros to encode/decode ZFS stored time values from/to struct timespec
- */
+/* Encode ZFS stored time values from a struct timespec */
 #define	ZFS_TIME_ENCODE(tp, stmp)		\
 {						\
 	(stmp)[0] = (uint64_t)(tp)->tv_sec;	\
 	(stmp)[1] = (uint64_t)(tp)->tv_nsec;	\
 }
 
+/* Decode ZFS stored time values to a struct timespec */
 #define	ZFS_TIME_DECODE(tp, stmp)		\
 {						\
 	(tp)->tv_sec = (time_t)(stmp)[0];		\

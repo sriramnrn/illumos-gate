@@ -20,7 +20,7 @@
  */
 /*
  * Copyright (c) 2008, 2010, Oracle and/or its affiliates. All rights reserved.
- * Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <sys/conf.h>
@@ -480,6 +480,8 @@ fct_get_adapter_port_attr(fct_i_local_port_t *ilport, uint8_t *pwwn,
 		port_attr->PortSupportedSpeed |= FC_HBA_PORTSPEED_8GBIT;
 	if (attr->supported_speed & PORT_SPEED_10G)
 		port_attr->PortSupportedSpeed |= FC_HBA_PORTSPEED_10GBIT;
+	if (attr->supported_speed & PORT_SPEED_16G)
+		port_attr->PortSupportedSpeed |= FC_HBA_PORTSPEED_16GBIT;
 	switch (iport->iport_link_info.port_speed) {
 		case PORT_SPEED_1G:
 			port_attr->PortSpeed = FC_HBA_PORTSPEED_1GBIT;
@@ -495,6 +497,9 @@ fct_get_adapter_port_attr(fct_i_local_port_t *ilport, uint8_t *pwwn,
 			break;
 		case PORT_SPEED_10G:
 			port_attr->PortSpeed = FC_HBA_PORTSPEED_10GBIT;
+			break;
+		case PORT_SPEED_16G:
+			port_attr->PortSpeed = FC_HBA_PORTSPEED_16GBIT;
 			break;
 		default:
 			port_attr->PortSpeed = FC_HBA_PORTSPEED_UNKNOWN;
@@ -1162,7 +1167,7 @@ fct_register_local_port(fct_local_port_t *port)
 	stmf_wwn_to_devid_desc((scsi_devid_desc_t *)iport->iport_id,
 	    port->port_pwwn, PROTOCOL_FIBRE_CHANNEL);
 	(void) snprintf(taskq_name, sizeof (taskq_name), "stmf_fct_taskq_%d",
-	    atomic_add_32_nv(&taskq_cntr, 1));
+	    atomic_inc_32_nv(&taskq_cntr));
 	if ((iport->iport_worker_taskq = ddi_taskq_create(NULL,
 	    taskq_name, 1, TASKQ_DEFAULTPRI, 0)) == NULL) {
 		return (FCT_FAILURE);
@@ -1358,7 +1363,7 @@ fct_deregport_fail1:;
 /* ARGSUSED */
 void
 fct_handle_event(fct_local_port_t *port, int event_id, uint32_t event_flags,
-		caddr_t arg)
+    caddr_t arg)
 {
 	char			info[FCT_INFO_LEN];
 	fct_i_event_t		*e;
@@ -1440,7 +1445,7 @@ fct_deque_rp(fct_i_local_port_t *iport, fct_i_remote_port_t *irp)
 	while (irp_next != NULL) {
 		if (irp == irp_next) {
 			if (irp->irp_flags & IRP_PLOGI_DONE) {
-				atomic_add_32(&iport->iport_nrps_login, -1);
+				atomic_dec_32(&iport->iport_nrps_login);
 			}
 			atomic_and_32(&irp->irp_flags,
 			    ~(IRP_PLOGI_DONE | IRP_PRLI_DONE));
@@ -1607,8 +1612,7 @@ fct_local_port_cleanup_done(fct_i_local_port_t *iport)
 
 fct_cmd_t *
 fct_scsi_task_alloc(fct_local_port_t *port, uint16_t rp_handle,
-		uint32_t rportid, uint8_t *lun, uint16_t cdb_length,
-		uint16_t task_ext)
+    uint32_t rportid, uint8_t *lun, uint16_t cdb_length, uint16_t task_ext)
 {
 	fct_cmd_t *cmd;
 	fct_i_cmd_t *icmd;
@@ -1678,7 +1682,7 @@ fct_scsi_task_alloc(fct_local_port_t *port, uint16_t rp_handle,
 		icmd = (fct_i_cmd_t *)cmd->cmd_fct_private;
 		icmd->icmd_next = NULL;
 		cmd->cmd_port = port;
-		atomic_add_32(&iport->iport_total_alloced_ncmds, 1);
+		atomic_inc_32(&iport->iport_total_alloced_ncmds);
 	}
 
 	/*
@@ -1701,7 +1705,7 @@ fct_scsi_task_alloc(fct_local_port_t *port, uint16_t rp_handle,
 		fct_cmd_free(cmd);
 		return (NULL);
 	}
-	atomic_add_16(&irp->irp_fcp_xchg_count, 1);
+	atomic_inc_16(&irp->irp_fcp_xchg_count);
 	cmd->cmd_rp = rp;
 	icmd->icmd_flags |= ICMD_IN_TRANSITION | ICMD_KNOWN_TO_FCA;
 	rw_exit(&irp->irp_lock);
@@ -1826,15 +1830,15 @@ fct_post_implicit_logo(fct_cmd_t *cmd)
 
 	rw_enter(&irp->irp_lock, RW_WRITER);
 	atomic_or_32(&icmd->icmd_flags, ICMD_IMPLICIT_CMD_HAS_RESOURCE);
-	atomic_add_16(&irp->irp_nonfcp_xchg_count, 1);
-	atomic_add_16(&irp->irp_sa_elses_count, 1);
+	atomic_inc_16(&irp->irp_nonfcp_xchg_count);
+	atomic_inc_16(&irp->irp_sa_elses_count);
 	/*
 	 * An implicit LOGO can also be posted to a irp where a PLOGI might
 	 * be in process. That PLOGI will reset this flag and decrement the
 	 * iport_nrps_login counter.
 	 */
 	if (irp->irp_flags & IRP_PLOGI_DONE) {
-		atomic_add_32(&iport->iport_nrps_login, -1);
+		atomic_dec_32(&iport->iport_nrps_login);
 	}
 	atomic_and_32(&irp->irp_flags, ~(IRP_PLOGI_DONE | IRP_PRLI_DONE));
 	atomic_or_32(&icmd->icmd_flags, ICMD_SESSION_AFFECTING);
@@ -1865,7 +1869,7 @@ fct_alloc_cmd_slot(fct_i_local_port_t *iport, fct_cmd_t *cmd)
 		new |= iport->iport_cmd_slots[cmd_slot].slot_next;
 	} while (atomic_cas_32(&iport->iport_next_free_slot, old, new) != old);
 
-	atomic_add_16(&iport->iport_nslots_free, -1);
+	atomic_dec_16(&iport->iport_nslots_free);
 	iport->iport_cmd_slots[cmd_slot].slot_cmd = icmd;
 	cmd->cmd_handle = (uint32_t)cmd_slot | 0x80000000 |
 	    (((uint32_t)(iport->iport_cmd_slots[cmd_slot].slot_uniq_cntr))
@@ -2072,14 +2076,14 @@ fct_cmd_free(fct_cmd_t *cmd)
 		} while (atomic_cas_32(&iport->iport_next_free_slot,
 		    old, new) != old);
 		cmd->cmd_handle = 0;
-		atomic_add_16(&iport->iport_nslots_free, 1);
+		atomic_inc_16(&iport->iport_nslots_free);
 		if (cmd->cmd_rp) {
 			irp = (fct_i_remote_port_t *)
 			    cmd->cmd_rp->rp_fct_private;
 			if (cmd->cmd_type == FCT_CMD_FCP_XCHG)
-				atomic_add_16(&irp->irp_fcp_xchg_count, -1);
+				atomic_dec_16(&irp->irp_fcp_xchg_count);
 			else
-				atomic_add_16(&irp->irp_nonfcp_xchg_count, -1);
+				atomic_dec_16(&irp->irp_nonfcp_xchg_count);
 		}
 		rw_exit(&iport->iport_lock);
 	} else if ((icmd->icmd_flags & ICMD_IMPLICIT) &&
@@ -2089,9 +2093,9 @@ fct_cmd_free(fct_cmd_t *cmd)
 			irp = (fct_i_remote_port_t *)
 			    cmd->cmd_rp->rp_fct_private;
 			if (cmd->cmd_type == FCT_CMD_FCP_XCHG)
-				atomic_add_16(&irp->irp_fcp_xchg_count, -1);
+				atomic_dec_16(&irp->irp_fcp_xchg_count);
 			else
-				atomic_add_16(&irp->irp_nonfcp_xchg_count, -1);
+				atomic_dec_16(&irp->irp_nonfcp_xchg_count);
 		}
 	}
 
@@ -2126,7 +2130,7 @@ fct_cmd_free(fct_cmd_t *cmd)
 			iport->iport_cached_ncmds++;
 			mutex_exit(&iport->iport_cached_cmd_lock);
 		} else {
-			atomic_add_32(&iport->iport_total_alloced_ncmds, -1);
+			atomic_dec_32(&iport->iport_total_alloced_ncmds);
 			fct_free(cmd);
 		}
 	} else {
@@ -2137,7 +2141,7 @@ fct_cmd_free(fct_cmd_t *cmd)
 /* ARGSUSED */
 stmf_status_t
 fct_scsi_abort(stmf_local_port_t *lport, int abort_cmd, void *arg,
-							uint32_t flags)
+    uint32_t flags)
 {
 	stmf_status_t ret = STMF_SUCCESS;
 	scsi_task_t *task;
@@ -2272,7 +2276,7 @@ fct_ctl(struct stmf_local_port *lport, int cmd, void *arg)
 /* ARGSUSED */
 stmf_status_t
 fct_info(uint32_t cmd, stmf_local_port_t *lport, void *arg, uint8_t *buf,
-						uint32_t *bufsizep)
+    uint32_t *bufsizep)
 {
 	return (STMF_NOT_SUPPORTED);
 }
@@ -3038,7 +3042,7 @@ fct_queue_cmd_for_termination(fct_cmd_t *cmd, fct_status_t s)
  */
 void
 fct_q_for_termination_lock_held(fct_i_local_port_t *iport, fct_i_cmd_t *icmd,
-		fct_status_t s)
+    fct_status_t s)
 {
 	uint32_t old, new;
 	fct_i_cmd_t **ppicmd;
@@ -3203,7 +3207,7 @@ fct_handle_port_offline(fct_i_local_port_t *iport)
  */
 fct_status_t
 fct_port_initialize(fct_local_port_t *port, uint32_t rflags,
-				char *additional_info)
+    char *additional_info)
 {
 	stmf_state_change_info_t st;
 
@@ -3216,7 +3220,7 @@ fct_port_initialize(fct_local_port_t *port, uint32_t rflags,
 
 fct_status_t
 fct_port_shutdown(fct_local_port_t *port, uint32_t rflags,
-				char *additional_info)
+    char *additional_info)
 {
 	stmf_state_change_info_t st;
 

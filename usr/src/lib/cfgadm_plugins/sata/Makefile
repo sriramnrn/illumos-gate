@@ -26,8 +26,7 @@
 
 include		../../Makefile.lib
 
-SUBDIRS =	$(MACH)
-$(BUILD64)SUBDIRS += $(MACH64)
+$(INTEL_BLD)SUBDIRS =	$(MACH) $(BUILD64) $(MACH64)
 
 all :=		TARGET= all
 clean :=	TARGET= clean
@@ -48,7 +47,9 @@ GREP=	grep
 
 .KEEP_STATE:
 
-all clean clobber delete install lint package: $(SUBDIRS)
+all clean delete install lint package: $(SUBDIRS)
+clobber: $(SUBDIRS)
+	$(RM) $(POFILE) $(POFILES)
 
 $(SUBDIRS):	FRC
 	@cd $@; pwd; $(MAKE) $(TARGET)

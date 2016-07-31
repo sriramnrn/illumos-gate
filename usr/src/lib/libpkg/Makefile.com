@@ -58,6 +58,8 @@ CLEANFILES +=   $(MSGFILES)
 # use of macros for stack management.
 LINTFLAGS=      -umx -errtags \
 		-erroff=E_BAD_PTR_CAST_ALIGN,E_BAD_PTR_CAST
+LINTFLAGS +=	-erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
+LINTFLAGS64 +=	-erroff=E_SUPPRESSION_DIRECTIVE_UNUSED
 $(LINTLIB):=	SRCS = $(SRCDIR)/$(LINTSRC)
 
 
@@ -67,6 +69,12 @@ LIBS = $(DYNLIB) $(LINTLIB)
 LDLIBS +=	-lc -lssl -lwanboot -lcrypto -lscf -ladm
 
 CFLAGS +=	$(CCVERBOSE)
+CERRWARN +=	-_gcc=-Wno-unused-label
+CERRWARN +=	-_gcc=-Wno-parentheses
+CERRWARN +=	-_gcc=-Wno-uninitialized
+CERRWARN +=	-_gcc=-Wno-clobbered
+CERRWARN +=	-_gcc=-Wno-switch
+CERRWARN +=	-_gcc=-Wno-unused-value
 CPPFLAGS +=	-I$(SRCDIR) -D_FILE_OFFSET_BITS=64
 
 .KEEP_STATE:

@@ -22,6 +22,11 @@
 /*
  * Copyright (c) 1991, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2011 Nexenta Systems, Inc. All rights reserved.
+ * Copyright 2013 OmniTI Computer Consulting, Inc. All rights reserved.
+ * Copyright (c) 2013 Gary Mills
+ * Copyright 2014 Garrett D'Amore <garrett@damore.org>
+ * Copyright 2015 Circonus, Inc.  All rights reserved.
+ * Copyright 2015 Joyent, Inc.
  */
 
 /* LINTLIBRARY */
@@ -163,6 +168,7 @@
 #if defined(__amd64)
 #include <stack_unwind.h>
 #endif
+#include <xlocale.h>
 
 /*
  * This really comes from the crt*.s startup modules.
@@ -193,6 +199,7 @@ char *__posix_asctime_r(const struct tm *_RESTRICT_KYWD, char *_RESTRICT_KYWD);
 char *__posix_ctime_r(const time_t *, char *);
 int __posix_ttyname_r(int, char *, size_t);
 int __posix_getlogin_r(char *, int);
+int __posix_getloginx_r(char *, int);
 
 /*
  * XPG4 versions of standard libc routines; these aren't extracted
@@ -379,8 +386,10 @@ void lcong48(unsigned short param[7]);
 long nrand48(unsigned short *xsubi);
 long jrand48(unsigned short *xsubi);
 
-/* dup2.c */
+/* dup.c */
+int dup(int fildes);
 int dup2(int fildes, int fildes2);
+int dup3(int fildes, int fildes2, int flags);
 
 /* ecvt.c */
 char *ecvt(double value, int ndigit, int *_RESTRICT_KYWD decpt,
@@ -418,6 +427,9 @@ int fdetach(const char *path);
 
 /* ffs.c */
 int ffs(int field);
+
+/* flock.c */
+int flock(int filedes, int operation);
 
 /* fmtmsg.c */
 int addseverity(int value, const char *string);
@@ -474,7 +486,15 @@ int gethz(void);
 uint_t getisax(uint32_t *, uint_t);
 
 /* getlogin.c */
+char *getloginx(void);
+char *getloginx_r(char *, int);
+#ifdef	getlogin
+#undef	getlogin
+#endif	/* getlogin */
 char *getlogin(void);
+#ifdef	getlogin_r
+#undef	getlogin_r
+#endif	/* getlogin_r */
 char *getlogin_r(char *, int);
 
 /* getmntent.c */
@@ -741,8 +761,11 @@ DIR *opendir(const char *filename);
 /* perror.c */
 void perror(const char *s);
 
+/* pipe.c */
+int pipe(int *fds);
+
 /* psiginfo.c */
-void psiginfo(siginfo_t *sip, char *s);
+void psiginfo(const siginfo_t *sip, const char *s);
 
 /* psignal.c */
 void psignal(int sig, const char *s);

@@ -60,6 +60,8 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE)
 
 LDFLAGS		+= -dy -Ndrv/audio -Nmisc/ac97
 
+CERRWARN	+= -_gcc=-Wno-uninitialized
+
 $(OBJS_DIR)/%.o			:= CPPFLAGS += -I$(OBJS_DIR)
 $(OBJS_DIR)/%.ln		:= CPPFLAGS += -I$(OBJS_DIR)
 $(OBJS_DIR)/emu10k_gpr.h	:= ASM10KFLAGS = -v -0 -P gpr
@@ -92,11 +94,13 @@ install:	$(INSTALL_DEPS)
 $(BINARY):	$(OBJS_DIR)/asm10k $(DSP_HDRS)
 
 $(ASM10K):	$(DSP_SRCDIR)/asm10k.c
-	$(CC) -o $@ $(DSP_SRCDIR)/asm10k.c
+	$(NATIVECC) $(NATIVE_CFLAGS) -o $@ $(DSP_SRCDIR)/asm10k.c
 
 $(DSP_HDRS): $(ASM10K) $(DSP_SRCS)
 	$(CPP) -D$(MODEL10K) -I$(DSP_SRCDIR) $(DSP_SRCDIR)/emu10k.dsp | \
 	$(OBJS_DIR)/asm10k $(ASM10KFLAGS) -h $@
+
+CLOBBERFILES += $(ASM10K) $(DSP_HDRS)
 
 #
 #	Include common targets.

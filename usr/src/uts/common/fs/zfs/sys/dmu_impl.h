@@ -21,7 +21,10 @@
 /*
  * Copyright 2010 Sun Microsystems, Inc.  All rights reserved.
  * Use is subject to license terms.
+ */
+/*
  * Copyright (c) 2012, Joyent, Inc. All rights reserved.
+ * Copyright (c) 2013, 2015 by Delphix. All rights reserved.
  */
 
 #ifndef _SYS_DMU_IMPL_H
@@ -290,8 +293,17 @@ typedef struct dmu_sendarg {
 	uint64_t dsa_toguid;
 	int dsa_err;
 	dmu_pendop_t dsa_pending_op;
+	uint64_t dsa_featureflags;
+	uint64_t dsa_last_data_object;
+	uint64_t dsa_last_data_offset;
+	uint64_t dsa_resume_object;
+	uint64_t dsa_resume_offset;
 } dmu_sendarg_t;
 
+void dmu_object_zapify(objset_t *, uint64_t, dmu_object_type_t, dmu_tx_t *);
+void dmu_object_free_zapified(objset_t *, uint64_t, dmu_tx_t *);
+int dmu_buf_hold_noread(objset_t *, uint64_t, uint64_t,
+    void *, dmu_buf_t **);
 
 #ifdef	__cplusplus
 }

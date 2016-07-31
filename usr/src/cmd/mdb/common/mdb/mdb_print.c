@@ -24,8 +24,9 @@
  */
 
 /*
- * Copyright (c) 2012 by Delphix. All rights reserved.
- * Copyright (c) 2012 Joyent, Inc. All rights reserved.
+ * Copyright (c) 2012, 2014 by Delphix. All rights reserved.
+ * Copyright 2015 Joyent, Inc.
+ * Copyright (c) 2014 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <mdb/mdb_modapi.h>
@@ -44,6 +45,7 @@
 #include <sys/isa_defs.h>
 #include <sys/param.h>
 #include <sys/sysmacros.h>
+#include <netinet/in.h>
 #include <strings.h>
 #include <libctf.h>
 #include <ctype.h>
@@ -71,6 +73,7 @@ typedef struct printarg {
 	int pa_nest;			/* array nesting depth */
 	int pa_tab;			/* tabstop width */
 	uint_t pa_maxdepth;		/* Limit max depth */
+	uint_t pa_nooutdepth;		/* don't print output past this depth */
 } printarg_t;
 
 #define	PA_SHOWTYPE	0x001		/* print type name */
@@ -695,8 +698,7 @@ setup_vcb(const char *name, uintptr_t addr)
 int
 cmd_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 {
-	mdb_ctf_id_t id;
-	ulong_t offset;
+	int offset;
 	uintptr_t a, tmp;
 	int ret;
 
@@ -706,9 +708,10 @@ cmd_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	if (argv->a_type != MDB_TYPE_STRING) {
 		/*
 		 * We are being given a raw offset in lieu of a type and
-		 * member; confirm the arguments.
+		 * member; confirm the number of arguments and argument
+		 * type.
 		 */
-		if (argv->a_type != MDB_TYPE_IMMEDIATE)
+		if (argc != 1 || argv->a_type != MDB_TYPE_IMMEDIATE)
 			return (DCMD_USAGE);
 
 		offset = argv->a_un.a_val;
@@ -729,34 +732,29 @@ cmd_list(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 		if (ret != 0)
 			return (ret);
 
-		if (mdb_ctf_lookup_by_name(buf, &id) != 0) {
-			mdb_warn("failed to look up type %s", buf);
-			return (DCMD_ABORT);
-		}
-
 		argv++;
 		argc--;
 
-		if (argc < 1 || argv->a_type != MDB_TYPE_STRING)
+		/*
+		 * If we make it here, we were provided a type name. We should
+		 * only continue if we still have arguments left (e.g. member
+		 * name and potentially a variable name).
+		 */
+		if (argc == 0)
 			return (DCMD_USAGE);
 
 		member = argv->a_un.a_str;
+		offset = mdb_ctf_offsetof_by_name(buf, member);
+		if (offset == -1)
+			return (DCMD_ABORT);
 
 		argv++;
 		argc--;
 
-		if (mdb_ctf_offsetof(id, member, &offset) != 0) {
-			mdb_warn("failed to find member %s of type %s",
-			    member, buf);
-			return (DCMD_ABORT);
-		}
-
-		if (offset % (sizeof (uintptr_t) * NBBY) != 0) {
+		if (offset % (sizeof (uintptr_t)) != 0) {
 			mdb_warn("%s is not a word-aligned member\n", member);
 			return (DCMD_ABORT);
 		}
-
-		offset /= NBBY;
 	}
 
 	/*
@@ -954,6 +952,7 @@ print_int_val(const char *type, ctf_encoding_t *ep, ulong_t off,
 		uint16_t i2;
 		uint8_t i1;
 		time_t t;
+		ipaddr_t I;
 	} u;
 
 	if (!(pap->pa_flags & PA_SHOWVAL))
@@ -988,12 +987,20 @@ print_int_val(const char *type, ctf_encoding_t *ep, ulong_t off,
 	}
 
 	/*
-	 * We pretty-print time_t values as a calendar date and time.
+	 * We pretty-print some integer based types.  time_t values are
+	 * printed as a calendar date and time, and IPv4 addresses as human
+	 * readable dotted quads.
 	 */
-	if (!(pap->pa_flags & (PA_INTHEX | PA_INTDEC)) &&
-	    strcmp(type, "time_t") == 0 && u.t != 0) {
-		mdb_printf("%Y", u.t);
-		return (0);
+	if (!(pap->pa_flags & (PA_INTHEX | PA_INTDEC))) {
+		if (strcmp(type, "time_t") == 0 && u.t != 0) {
+			mdb_printf("%Y", u.t);
+			return (0);
+		}
+		if (strcmp(type, "ipaddr_t") == 0 ||
+		    strcmp(type, "in_addr_t") == 0) {
+			mdb_printf("%I", u.I);
+			return (0);
+		}
 	}
 
 	/*
@@ -1293,6 +1300,46 @@ static int
 print_sou(const char *type, const char *name, mdb_ctf_id_t id,
     mdb_ctf_id_t base, ulong_t off, printarg_t *pap)
 {
+	mdb_tgt_addr_t addr = pap->pa_addr + off / NBBY;
+
+	/*
+	 * We have pretty-printing for some structures where displaying
+	 * structure contents has no value.
+	 */
+	if (pap->pa_flags & PA_SHOWVAL) {
+		if (strcmp(type, "in6_addr_t") == 0 ||
+		    strcmp(type, "struct in6_addr") == 0) {
+			in6_addr_t in6addr;
+
+			if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, &in6addr,
+			    sizeof (in6addr), addr) != sizeof (in6addr)) {
+				mdb_warn("failed to read %s pointer at %llx",
+				    name, addr);
+				return (1);
+			}
+			mdb_printf("%N", &in6addr);
+			/*
+			 * Don't print anything further down in the
+			 * structure.
+			 */
+			pap->pa_nooutdepth = pap->pa_depth;
+			return (0);
+		}
+		if (strcmp(type, "struct in_addr") == 0) {
+			in_addr_t inaddr;
+
+			if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, &inaddr,
+			    sizeof (inaddr), addr) != sizeof (inaddr)) {
+				mdb_warn("failed to read %s pointer at %llx",
+				    name, addr);
+				return (1);
+			}
+			mdb_printf("%I", inaddr);
+			pap->pa_nooutdepth = pap->pa_depth;
+			return (0);
+		}
+	}
+
 	if (pap->pa_depth == pap->pa_maxdepth)
 		mdb_printf("{ ... }");
 	else
@@ -1497,10 +1544,19 @@ elt_print(const char *name, mdb_ctf_id_t id, mdb_ctf_id_t base,
 	int kind, rc, d;
 	printarg_t *pap = data;
 
-	for (d = pap->pa_depth - 1; d >= depth; d--)
-		print_close_sou(pap, d);
+	for (d = pap->pa_depth - 1; d >= depth; d--) {
+		if (d < pap->pa_nooutdepth)
+			print_close_sou(pap, d);
+	}
 
-	if (depth > pap->pa_maxdepth)
+	/*
+	 * Reset pa_nooutdepth if we've come back out of the structure we
+	 * didn't want to print.
+	 */
+	if (depth <= pap->pa_nooutdepth)
+		pap->pa_nooutdepth = (uint_t)-1;
+
+	if (depth > pap->pa_maxdepth || depth > pap->pa_nooutdepth)
 		return (0);
 
 	if (!mdb_ctf_type_valid(base) ||
@@ -1677,6 +1733,7 @@ pipe_print(mdb_ctf_id_t id, ulong_t off, void *data)
 	uintptr_t value;
 	uintptr_t addr = pap->pa_addr + off / NBBY;
 	mdb_ctf_id_t base;
+	int enum_value;
 	ctf_encoding_t e;
 
 	union {
@@ -1687,7 +1744,7 @@ pipe_print(mdb_ctf_id_t id, ulong_t off, void *data)
 	} u;
 
 	if (mdb_ctf_type_resolve(id, &base) == -1) {
-		mdb_warn("could not resolve type\n");
+		mdb_warn("could not resolve type");
 		return (-1);
 	}
 
@@ -1711,10 +1768,18 @@ again:
 		mdb_printf("%#lr\n", value);
 		break;
 
-	case CTF_K_INTEGER:
 	case CTF_K_ENUM:
+		if (mdb_tgt_aread(pap->pa_tgt, pap->pa_as, &enum_value,
+		    sizeof (enum_value), addr) != sizeof (enum_value)) {
+			mdb_warn("failed to read enum at %llx", addr);
+			return (-1);
+		}
+		mdb_printf("%#r\n", enum_value);
+		break;
+
+	case CTF_K_INTEGER:
 		if (mdb_ctf_type_encoding(base, &e) != 0) {
-			mdb_printf("could not get type encoding\n");
+			mdb_warn("could not get type encoding\n");
 			return (-1);
 		}
 
@@ -2003,51 +2068,24 @@ parse_member(printarg_t *pap, const char *str, mdb_ctf_id_t id,
 		delim = parse_delimiter(&start);
 	}
 
-
 	*idp = id;
 	*offp = off;
 
 	return (0);
 }
 
-int
-cmd_print_tab(mdb_tab_cookie_t *mcp, uint_t flags, int argc,
+static int
+cmd_print_tab_common(mdb_tab_cookie_t *mcp, uint_t flags, int argc,
     const mdb_arg_t *argv)
 {
 	char tn[MDB_SYM_NAMLEN];
 	char member[64];
-	int i, dummy, delim, kind;
+	int delim, kind;
 	int ret = 0;
 	mdb_ctf_id_t id, rid;
 	mdb_ctf_arinfo_t ar;
 	char *start, *end;
 	ulong_t dul;
-
-	/*
-	 * This getopts is only here to make the tab completion work better when
-	 * including options in the ::print arguments. None of the values should
-	 * be used. This should only be updated with additional arguments, if
-	 * they are added to cmd_print.
-	 */
-	i = mdb_getopts(argc, argv,
-	    'a', MDB_OPT_SETBITS, PA_SHOWADDR, &dummy,
-	    'C', MDB_OPT_SETBITS, TRUE, &dummy,
-	    'c', MDB_OPT_UINTPTR, &dummy,
-	    'd', MDB_OPT_SETBITS, PA_INTDEC, &dummy,
-	    'h', MDB_OPT_SETBITS, PA_SHOWHOLES, &dummy,
-	    'i', MDB_OPT_SETBITS, TRUE, &dummy,
-	    'L', MDB_OPT_SETBITS, TRUE, &dummy,
-	    'l', MDB_OPT_UINTPTR, &dummy,
-	    'n', MDB_OPT_SETBITS, PA_NOSYMBOLIC, &dummy,
-	    'p', MDB_OPT_SETBITS, TRUE, &dummy,
-	    's', MDB_OPT_UINTPTR, &dummy,
-	    'T', MDB_OPT_SETBITS, PA_SHOWTYPE | PA_SHOWBASETYPE, &dummy,
-	    't', MDB_OPT_SETBITS, PA_SHOWTYPE, &dummy,
-	    'x', MDB_OPT_SETBITS, PA_INTHEX, &dummy,
-	    NULL);
-
-	argc -= i;
-	argv += i;
 
 	if (argc == 0 && !(flags & DCMD_TAB_SPACE))
 		return (0);
@@ -2174,6 +2212,41 @@ cmd_print_tab(mdb_tab_cookie_t *mcp, uint_t flags, int argc,
 	return (mdb_tab_complete_member_by_id(mcp, rid, member));
 }
 
+int
+cmd_print_tab(mdb_tab_cookie_t *mcp, uint_t flags, int argc,
+    const mdb_arg_t *argv)
+{
+	int i, dummy;
+
+	/*
+	 * This getopts is only here to make the tab completion work better when
+	 * including options in the ::print arguments. None of the values should
+	 * be used. This should only be updated with additional arguments, if
+	 * they are added to cmd_print.
+	 */
+	i = mdb_getopts(argc, argv,
+	    'a', MDB_OPT_SETBITS, PA_SHOWADDR, &dummy,
+	    'C', MDB_OPT_SETBITS, TRUE, &dummy,
+	    'c', MDB_OPT_UINTPTR, &dummy,
+	    'd', MDB_OPT_SETBITS, PA_INTDEC, &dummy,
+	    'h', MDB_OPT_SETBITS, PA_SHOWHOLES, &dummy,
+	    'i', MDB_OPT_SETBITS, TRUE, &dummy,
+	    'L', MDB_OPT_SETBITS, TRUE, &dummy,
+	    'l', MDB_OPT_UINTPTR, &dummy,
+	    'n', MDB_OPT_SETBITS, PA_NOSYMBOLIC, &dummy,
+	    'p', MDB_OPT_SETBITS, TRUE, &dummy,
+	    's', MDB_OPT_UINTPTR, &dummy,
+	    'T', MDB_OPT_SETBITS, PA_SHOWTYPE | PA_SHOWBASETYPE, &dummy,
+	    't', MDB_OPT_SETBITS, PA_SHOWTYPE, &dummy,
+	    'x', MDB_OPT_SETBITS, PA_INTHEX, &dummy,
+	    NULL);
+
+	argc -= i;
+	argv += i;
+
+	return (cmd_print_tab_common(mcp, flags, argc, argv));
+}
+
 /*
  * Recursively descend a print a given data structure.  We create a struct of
  * the relevant print arguments and then call mdb_ctf_type_visit() to do the
@@ -2287,6 +2360,7 @@ cmd_print(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
 	pa.pa_nholes = 0;
 	pa.pa_depth = 0;
 	pa.pa_maxdepth = opt_s;
+	pa.pa_nooutdepth = (uint_t)-1;
 
 	if ((flags & DCMD_ADDRSPEC) && !opt_i)
 		pa.pa_addr = opt_p ? mdb_get_dot() : addr;
@@ -2462,4 +2536,650 @@ print_help(void)
 	    "operator \".\", or structure pointer operator \"->\".\n"
 	    "\n"
 	    "Offsets must use the $[ expression ] syntax\n");
+}
+
+static int
+printf_signed(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt,
+    boolean_t sign)
+{
+	ssize_t size;
+	mdb_ctf_id_t base;
+	ctf_encoding_t e;
+
+	union {
+		uint64_t ui8;
+		uint32_t ui4;
+		uint16_t ui2;
+		uint8_t ui1;
+		int64_t i8;
+		int32_t i4;
+		int16_t i2;
+		int8_t i1;
+	} u;
+
+	if (mdb_ctf_type_resolve(id, &base) == -1) {
+		mdb_warn("could not resolve type");
+		return (DCMD_ABORT);
+	}
+
+	switch (mdb_ctf_type_kind(base)) {
+		case CTF_K_ENUM:
+			e.cte_format = CTF_INT_SIGNED;
+			e.cte_offset = 0;
+			e.cte_bits = mdb_ctf_type_size(id) * NBBY;
+			break;
+		case CTF_K_INTEGER:
+			if (mdb_ctf_type_encoding(base, &e) != 0) {
+				mdb_warn("could not get type encoding");
+				return (DCMD_ABORT);
+			}
+			break;
+		default:
+			mdb_warn("expected integer type\n");
+			return (DCMD_ABORT);
+	}
+
+	if (sign)
+		sign = e.cte_format & CTF_INT_SIGNED;
+
+	size = e.cte_bits / NBBY;
+
+	/*
+	 * Check to see if our life has been complicated by the presence of
+	 * a bitfield.  If it has, we will print it using logic that is only
+	 * slightly different than that found in print_bitfield(), above.  (In
+	 * particular, see the comments there for an explanation of the
+	 * endianness differences in this code.)
+	 */
+	if (size > 8 || (e.cte_bits % NBBY) != 0 ||
+	    (size & (size - 1)) != 0) {
+		uint64_t mask = (1ULL << e.cte_bits) - 1;
+		uint64_t value = 0;
+		uint8_t *buf = (uint8_t *)&value;
+		uint8_t shift;
+
+		/*
+		 * Round our size up one byte.
+		 */
+		size = (e.cte_bits + (NBBY - 1)) / NBBY;
+
+		if (e.cte_bits > sizeof (value) * NBBY - 1) {
+			mdb_printf("invalid bitfield size %u", e.cte_bits);
+			return (DCMD_ABORT);
+		}
+
+#ifdef _BIG_ENDIAN
+		buf += sizeof (value) - size;
+		off += e.cte_bits;
+#endif
+
+		if (mdb_vread(buf, size, addr) == -1) {
+			mdb_warn("failed to read %lu bytes at %p", size, addr);
+			return (DCMD_ERR);
+		}
+
+		shift = off % NBBY;
+#ifdef _BIG_ENDIAN
+		shift = NBBY - shift;
+#endif
+
+		/*
+		 * If we have a bit offset within the byte, shift it down.
+		 */
+		if (off % NBBY != 0)
+			value >>= shift;
+		value &= mask;
+
+		if (sign) {
+			int sshift = sizeof (value) * NBBY - e.cte_bits;
+			value = ((int64_t)value << sshift) >> sshift;
+		}
+
+		mdb_printf(fmt, value);
+		return (0);
+	}
+
+	if (mdb_vread(&u.i8, size, addr) == -1) {
+		mdb_warn("failed to read %lu bytes at %p", (ulong_t)size, addr);
+		return (DCMD_ERR);
+	}
+
+	switch (size) {
+	case sizeof (uint8_t):
+		mdb_printf(fmt, (uint64_t)(sign ? u.i1 : u.ui1));
+		break;
+	case sizeof (uint16_t):
+		mdb_printf(fmt, (uint64_t)(sign ? u.i2 : u.ui2));
+		break;
+	case sizeof (uint32_t):
+		mdb_printf(fmt, (uint64_t)(sign ? u.i4 : u.ui4));
+		break;
+	case sizeof (uint64_t):
+		mdb_printf(fmt, (uint64_t)(sign ? u.i8 : u.ui8));
+		break;
+	}
+
+	return (0);
+}
+
+static int
+printf_int(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
+{
+	return (printf_signed(id, addr, off, fmt, B_TRUE));
+}
+
+static int
+printf_uint(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
+{
+	return (printf_signed(id, addr, off, fmt, B_FALSE));
+}
+
+/*ARGSUSED*/
+static int
+printf_uint32(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
+{
+	mdb_ctf_id_t base;
+	ctf_encoding_t e;
+	uint32_t value;
+
+	if (mdb_ctf_type_resolve(id, &base) == -1) {
+		mdb_warn("could not resolve type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_type_kind(base) != CTF_K_INTEGER ||
+	    mdb_ctf_type_encoding(base, &e) != 0 ||
+	    e.cte_bits / NBBY != sizeof (value)) {
+		mdb_warn("expected 32-bit integer type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_vread(&value, sizeof (value), addr) == -1) {
+		mdb_warn("failed to read 32-bit value at %p", addr);
+		return (DCMD_ERR);
+	}
+
+	mdb_printf(fmt, value);
+
+	return (0);
+}
+
+/*ARGSUSED*/
+static int
+printf_ptr(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
+{
+	uintptr_t value;
+	mdb_ctf_id_t base;
+
+	if (mdb_ctf_type_resolve(id, &base) == -1) {
+		mdb_warn("could not resolve type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_type_kind(base) != CTF_K_POINTER) {
+		mdb_warn("expected pointer type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_vread(&value, sizeof (value), addr) == -1) {
+		mdb_warn("failed to read pointer at %llx", addr);
+		return (DCMD_ERR);
+	}
+
+	mdb_printf(fmt, value);
+
+	return (0);
+}
+
+/*ARGSUSED*/
+static int
+printf_string(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
+{
+	mdb_ctf_id_t base;
+	mdb_ctf_arinfo_t r;
+	char buf[1024];
+	ssize_t size;
+
+	if (mdb_ctf_type_resolve(id, &base) == -1) {
+		mdb_warn("could not resolve type");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_type_kind(base) == CTF_K_POINTER) {
+		uintptr_t value;
+
+		if (mdb_vread(&value, sizeof (value), addr) == -1) {
+			mdb_warn("failed to read pointer at %llx", addr);
+			return (DCMD_ERR);
+		}
+
+		if (mdb_readstr(buf, sizeof (buf) - 1, value) < 0) {
+			mdb_warn("failed to read string at %llx", value);
+			return (DCMD_ERR);
+		}
+
+		mdb_printf(fmt, buf);
+		return (0);
+	}
+
+	if (mdb_ctf_type_kind(base) == CTF_K_ENUM) {
+		const char *strval;
+		int value;
+
+		if (mdb_vread(&value, sizeof (value), addr) == -1) {
+			mdb_warn("failed to read pointer at %llx", addr);
+			return (DCMD_ERR);
+		}
+
+		if ((strval = mdb_ctf_enum_name(id, value))) {
+			mdb_printf(fmt, strval);
+		} else {
+			(void) mdb_snprintf(buf, sizeof (buf), "<%d>", value);
+			mdb_printf(fmt, buf);
+		}
+
+		return (0);
+	}
+
+	if (mdb_ctf_type_kind(base) != CTF_K_ARRAY) {
+		mdb_warn("exepected pointer or array type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_array_info(base, &r) == -1 ||
+	    mdb_ctf_type_resolve(r.mta_contents, &base) == -1 ||
+	    (size = mdb_ctf_type_size(base)) == -1) {
+		mdb_warn("can't determine array type");
+		return (DCMD_ABORT);
+	}
+
+	if (size != 1) {
+		mdb_warn("string format specifier requires "
+		    "an array of characters\n");
+		return (DCMD_ABORT);
+	}
+
+	bzero(buf, sizeof (buf));
+
+	if (mdb_vread(buf, MIN(r.mta_nelems, sizeof (buf) - 1), addr) == -1) {
+		mdb_warn("failed to read array at %p", addr);
+		return (DCMD_ERR);
+	}
+
+	mdb_printf(fmt, buf);
+
+	return (0);
+}
+
+/*ARGSUSED*/
+static int
+printf_ipv6(mdb_ctf_id_t id, uintptr_t addr, ulong_t off, char *fmt)
+{
+	mdb_ctf_id_t base;
+	mdb_ctf_id_t ipv6_type, ipv6_base;
+	in6_addr_t ipv6;
+
+	if (mdb_ctf_lookup_by_name("in6_addr_t", &ipv6_type) == -1) {
+		mdb_warn("could not resolve in6_addr_t type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_type_resolve(id, &base) == -1) {
+		mdb_warn("could not resolve type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_type_resolve(ipv6_type, &ipv6_base) == -1) {
+		mdb_warn("could not resolve in6_addr_t type\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_ctf_type_cmp(base, ipv6_base) != 0) {
+		mdb_warn("requires argument of type in6_addr_t\n");
+		return (DCMD_ABORT);
+	}
+
+	if (mdb_vread(&ipv6, sizeof (ipv6), addr) == -1) {
+		mdb_warn("couldn't read in6_addr_t at %p", addr);
+		return (DCMD_ERR);
+	}
+
+	mdb_printf(fmt, &ipv6);
+
+	return (0);
+}
+
+/*
+ * To validate the format string specified to ::printf, we run the format
+ * string through a very simple state machine that restricts us to a subset
+ * of mdb_printf() functionality.
+ */
+enum {
+	PRINTF_NOFMT = 1,		/* no current format specifier */
+	PRINTF_PERC,			/* processed '%' */
+	PRINTF_FMT,			/* processing format specifier */
+	PRINTF_LEFT,			/* processed '-', expecting width */
+	PRINTF_WIDTH,			/* processing width */
+	PRINTF_QUES			/* processed '?', expecting format */
+};
+
+int
+cmd_printf_tab(mdb_tab_cookie_t *mcp, uint_t flags, int argc,
+    const mdb_arg_t *argv)
+{
+	int ii;
+	char *f;
+
+	/*
+	 * If argc doesn't have more than what should be the format string,
+	 * ignore it.
+	 */
+	if (argc <= 1)
+		return (0);
+
+	/*
+	 * Because we aren't leveraging the lex and yacc engine, we have to
+	 * manually walk the arguments to find both the first and last
+	 * open/close quote of the format string.
+	 */
+	f = strchr(argv[0].a_un.a_str, '"');
+	if (f == NULL)
+		return (0);
+
+	f = strchr(f + 1, '"');
+	if (f != NULL) {
+		ii = 0;
+	} else {
+		for (ii = 1; ii < argc; ii++) {
+			if (argv[ii].a_type != MDB_TYPE_STRING)
+				continue;
+			f = strchr(argv[ii].a_un.a_str, '"');
+			if (f != NULL)
+				break;
+		}
+		/* Never found */
+		if (ii == argc)
+			return (0);
+	}
+
+	ii++;
+	argc -= ii;
+	argv += ii;
+
+	return (cmd_print_tab_common(mcp, flags, argc, argv));
+}
+
+int
+cmd_printf(uintptr_t addr, uint_t flags, int argc, const mdb_arg_t *argv)
+{
+	char type[MDB_SYM_NAMLEN];
+	int i, nfmts = 0, ret;
+	mdb_ctf_id_t id;
+	const char *fmt, *member;
+	char **fmts, *last, *dest, f;
+	int (**funcs)(mdb_ctf_id_t, uintptr_t, ulong_t, char *);
+	int state = PRINTF_NOFMT;
+	printarg_t pa;
+
+	if (!(flags & DCMD_ADDRSPEC))
+		return (DCMD_USAGE);
+
+	bzero(&pa, sizeof (pa));
+	pa.pa_as = MDB_TGT_AS_VIRT;
+	pa.pa_realtgt = pa.pa_tgt = mdb.m_target;
+
+	if (argc == 0 || argv[0].a_type != MDB_TYPE_STRING) {
+		mdb_warn("expected a format string\n");
+		return (DCMD_USAGE);
+	}
+
+	/*
+	 * Our first argument is a format string; rip it apart and run it
+	 * through our state machine to validate that our input is within the
+	 * subset of mdb_printf() format strings that we allow.
+	 */
+	fmt = argv[0].a_un.a_str;
+	/*
+	 * 'dest' must be large enough to hold a copy of the format string,
+	 * plus a NUL and up to 2 additional characters for each conversion
+	 * in the format string.  This gives us a bloat factor of 5/2 ~= 3.
+	 *   e.g. "%d" (strlen of 2) --> "%lld\0" (need 5 bytes)
+	 */
+	dest = mdb_zalloc(strlen(fmt) * 3, UM_SLEEP | UM_GC);
+	fmts = mdb_zalloc(strlen(fmt) * sizeof (char *), UM_SLEEP | UM_GC);
+	funcs = mdb_zalloc(strlen(fmt) * sizeof (void *), UM_SLEEP | UM_GC);
+	last = dest;
+
+	for (i = 0; fmt[i] != '\0'; i++) {
+		*dest++ = f = fmt[i];
+
+		switch (state) {
+		case PRINTF_NOFMT:
+			state = f == '%' ? PRINTF_PERC : PRINTF_NOFMT;
+			break;
+
+		case PRINTF_PERC:
+			state = f == '-' ? PRINTF_LEFT :
+			    f >= '0' && f <= '9' ? PRINTF_WIDTH :
+			    f == '?' ? PRINTF_QUES :
+			    f == '%' ? PRINTF_NOFMT : PRINTF_FMT;
+			break;
+
+		case PRINTF_LEFT:
+			state = f >= '0' && f <= '9' ? PRINTF_WIDTH :
+			    f == '?' ? PRINTF_QUES : PRINTF_FMT;
+			break;
+
+		case PRINTF_WIDTH:
+			state = f >= '0' && f <= '9' ? PRINTF_WIDTH :
+			    PRINTF_FMT;
+			break;
+
+		case PRINTF_QUES:
+			state = PRINTF_FMT;
+			break;
+		}
+
+		if (state != PRINTF_FMT)
+			continue;
+
+		dest--;
+
+		/*
+		 * Now check that we have one of our valid format characters.
+		 */
+		switch (f) {
+		case 'a':
+		case 'A':
+		case 'p':
+			funcs[nfmts] = printf_ptr;
+			break;
+
+		case 'd':
+		case 'q':
+		case 'R':
+			funcs[nfmts] = printf_int;
+			*dest++ = 'l';
+			*dest++ = 'l';
+			break;
+
+		case 'I':
+			funcs[nfmts] = printf_uint32;
+			break;
+
+		case 'N':
+			funcs[nfmts] = printf_ipv6;
+			break;
+
+		case 'H':
+		case 'o':
+		case 'r':
+		case 'u':
+		case 'x':
+		case 'X':
+			funcs[nfmts] = printf_uint;
+			*dest++ = 'l';
+			*dest++ = 'l';
+			break;
+
+		case 's':
+			funcs[nfmts] = printf_string;
+			break;
+
+		case 'Y':
+			funcs[nfmts] = sizeof (time_t) == sizeof (int) ?
+			    printf_uint32 : printf_uint;
+			break;
+
+		default:
+			mdb_warn("illegal format string at or near "
+			    "'%c' (position %d)\n", f, i + 1);
+			return (DCMD_ABORT);
+		}
+
+		*dest++ = f;
+		*dest++ = '\0';
+		fmts[nfmts++] = last;
+		last = dest;
+		state = PRINTF_NOFMT;
+	}
+
+	argc--;
+	argv++;
+
+	/*
+	 * Now we expect a type name.
+	 */
+	if ((ret = args_to_typename(&argc, &argv, type, sizeof (type))) != 0)
+		return (ret);
+
+	argv++;
+	argc--;
+
+	if (mdb_ctf_lookup_by_name(type, &id) != 0) {
+		mdb_warn("failed to look up type %s", type);
+		return (DCMD_ABORT);
+	}
+
+	if (argc == 0) {
+		mdb_warn("at least one member must be specified\n");
+		return (DCMD_USAGE);
+	}
+
+	if (argc != nfmts) {
+		mdb_warn("%s format specifiers (found %d, expected %d)\n",
+		    argc > nfmts ? "missing" : "extra", nfmts, argc);
+		return (DCMD_ABORT);
+	}
+
+	for (i = 0; i < argc; i++) {
+		mdb_ctf_id_t mid;
+		ulong_t off;
+		int ignored;
+
+		if (argv[i].a_type != MDB_TYPE_STRING) {
+			mdb_warn("expected only type member arguments\n");
+			return (DCMD_ABORT);
+		}
+
+		if (strcmp((member = argv[i].a_un.a_str), ".") == 0) {
+			/*
+			 * We allow "." to be specified to denote the current
+			 * value of dot.
+			 */
+			if (funcs[i] != printf_ptr && funcs[i] != printf_uint &&
+			    funcs[i] != printf_int) {
+				mdb_warn("expected integer or pointer format "
+				    "specifier for '.'\n");
+				return (DCMD_ABORT);
+			}
+
+			mdb_printf(fmts[i], mdb_get_dot());
+			continue;
+		}
+
+		pa.pa_addr = addr;
+
+		if (parse_member(&pa, member, id, &mid, &off, &ignored) != 0)
+			return (DCMD_ABORT);
+
+		if ((ret = funcs[i](mid, pa.pa_addr, off, fmts[i])) != 0) {
+			mdb_warn("failed to print member '%s'\n", member);
+			return (ret);
+		}
+	}
+
+	mdb_printf("%s", last);
+	mdb_set_dot(addr + mdb_ctf_type_size(id));
+
+	return (DCMD_OK);
+}
+
+static char _mdb_printf_help[] =
+"The format string argument is a printf(3C)-like format string that is a\n"
+"subset of the format strings supported by mdb_printf().  The type argument\n"
+"is the name of a type to be used to interpret the memory referenced by dot.\n"
+"The member should either be a field in the specified structure, or the\n"
+"special member '.', denoting the value of dot (and treated as a pointer).\n"
+"The number of members must match the number of format specifiers in the\n"
+"format string.\n"
+"\n"
+"The following format specifiers are recognized by ::printf:\n"
+"\n"
+"  %%    Prints the '%' symbol.\n"
+"  %a    Prints the member in symbolic form.\n"
+"  %d    Prints the member as a decimal integer.  If the member is a signed\n"
+"        integer type, the output will be signed.\n"
+"  %H    Prints the member as a human-readable size.\n"
+"  %I    Prints the member as an IPv4 address (must be 32-bit integer type).\n"
+"  %N    Prints the member as an IPv6 address (must be of type in6_addr_t).\n"
+"  %o    Prints the member as an unsigned octal integer.\n"
+"  %p    Prints the member as a pointer, in hexadecimal.\n"
+"  %q    Prints the member in signed octal.  Honk if you ever use this!\n"
+"  %r    Prints the member as an unsigned value in the current output radix.\n"
+"  %R    Prints the member as a signed value in the current output radix.\n"
+"  %s    Prints the member as a string (requires a pointer or an array of\n"
+"        characters).\n"
+"  %u    Prints the member as an unsigned decimal integer.\n"
+"  %x    Prints the member in hexadecimal.\n"
+"  %X    Prints the member in hexadecimal, using the characters A-F as the\n"
+"        digits for the values 10-15.\n"
+"  %Y    Prints the member as a time_t as the string "
+	    "'year month day HH:MM:SS'.\n"
+"\n"
+"The following field width specifiers are recognized by ::printf:\n"
+"\n"
+"  %n    Field width is set to the specified decimal value.\n"
+"  %?    Field width is set to the maximum width of a hexadecimal pointer\n"
+"        value.  This is 8 in an ILP32 environment, and 16 in an LP64\n"
+"        environment.\n"
+"\n"
+"The following flag specifers are recognized by ::printf:\n"
+"\n"
+"  %-    Left-justify the output within the specified field width.  If the\n"
+"        width of the output is less than the specified field width, the\n"
+"        output will be padded with blanks on the right-hand side.  Without\n"
+"        %-, values are right-justified by default.\n"
+"\n"
+"  %0    Zero-fill the output field if the output is right-justified and the\n"
+"        width of the output is less than the specified field width.  Without\n"
+"        %0, right-justified values are prepended with blanks in order to\n"
+"        fill the field.\n"
+"\n"
+"Examples: \n"
+"\n"
+"  ::walk proc | "
+	"::printf \"%-6d %s\\n\" proc_t p_pidp->pid_id p_user.u_psargs\n"
+"  ::walk thread | "
+	"::printf \"%?p %3d %a\\n\" kthread_t . t_pri t_startpc\n"
+"  ::walk zone | "
+	"::printf \"%-40s %20s\\n\" zone_t zone_name zone_nodename\n"
+"  ::walk ire | "
+	"::printf \"%Y %I\\n\" ire_t ire_create_time ire_u.ire4_u.ire4_addr\n"
+"\n";
+
+void
+printf_help(void)
+{
+	mdb_printf("%s", _mdb_printf_help);
 }

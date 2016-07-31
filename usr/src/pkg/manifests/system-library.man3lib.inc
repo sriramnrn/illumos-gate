@@ -9,10 +9,14 @@
 # at http://www.illumos.org/license/CDDL.
 #
 
+#
 # Copyright 2011, Richard Lowe
+# Copyright 2012 Nexenta Systems, Inc. All rights reserved.
+#
 
 file path=usr/share/man/man3lib/libadm.3lib
 file path=usr/share/man/man3lib/libaio.3lib
+file path=usr/share/man/man3lib/libavl.3lib
 file path=usr/share/man/man3lib/libbsdmalloc.3lib
 file path=usr/share/man/man3lib/libbsm.3lib
 file path=usr/share/man/man3lib/libc.3lib
@@ -53,7 +57,7 @@ file path=usr/share/man/man3lib/libnvpair.3lib
 file path=usr/share/man/man3lib/libpam.3lib
 file path=usr/share/man/man3lib/libpanel.3lib
 file path=usr/share/man/man3lib/libpkcs11.3lib
-file path=usr/share/man/man3lib/libposix4.3lib
+file path=usr/share/man/man3lib/libproc.3lib
 file path=usr/share/man/man3lib/libproject.3lib
 file path=usr/share/man/man3lib/libpthread.3lib
 file path=usr/share/man/man3lib/libresolv.3lib
@@ -69,8 +73,6 @@ file path=usr/share/man/man3lib/libsip.3lib
 file path=usr/share/man/man3lib/libsocket.3lib
 file path=usr/share/man/man3lib/libsys.3lib
 file path=usr/share/man/man3lib/libsysevent.3lib
-file path=usr/share/man/man3lib/libtermcap.3lib
-file path=usr/share/man/man3lib/libtermlib.3lib
 file path=usr/share/man/man3lib/libthread.3lib
 file path=usr/share/man/man3lib/libtsnet.3lib
 file path=usr/share/man/man3lib/libtsol.3lib
@@ -80,3 +82,6 @@ file path=usr/share/man/man3lib/libvolmgt.3lib
 file path=usr/share/man/man3lib/libw.3lib
 file path=usr/share/man/man3lib/libxnet.3lib
 file path=usr/share/man/man3lib/liby.3lib
+link path=usr/share/man/man3lib/libposix4.3lib target=librt.3lib
+link path=usr/share/man/man3lib/libtermcap.3lib target=libcurses.3lib
+link path=usr/share/man/man3lib/libtermlib.3lib target=libcurses.3lib

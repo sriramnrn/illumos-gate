@@ -20,9 +20,13 @@
 #
 #
 # Copyright (c) 1990, 2010, Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2013 RackTop Systems.
+# Copyright (c) 2013 Gary Mills
 #
 # cmd/oamuser/user/Makefile
 #
+
+DEFAULTFILES= useradd.dfl
 
 include ../../Makefile.cmd
 
@@ -42,17 +46,17 @@ SBINPROG=	$(USERADD)   $(USERDEL)   $(USERMOD)
 PROG=		$(SBINPROG)
 PRODUCT=	$(PROG)
 
-ADD_OBJ=	useradd.o     uid.o        homedir.o \
-		groups.o      call_pass.o      userdefs.o   messages.o \
-		val_lgrp.o    funcs.o	       val_lprj.o   proj.o
-
-DEL_OBJ=	userdel.o     call_pass.o      rmfiles.o    isbusy.o \
-		groups.o      messages.o       funcs.o      proj.o
-
-MOD_OBJ=	usermod.o     uid.o            movedir.o    groups.o \
-		rmfiles.o     call_pass.o      isbusy.o     homedir.o \
+ADD_OBJ=	useradd.o     homedir.o        groups.o     call_pass.o \
 		userdefs.o    messages.o       val_lgrp.o   funcs.o \
 		val_lprj.o    proj.o
+
+DEL_OBJ=	userdel.o     call_pass.o      homedir.o    isbusy.o \
+		groups.o      messages.o       funcs.o      proj.o
+
+MOD_OBJ=	usermod.o     movedir.o        groups.o     homedir.o \
+		call_pass.o   isbusy.o         userdefs.o \
+		messages.o    val_lgrp.o       funcs.o      val_lprj.o \
+		proj.o
 
 OBJECTS=	$(ADD_OBJ)     $(DEL_OBJ)    $(MOD_OBJ)
 
@@ -70,6 +74,7 @@ INSSBINPROG=	$(SBINPROG:%=$(ROOTUSRSBIN)/%)
 INSSKELFILE=	$(SKELFILE:%=$(ROOTSKEL)/%)
 
 CPPFLAGS=	-I$(HERE) -I$(LOCAL) $(CPPFLAGS.master)
+CERRWARN +=	-_gcc=-Wno-implicit-function-declaration
 
 $(INSSBINPROG)  := FILEMODE = 0555
 $(INSSYSADMPROG):= FILEMODE = 0500
@@ -77,6 +82,7 @@ $(INSSKELFILE)  := FILEMODE = 0644
 
 $(USERADD) :=	OBJS = $(ADD_OBJ)
 $(USERADD) :=	LIBS = $(LIBUSRGRP)
+$(USERADD) :=	LDLIBS += -lcmdutils
 
 $(USERDEL) :=	OBJS = $(DEL_OBJ)
 $(USERDEL) :=	LIBS = $(LIBUSRGRP)
@@ -84,11 +90,11 @@ $(USERDEL) :=	LIBS = $(LIBUSRGRP)
 $(USERMOD) :=	OBJS = $(MOD_OBJ)
 $(USERMOD) :=	LIBS = $(LIBUSRGRP)
 
-LDLIBS +=	-lbsm -lnsl -lsecdb -lproject -ltsol
+LDLIBS +=	-lbsm -lnsl -lsecdb -lproject -lzfs -ltsol
 
 .PARALLEL: $(OBJECTS)
 
-all: 		$(PRODUCT)
+all:	$(PRODUCT)
 
 $(PROG):	$$(OBJS) $$(LIBS)
 	$(LINK.c) $(OBJS) -o $@ $(LIBS) $(LDLIBS)
@@ -98,7 +104,8 @@ $(USERADD):	$(ADD_OBJ)
 $(USERMOD):	$(MOD_OBJ)
 $(USERDEL):	$(DEL_OBJ)
 
-install:	all .WAIT $(ROOTSKEL) $(INSSBINPROG) $(INSSKELFILE)
+install:	all $(ROOTETCDEFAULTFILES) .WAIT \
+			$(ROOTSKEL) $(INSSBINPROG) $(INSSKELFILE)
 		$(RM) $(ROOTUSRSBIN)/$(ROLEADD)
 		$(LN) $(ROOTUSRSBIN)/$(USERADD) $(ROOTUSRSBIN)/$(ROLEADD)
 		$(RM) $(ROOTUSRSBIN)/$(ROLEDEL)

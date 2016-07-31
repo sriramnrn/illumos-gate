@@ -23,6 +23,10 @@
 # Copyright (c) 1995, 2010, Oracle and/or its affiliates. All rights reserved.
 #
 
+#
+# Copyright (c) 2012, Joyent, Inc.  All rights reserved.
+#
+
 @ _START_
 
 # Message file for cmd/sgs/libld.
@@ -139,6 +143,12 @@
 			 \t\t\tarchive members to resolve weak references from \
 			 \n\t\t\t\archive files\n"
 @ MSG_ARG_DETAIL_ZAL	"\t[-z altexec64]\texecute the 64-bit link-editor\n"
+@ MSG_ARG_DETAIL_ZADLIB	"\t[-z assert-deflib]\n\
+			\t\t\tenables warnings for linking with libraries in \
+			the \n\t\t\tdefault search path\n\
+			\t[-z assert-deflib=libname]\n\
+			\t\t\tenables warnings for linking with libraries in \
+			the \n\t\t\tdefault search path, but 'libname' is exempt\n"
 @ MSG_ARG_DETAIL_ZC	"\t[-z combreloc | nocombreloc]\n\
 			 \t\t\tcombine|do not combine multiple relocation \
 			 sections\n"
@@ -250,7 +260,6 @@
 #
 @ MSG_GRP_INVALNDX	"file %s: group section [%u]%s: entry %d: \
 			 invalid section index: %d"
-@ MSG_GRP_INVALSYM	"file %s: group section [%u]%s: invalid group symbol %s"
 
 # Relocation processing messages (some of these are required to satisfy
 # do_reloc(), which is common code used by cmd/sgs/rtld - make sure both
@@ -419,9 +428,6 @@
 
 @ MSG_FIL_BADORDREF	"file %s: section [%u]%s: contains illegal reference \
 			 to discarded section: [%u]%s"
-@ MSG_FIL_EXEHFRMTYP	"file %s: section [%u]%s: section type is %s: \
-			 expected %s"
-
 
 # Recording name conflicts
 
@@ -463,6 +469,13 @@
 
 @ MSG_SCN_NONALLOC	"%s: non-allocatable section '%s' directed to a \
 			 loadable segment: %s"
+
+@ MSG_SCN_MULTICOMDAT	"file %s: section [%u]%s: cannot be susceptible to multiple \
+			 COMDAT mechanisms: %s"
+
+@ MSG_SCN_DWFOVRFLW	"%s: section %s: encoded DWARF data exceeds \
+			 section size"
+@ MSG_SCN_DWFBADENC	"%s: section %s: invalid DWARF encoding: %#x"                         
 
 # Symbol processing errors
 
@@ -741,6 +754,8 @@
 @ MSG_STR_CDIR_ELSE	"$else"
 @ MSG_STR_CDIR_ENDIF	"$endif"
 
+@ MSG_STR_GROUP		"GROUP"
+@ MSG_STR_SUNW_COMDAT	"SUNW_COMDAT"
 
 @ MSG_FMT_ARMEM		"%s(%s)"
 @ MSG_FMT_COLPATH	"%s:%s"
@@ -920,6 +935,7 @@
 @ MSG_ARG_UNSUPPORTED	"option %s is no longer supported; ignored"
 @ MSG_MARG_ONLY		"option %s can only be used with a %s"
 @ MSG_ARG_UNKNOWN	"unrecognized option '-%c'"
+@ MSG_ARG_LONG_UNKNOWN	"unrecognized option '%s'"
 @ MSG_ARG_USEHELP	"use the -z help option for usage information"
 
 
@@ -1256,6 +1272,11 @@
 @ MSG_DBG_AOUT_FMT	"debug: a.out: "
 @ MSG_DBG_NAME_FMT	"debug: %s: "
 
+# -z assert-deflib strings
+
+@ MSG_ARG_ASSDEFLIB_MALFORMED	"library name malformed: %s"
+@ MSG_ARG_ASSDEFLIB_FOUND	"dynamic library found on default search path \
+				(%s): lib%s.so"
 
 @ _END_
 
@@ -1302,6 +1323,7 @@
 @ MSG_STR_NOBITS	"nobits"
 @ MSG_STR_HWCAP_1	"hwcap_1"
 @ MSG_STR_SFCAP_1	"sfcap_1"
+@ MSG_STR_SOEXT		".so"
 
 @ MSG_STR_OPTIONS	"3:6:abc:d:e:f:h:il:mo:p:rstu:z:B:CD:F:GI:L:M:N:P:Q:R:\
 			 S:VW:Y:?"
@@ -1416,6 +1438,7 @@
 @ MSG_ARG_SYMBOLCAP	"symbolcap"
 @ MSG_ARG_DEFERRED	"deferred"
 @ MSG_ARG_NODEFERRED	"nodeferred"
+@ MSG_ARG_ASSDEFLIB	"assert-deflib"
 
 @ MSG_ARG_LCOM		"L,"
 @ MSG_ARG_PCOM		"P,"

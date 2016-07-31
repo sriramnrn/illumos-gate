@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2011, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1984, 1986, 1987, 1988, 1989 AT&T	*/
@@ -388,10 +389,16 @@ proc_exit(int why, int what)
 	if (p->p_pid == z->zone_proc_initpid) {
 		if (z->zone_boot_err == 0 &&
 		    zone_status_get(z) < ZONE_IS_SHUTTING_DOWN &&
-		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN &&
-		    z->zone_restart_init == B_TRUE &&
-		    restart_init(what, why) == 0)
-			return (0);
+		    zone_status_get(global_zone) < ZONE_IS_SHUTTING_DOWN) {
+			if (z->zone_restart_init == B_TRUE) {
+				if (restart_init(what, why) == 0)
+					return (0);
+			} else {
+				(void) zone_kadmin(A_SHUTDOWN, AD_HALT, NULL,
+				    CRED());
+			}
+		}
+
 		/*
 		 * Since we didn't or couldn't restart init, we clear
 		 * the zone's init state and proceed with exit
@@ -446,6 +453,14 @@ proc_exit(int why, int what)
 	if (p->p_dtrace_helpers != NULL) {
 		ASSERT(dtrace_helpers_cleanup != NULL);
 		(*dtrace_helpers_cleanup)();
+	}
+
+	/*
+	 * Clean up any signalfd state for the process.
+	 */
+	if (p->p_sigfd != NULL) {
+		VERIFY(sigfd_exit_helper != NULL);
+		(*sigfd_exit_helper)();
 	}
 
 	/* untimeout the realtime timers */
@@ -597,7 +612,7 @@ proc_exit(int why, int what)
 	 */
 	mutex_enter(&p->p_lock);
 	ASSERT(p->p_pool->pool_ref > 0);
-	atomic_add_32(&p->p_pool->pool_ref, -1);
+	atomic_dec_32(&p->p_pool->pool_ref);
 	p->p_pool = pool_default;
 	/*
 	 * Now that our address space has been freed and all other threads

@@ -20,6 +20,7 @@
  */
 /*
  * Copyright (c) 2003, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2013, Joyent, Inc. All rights reserved.
  */
 
 #include <sys/types.h>
@@ -553,7 +554,18 @@ priv_policy_global(const cred_t *cr)
 }
 
 /*
- * Changing process priority
+ * Raising process priority
+ */
+int
+secpolicy_raisepriority(const cred_t *cr)
+{
+	if (PRIV_POLICY(cr, PRIV_PROC_PRIOUP, B_FALSE, EPERM, NULL) == 0)
+		return (0);
+	return (secpolicy_setpriority(cr));
+}
+
+/*
+ * Changing process priority or scheduling class
  */
 int
 secpolicy_setpriority(const cred_t *cr)
@@ -2057,6 +2069,12 @@ int
 secpolicy_tasksys(const cred_t *cr)
 {
 	return (PRIV_POLICY(cr, PRIV_PROC_TASKID, B_FALSE, EPERM, NULL));
+}
+
+int
+secpolicy_meminfo(const cred_t *cr)
+{
+	return (PRIV_POLICY(cr, PRIV_PROC_MEMINFO, B_FALSE, EPERM, NULL));
 }
 
 int

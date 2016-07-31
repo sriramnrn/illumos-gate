@@ -22,6 +22,8 @@
 # Copyright 2009 Sun Microsystems, Inc.  All rights reserved.
 # Use is subject to license terms.
 #
+# Copyright 2014 Garrett D'Amore <garrett@damore.org>
+#
 # uts/intel/usb_ac/Makefile
 #
 #	This makefile drives the production of the usb_ac driver
@@ -63,6 +65,11 @@ INSTALL_TARGET	= $(BINARY) $(ROOTMODULE) $(ROOT_CONFFILE)
 #
 MODSTUBS_DIR	 = $(OBJS_DIR)
 CLEANFILES	+= $(MODSTUBS_O)
+
+CERRWARN	+= -_gcc=-Wno-switch
+CERRWARN	+= -_gcc=-Wno-type-limits
+CERRWARN	+= -_gcc=-Wno-unused-label
+CERRWARN	+= -_gcc=-Wno-uninitialized
 
 #
 # depends on misc/usba
@@ -108,7 +115,7 @@ TEST		= test
 #
 #	lock_lint rules
 #
-USBA_FILES	= $(USBA_WITHOUT_WUSB_OBJS:%.o=../usba/%.ll)
+USBA_FILES	= $(USBA_OBJS:%.o=../usba/%.ll)
 UHCI_FILES	= $(UHCI_OBJS:%.o=../uhci/%.ll)
 OHCI_FILES	= $(OHCI_OBJS:%.o=../ohci/%.ll)
 EHCI_FILES	= $(EHCI_OBJS:%.o=../ehci/%.ll)
@@ -122,7 +129,6 @@ warlock: $(WARLOCK_OK)
 $(WARLOCK_OK):	$(WARLOCK_OUT) warlock_ddi.files \
 	warlock_standalone warlock_usba.files warlock_with_usba
 	$(TOUCH) $(WARLOCK_OK)
-	
 
 warlock_with_usba: $(WLCMD_DIR)/usb_ac_with_usba.wlcmd  $(WARLOCK_OUT) \
 	warlock_ddi.files warlock_usba.files warlock_ohci.files \

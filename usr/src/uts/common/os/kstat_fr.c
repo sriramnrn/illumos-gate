@@ -20,6 +20,8 @@
  */
 /*
  * Copyright (c) 1992, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright 2014, Joyent, Inc. All rights reserved.
+ * Copyright 2015 Nexenta Systems, Inc. All rights reserved.
  */
 
 /*
@@ -160,6 +162,7 @@ struct {
 	kstat_named_t avenrun_5min;
 	kstat_named_t avenrun_15min;
 	kstat_named_t boot_time;
+	kstat_named_t nsec_per_tick;
 } system_misc_kstat = {
 	{ "ncpus",		KSTAT_DATA_UINT32 },
 	{ "lbolt",		KSTAT_DATA_UINT32 },
@@ -171,6 +174,7 @@ struct {
 	{ "avenrun_5min",	KSTAT_DATA_UINT32 },
 	{ "avenrun_15min",	KSTAT_DATA_UINT32 },
 	{ "boot_time",		KSTAT_DATA_UINT32 },
+	{ "nsec_per_tick",	KSTAT_DATA_UINT32 },
 };
 
 struct {
@@ -634,7 +638,7 @@ default_kstat_update(kstat_t *ksp, int rw)
 	 * way of determining how much space is needed to hold the snapshot:
 	 */
 	if (ksp->ks_data != NULL && ksp->ks_type == KSTAT_TYPE_NAMED &&
-	    (ksp->ks_flags & KSTAT_FLAG_VAR_SIZE)) {
+	    (ksp->ks_flags & (KSTAT_FLAG_VAR_SIZE | KSTAT_FLAG_LONGSTRINGS))) {
 
 		/*
 		 * Add in the space required for the strings
@@ -758,7 +762,8 @@ header_kstat_update(kstat_t *header_ksp, int rw)
 
 	zoneid = getzoneid();
 	for (e = avl_first(t); e != NULL; e = avl_walk(t, e, AVL_AFTER)) {
-		if (kstat_zone_find((kstat_t *)e, zoneid)) {
+		if (kstat_zone_find((kstat_t *)e, zoneid) &&
+		    (e->e_ks.ks_flags & KSTAT_FLAG_INVALID) == 0) {
 			nkstats++;
 		}
 	}
@@ -788,7 +793,8 @@ header_kstat_snapshot(kstat_t *header_ksp, void *buf, int rw)
 
 	zoneid = getzoneid();
 	for (e = avl_first(t); e != NULL; e = avl_walk(t, e, AVL_AFTER)) {
-		if (kstat_zone_find((kstat_t *)e, zoneid)) {
+		if (kstat_zone_find((kstat_t *)e, zoneid) &&
+		    (e->e_ks.ks_flags & KSTAT_FLAG_INVALID) == 0) {
 			bcopy(&e->e_ks, buf, sizeof (kstat_t));
 			buf = (char *)buf + sizeof (kstat_t);
 		}
@@ -803,7 +809,6 @@ system_misc_kstat_update(kstat_t *ksp, int rw)
 {
 	int myncpus = ncpus;
 	int *loadavgp = &avenrun[0];
-	int loadavg[LOADAVG_NSTATS];
 	time_t zone_boot_time;
 	clock_t zone_lbolt;
 	hrtime_t zone_hrtime;
@@ -820,17 +825,11 @@ system_misc_kstat_update(kstat_t *ksp, int rw)
 		 */
 		mutex_enter(&cpu_lock);
 		if (pool_pset_enabled()) {
-			psetid_t mypsid = zone_pset_get(curproc->p_zone);
-			int error;
-
 			myncpus = zone_ncpus_get(curproc->p_zone);
 			ASSERT(myncpus > 0);
-			error = cpupart_get_loadavg(mypsid, &loadavg[0],
-			    LOADAVG_NSTATS);
-			ASSERT(error == 0);
-			loadavgp = &loadavg[0];
 		}
 		mutex_exit(&cpu_lock);
+		loadavgp = &curproc->p_zone->zone_avenrun[0];
 	}
 
 	if (INGLOBALZONE(curproc)) {
@@ -838,9 +837,7 @@ system_misc_kstat_update(kstat_t *ksp, int rw)
 		zone_lbolt = ddi_get_lbolt();
 		zone_nproc = nproc;
 	} else {
-		struct timeval tvp;
-		hrt2tv(curproc->p_zone->zone_zsched->p_mstart, &tvp);
-		zone_boot_time = tvp.tv_sec;
+		zone_boot_time = curproc->p_zone->zone_boot_time;
 
 		zone_hrtime = gethrtime();
 		zone_lbolt = (clock_t)(NSEC_TO_TICK(zone_hrtime) -
@@ -861,6 +858,8 @@ system_misc_kstat_update(kstat_t *ksp, int rw)
 	system_misc_kstat.avenrun_15min.value.ui32	= (uint32_t)loadavgp[2];
 	system_misc_kstat.boot_time.value.ui32		= (uint32_t)
 	    zone_boot_time;
+	system_misc_kstat.nsec_per_tick.value.ui32	= (uint32_t)
+	    nsec_per_tick;
 	return (0);
 }
 
@@ -1154,32 +1153,21 @@ kstat_install(kstat_t *ksp)
 	}
 
 	if (ksp->ks_type == KSTAT_TYPE_NAMED && ksp->ks_data != NULL) {
-		int has_long_strings = 0;
 		uint_t i;
 		kstat_named_t *knp = KSTAT_NAMED_PTR(ksp);
 
 		for (i = 0; i < ksp->ks_ndata; i++, knp++) {
 			if (knp->data_type == KSTAT_DATA_STRING) {
-				has_long_strings = 1;
+				ksp->ks_flags |= KSTAT_FLAG_LONGSTRINGS;
 				break;
 			}
-		}
-		/*
-		 * It is an error for a named kstat with fields of
-		 * KSTAT_DATA_STRING to be non-virtual.
-		 */
-		if (has_long_strings && !(ksp->ks_flags & KSTAT_FLAG_VIRTUAL)) {
-			panic("kstat_install('%s', %d, '%s'): "
-			    "named kstat containing KSTAT_DATA_STRING "
-			    "is not virtual",
-			    ksp->ks_module, ksp->ks_instance,
-			    ksp->ks_name);
 		}
 		/*
 		 * The default snapshot routine does not handle KSTAT_WRITE
 		 * for long strings.
 		 */
-		if (has_long_strings && (ksp->ks_flags & KSTAT_FLAG_WRITABLE) &&
+		if ((ksp->ks_flags & KSTAT_FLAG_LONGSTRINGS) &&
+		    (ksp->ks_flags & KSTAT_FLAG_WRITABLE) &&
 		    (ksp->ks_snapshot == default_kstat_snapshot)) {
 			panic("kstat_install('%s', %d, '%s'): "
 			    "named kstat containing KSTAT_DATA_STRING "
@@ -1209,8 +1197,16 @@ kstat_install(kstat_t *ksp)
 
 	/*
 	 * Now that the kstat is active, make it visible to the kstat driver.
+	 * When copying out kstats the count is determined in
+	 * header_kstat_update() and actually copied into kbuf in
+	 * header_kstat_snapshot(). kstat_chain_lock is held across the two
+	 * calls to ensure that this list doesn't change. Thus, we need to
+	 * also take the lock to ensure that the we don't copy the new kstat
+	 * in the 2nd pass and overrun the buf.
 	 */
+	mutex_enter(&kstat_chain_lock);
 	ksp->ks_flags &= ~KSTAT_FLAG_INVALID;
+	mutex_exit(&kstat_chain_lock);
 	kstat_rele(ksp);
 }
 

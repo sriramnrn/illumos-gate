@@ -36,7 +36,8 @@ HAL_USER =		daemon
 HAL_GROUP =		daemon
 
 # derived from the generated config.h
-HAL_CONFIG_CPPFLAGS =	-DPACKAGE_DATA_DIR=\"/usr/lib\" \
+HAL_CONFIG_CPPFLAGS =	-DPACKAGE_DATA_DIR=\"/usr/share\" \
+			-DPACKAGE_OLD_DATA_DIR=\"/usr/lib\" \
 			-DPACKAGE_BIN_DIR=\"/usr/bin\" \
 			-DPACKAGE_LIBEXEC_DIR=\"/usr/lib/hal\" \
 			-DPACKAGE_SCRIPT_DIR=\"/usr/lib/hal\" \
@@ -53,10 +54,20 @@ HAL_CONFIG_CPPFLAGS =	-DPACKAGE_DATA_DIR=\"/usr/lib\" \
 			-DHAL_USER=\"$(HAL_USER)\" \
 			-DHAL_GROUP=\"$(HAL_GROUP)\"
 
-HAL_DBUS_CPPFLAGS =	-DDBUS_API_SUBJECT_TO_CHANGE -DDBUS_SYSTEMD_DIR=\"/etc/dbus-1/system.d\" \
-			 -I/usr/include/dbus-1.0 -I/usr/lib/dbus-1.0/include
+HAL_DBUS_CPPFLAGS =	-DDBUS_API_SUBJECT_TO_CHANGE \
+			-DDBUS_SYSTEMD_DIR=\"/etc/dbus-1/system.d\" \
+			-I$(ADJUNCT_PROTO)/usr/include/dbus-1.0 \
+			-I$(ADJUNCT_PROTO)/usr/lib/dbus-1.0/include
 
-HAL_GLIB_CPPFLAGS = 	-I/usr/include/glib-2.0 -I/usr/lib/glib-2.0/include
+HAL_GLIB_CPPFLAGS = 	-I$(ADJUNCT_PROTO)/usr/include/glib-2.0 \
+			-I$(ADJUNCT_PROTO)/usr/lib/glib-2.0/include
 
 HAL_GETTEXT_PACKAGE =	$(TEXT_DOMAIN)
 
+CERRWARN +=		-_gcc=-Wno-unused-variable
+CERRWARN +=		-_gcc=-Wno-unused-label
+CERRWARN +=		-_gcc=-Wno-unused-value
+CERRWARN +=		-_gcc=-Wno-extra
+CERRWARN +=		-_gcc=-Wno-parentheses
+CERRWARN +=		-_gcc=-Wno-address
+CERRWARN +=		-_gcc=-Wno-unused-function

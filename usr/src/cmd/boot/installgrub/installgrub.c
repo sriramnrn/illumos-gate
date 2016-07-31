@@ -21,6 +21,8 @@
 /*
  * Copyright (c) 2005, 2010, Oracle and/or its affiliates. All rights reserved.
  * Copyright 2012 Milan Jurik. All rights reserved.
+ * Copyright 2016 Toomas Soome <tsoome@me.com>
+ * Copyright 2016 Nexenta Systems, Inc. All rights reserved.
  */
 
 #include <stdio.h>
@@ -47,12 +49,17 @@
 #include <sys/stat.h>
 #include <sys/multiboot.h>
 #include <sys/sysmacros.h>
+#include <sys/efi_partition.h>
+
+#include <libnvpair.h>
+#include <libfstyp.h>
 
 #include "message.h"
 #include "installgrub.h"
 #include "./../common/bblk_einfo.h"
 #include "./../common/boot_utils.h"
 #include "./../common/mboot_extra.h"
+#include "getresponse.h"
 
 #ifndef	TEXT_DOMAIN
 #define	TEXT_DOMAIN	"SUNW_OST_OSCMD"
@@ -106,7 +113,7 @@ static void usage(char *);
 static int read_stage1_from_file(char *, ig_data_t *);
 static int read_stage2_from_file(char *, ig_data_t *);
 static int read_stage1_from_disk(int, char *);
-static int read_stage2_from_disk(int, ig_stage2_t *);
+static int read_stage2_from_disk(int, ig_stage2_t *, int);
 static int prepare_stage1(ig_data_t *);
 static int prepare_stage2(ig_data_t *, char *);
 static void prepare_fake_multiboot(ig_stage2_t *);
@@ -126,6 +133,11 @@ main(int argc, char *argv[])
 
 	(void) setlocale(LC_ALL, "");
 	(void) textdomain(TEXT_DOMAIN);
+	if (init_yes() < 0) {
+		(void) fprintf(stderr, gettext(ERR_MSG_INIT_YES),
+		    strerror(errno));
+		exit(BC_ERROR);
+	}
 
 	/*
 	 * retro-compatibility: installing the bootblock is the default
@@ -388,7 +400,7 @@ handle_getinfo(char *progname, char **argv)
 		goto out_dev;
 	}
 
-	ret = read_stage2_from_disk(device->part_fd, stage2);
+	ret = read_stage2_from_disk(device->part_fd, stage2, device->type);
 	if (ret == BC_ERROR) {
 		(void) fprintf(stderr, gettext("Error reading stage2 from "
 		    "%s\n"), device_path);
@@ -403,7 +415,7 @@ handle_getinfo(char *progname, char **argv)
 		goto out_dev;
 	}
 
-	einfo = find_einfo(stage2->extra);
+	einfo = find_einfo(stage2->extra, stage2->extra_size);
 	if (einfo == NULL) {
 		retval = BC_NOEINFO;
 		(void) fprintf(stderr, gettext("No extended information "
@@ -486,7 +498,8 @@ handle_mirror(char *progname, char **argv)
 		goto out_devs;
 	}
 
-	ret = read_stage2_from_disk(curr_device->part_fd, stage2_curr);
+	ret = read_stage2_from_disk(curr_device->part_fd, stage2_curr,
+	    curr_device->type);
 	if (ret == BC_ERROR) {
 		BOOT_DEBUG("Error reading first stage2 blocks from %s\n",
 		    curr_device->path);
@@ -501,7 +514,7 @@ handle_mirror(char *progname, char **argv)
 		goto out_devs;
 	}
 
-	einfo_curr = find_einfo(stage2_curr->extra);
+	einfo_curr = find_einfo(stage2_curr->extra, stage2_curr->extra_size);
 	if (einfo_curr != NULL)
 		updt_str = einfo_get_string(einfo_curr);
 
@@ -622,6 +635,10 @@ propagate_bootblock(ig_data_t *source, ig_data_t *target, char *updt_str)
 static int
 init_device(ig_device_t *device, char *path)
 {
+	struct dk_gpt *vtoc;
+	fstyp_handle_t fhdl;
+	const char *fident;
+
 	bzero(device, sizeof (*device));
 	device->part_fd = -1;
 	device->disk_fd = -1;
@@ -654,8 +671,26 @@ init_device(ig_device_t *device, char *path)
 		return (BC_ERROR);
 	}
 
+	if (efi_alloc_and_read(device->disk_fd, &vtoc) >= 0) {
+		device->type = IG_DEV_EFI;
+		efi_free(vtoc);
+	}
+
 	if (get_raw_partition_fd(device) != BC_SUCCESS)
 		return (BC_ERROR);
+
+	if (is_efi(device->type)) {
+		if (fstyp_init(device->part_fd, 0, NULL, &fhdl) != 0)
+			return (BC_ERROR);
+
+		if (fstyp_ident(fhdl, "zfs", &fident) != 0) {
+			fstyp_fini(fhdl);
+			(void) fprintf(stderr, gettext("Booting of EFI labeled "
+			    "disks is only supported with ZFS\n"));
+			return (BC_ERROR);
+		}
+		fstyp_fini(fhdl);
+	}
 
 	if (get_start_sector(device) != BC_SUCCESS)
 		return (BC_ERROR);
@@ -699,6 +734,21 @@ get_start_sector(ig_device_t *device)
 	ext_part_t		*epp;
 	struct part_info	dkpi;
 	struct extpart_info	edkpi;
+
+	if (is_efi(device->type)) {
+		struct dk_gpt *vtoc;
+
+		if (efi_alloc_and_read(device->disk_fd, &vtoc) < 0)
+			return (BC_ERROR);
+
+		device->start_sector = vtoc->efi_parts[device->slice].p_start;
+		/* GPT doesn't use traditional slice letters */
+		device->slice = 0xff;
+		device->partition = 0;
+
+		efi_free(vtoc);
+		goto found_part;
+	}
 
 	mboot = (struct mboot *)device->boot_sector;
 
@@ -806,7 +856,7 @@ found_part:
 	/* get confirmation for -m */
 	if (write_mbr && !force_mbr) {
 		(void) fprintf(stdout, MBOOT_PROMPT);
-		if (getchar() != 'y') {
+		if (!yes()) {
 			write_mbr = 0;
 			(void) fprintf(stdout, MBOOT_NOT_UPDATED);
 			return (BC_ERROR);
@@ -957,8 +1007,18 @@ write_stage2(ig_data_t *install)
 	 * For disk, write stage2 starting at STAGE2_BLKOFF sector.
 	 * Note that we use stage2->buf rather than stage2->file, because we
 	 * may have extended information after the latter.
+	 *
+	 * If we're writing to an EFI-labeled disk where stage2 lives in the
+	 * 3.5MB boot loader gap following the ZFS vdev labels, make sure the
+	 * size of the buffer doesn't exceed the size of the gap.
 	 */
-	offset = STAGE2_BLKOFF * SECTOR_SIZE;
+	if (is_efi(device->type) && stage2->buf_size > STAGE2_MAXSIZE) {
+		(void) fprintf(stderr, WRITE_FAIL_STAGE2);
+		return (BC_ERROR);
+	}
+
+	offset = STAGE2_BLKOFF(device->type) * SECTOR_SIZE;
+
 	if (write_out(device->part_fd, stage2->buf, stage2->buf_size,
 	    offset) != BC_SUCCESS) {
 		perror("write");
@@ -967,7 +1027,7 @@ write_stage2(ig_data_t *install)
 
 	/* Simulate the "old" installgrub output. */
 	(void) fprintf(stdout, WRITE_STAGE2_DISK, device->partition,
-	    (stage2->buf_size / SECTOR_SIZE) + 1, STAGE2_BLKOFF,
+	    (stage2->buf_size / SECTOR_SIZE) + 1, STAGE2_BLKOFF(device->type),
 	    stage2->first_sector);
 
 	return (BC_SUCCESS);
@@ -1161,7 +1221,7 @@ read_stage1_from_disk(int dev_fd, char *stage1_buf)
 }
 
 static int
-read_stage2_from_disk(int dev_fd, ig_stage2_t *stage2)
+read_stage2_from_disk(int dev_fd, ig_stage2_t *stage2, int type)
 {
 	uint32_t		size;
 	uint32_t		buf_size;
@@ -1172,7 +1232,7 @@ read_stage2_from_disk(int dev_fd, ig_stage2_t *stage2)
 	assert(dev_fd != -1);
 
 	if (read_in(dev_fd, mboot_scan, sizeof (mboot_scan),
-	    STAGE2_BLKOFF * SECTOR_SIZE) != BC_SUCCESS) {
+	    STAGE2_BLKOFF(type) * SECTOR_SIZE) != BC_SUCCESS) {
 		perror(gettext("Error reading stage2 sectors"));
 		return (BC_ERROR);
 	}
@@ -1208,7 +1268,7 @@ read_stage2_from_disk(int dev_fd, ig_stage2_t *stage2)
 	}
 	stage2->buf_size = buf_size;
 
-	if (read_in(dev_fd, stage2->buf, buf_size, STAGE2_BLKOFF *
+	if (read_in(dev_fd, stage2->buf, buf_size, STAGE2_BLKOFF(type) *
 	    SECTOR_SIZE) != BC_SUCCESS) {
 		perror("read");
 		free(stage2->buf);
@@ -1221,6 +1281,7 @@ read_stage2_from_disk(int dev_fd, ig_stage2_t *stage2)
 	stage2->mboot_off = mboot_off;
 	stage2->mboot = (multiboot_header_t *)(stage2->buf + stage2->mboot_off);
 	stage2->extra = stage2->buf + P2ROUNDUP(stage2->file_size, 8);
+	stage2->extra_size = stage2->buf_size - P2ROUNDUP(stage2->file_size, 8);
 
 	return (BC_SUCCESS);
 }
@@ -1241,7 +1302,8 @@ is_update_necessary(ig_data_t *data, char *updt_str)
 	bzero(&stage2_disk, sizeof (ig_stage2_t));
 
 	/* Gather stage2 (if present) from the target device. */
-	if (read_stage2_from_disk(dev_fd, &stage2_disk) != BC_SUCCESS) {
+	if (read_stage2_from_disk(dev_fd, &stage2_disk, device->type)
+	    != BC_SUCCESS) {
 		BOOT_DEBUG("Unable to read stage2 from %s\n", device->path);
 		BOOT_DEBUG("No multiboot wrapped stage2 on %s\n", device->path);
 		return (B_TRUE);
@@ -1251,7 +1313,7 @@ is_update_necessary(ig_data_t *data, char *updt_str)
 	 * Look for the extended information structure in the extra payload
 	 * area.
 	 */
-	einfo = find_einfo(stage2_disk.extra);
+	einfo = find_einfo(stage2_disk.extra, stage2_disk.extra_size);
 	if (einfo == NULL) {
 		BOOT_DEBUG("No extended information available\n");
 		return (B_TRUE);
@@ -1364,8 +1426,16 @@ prepare_stage2(ig_data_t *install, char *updt_str)
 			i += 2;
 		}
 	} else {
-		/* Solaris VTOC */
-		stage2->first_sector = device->start_sector + STAGE2_BLKOFF;
+		/* Solaris VTOC & EFI */
+		if (device->start_sector >
+		    UINT32_MAX - STAGE2_BLKOFF(device->type)) {
+			fprintf(stderr, gettext("Error: partition start sector "
+			    "must be less than %lld\n"),
+			    (uint64_t)UINT32_MAX - STAGE2_BLKOFF(device->type));
+			return (BC_ERROR);
+		}
+		stage2->first_sector = device->start_sector +
+		    STAGE2_BLKOFF(device->type);
 		BOOT_DEBUG("stage2 first sector: %d\n", stage2->first_sector);
 		/*
 		 * In a solaris partition, stage2 is written to contiguous
@@ -1439,15 +1509,18 @@ get_raw_partition_path(ig_device_t *device)
 	}
 
 	len = strlen(raw);
-	if (raw[len - 2] != 's' || raw[len - 1] == '2') {
+	if (!is_efi(device->type) &&
+	    (raw[len - 2] != 's' || raw[len - 1] == '2')) {
 		(void) fprintf(stderr, NOT_ROOT_SLICE);
 		free(raw);
 		return (NULL);
 	}
 	device->slice = atoi(&raw[len - 1]);
 
-	raw[len - 2] = 's';
-	raw[len - 1] = '2';
+	if (!is_efi(device->type)) {
+		raw[len - 2] = 's';
+		raw[len - 1] = '2';
+	}
 
 	return (raw);
 }

@@ -76,6 +76,8 @@ LINTTAGS	+= -erroff=E_PTRDIFF_OVERFLOW
 LINTTAGS	+= -erroff=E_ASSIGN_NARROW_CONV
 LINTTAGS	+= -erroff=E_BAD_PTR_CAST_ALIGN
 
+CERRWARN	+= -_gcc=-Wno-uninitialized
+
 #
 #	Default build targets.
 #
@@ -85,9 +87,11 @@ def:		$(DEF_DEPS)
 
 all:		$(ALL_DEPS)
 
-clean:		$(CLEAN_DEPS)
+# This build only 64-bit, but the lint32 below
+# needs corresponding clean/clobber deps.
+clean:		$(CLEAN_DEPS) clean.debug32
 
-clobber:	$(CLOBBER_DEPS)
+clobber:	$(CLOBBER_DEPS) clobber.debug32
 
 lint:		$(LINT_DEPS)
 

@@ -21,6 +21,7 @@
 
 /*
  * Copyright (c) 1988, 2010, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2013, Joyent, Inc. All rights reserved.
  */
 
 /*	Copyright (c) 1983, 1984, 1985, 1986, 1987, 1988, 1989 AT&T	*/
@@ -723,7 +724,12 @@ typedef enum symfollow	symfollow_t;
 typedef enum vcexcl	vcexcl_t;
 typedef enum create	create_t;
 
-/* Vnode Events - Used by VOP_VNEVENT */
+/*
+ * Vnode Events - Used by VOP_VNEVENT
+ * The VE_PRE_RENAME_* events fire before the rename operation and are
+ * primarily used for specialized applications, such as NFSv4 delegation, which
+ * need to know about rename before it occurs.
+ */
 typedef enum vnevent	{
 	VE_SUPPORT	= 0,	/* Query */
 	VE_RENAME_SRC	= 1,	/* Rename, with vnode as source */
@@ -733,7 +739,11 @@ typedef enum vnevent	{
 	VE_CREATE	= 5,	/* Create with vnode's name which exists */
 	VE_LINK		= 6, 	/* Link with vnode's name as source */
 	VE_RENAME_DEST_DIR	= 7, 	/* Rename with vnode as target dir */
-	VE_MOUNTEDOVER	= 8 	/* File or Filesystem got mounted over vnode */
+	VE_MOUNTEDOVER	= 8, 	/* File or Filesystem got mounted over vnode */
+	VE_TRUNCATE = 9,	/* Truncate */
+	VE_PRE_RENAME_SRC = 10,	/* Pre-rename, with vnode as source */
+	VE_PRE_RENAME_DEST = 11, /* Pre-rename, with vnode as target/dest. */
+	VE_PRE_RENAME_DEST_DIR = 12 /* Pre-rename with vnode as target dir */
 } vnevent_t;
 
 /*
@@ -1290,7 +1300,14 @@ void	vnevent_create(vnode_t *, caller_context_t *);
 void	vnevent_link(vnode_t *, caller_context_t *);
 void	vnevent_rename_dest_dir(vnode_t *, caller_context_t *ct);
 void	vnevent_mountedover(vnode_t *, caller_context_t *);
+void	vnevent_truncate(vnode_t *, caller_context_t *);
 int	vnevent_support(vnode_t *, caller_context_t *);
+void	vnevent_pre_rename_src(vnode_t *, vnode_t *, char *,
+	    caller_context_t *);
+void	vnevent_pre_rename_dest(vnode_t *, vnode_t *, char *,
+	    caller_context_t *);
+void	vnevent_pre_rename_dest_dir(vnode_t *, vnode_t *, char *,
+	    caller_context_t *);
 
 /* Vnode specific data */
 void vsd_create(uint_t *, void (*)(void *));

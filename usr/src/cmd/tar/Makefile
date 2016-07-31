@@ -37,6 +37,7 @@ LINTFLAGS += -u
 LDLIBS += -lsec -lcmdutils -lnvpair -ltsol
 
 CFLAGS += $(CCVERBOSE)
+CERRWARN += -_gcc=-Wno-uninitialized
 
 CPPFLAGS += -DEUC
 

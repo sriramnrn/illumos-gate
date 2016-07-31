@@ -25,7 +25,7 @@
 
 PROG= sshd
 
-DIRS= $(ROOTLIBSSH)
+DIRS= $(ROOTLIBSSH) $(ROOTLIBSUNSSH)
 
 OBJS	= sshd.o \
 	  altprivsep.o \
@@ -60,10 +60,11 @@ OBJS	= sshd.o \
 	  serverloop.o \
 	  session.o \
 	  sshlogin.o \
-	  sshpty.o \
-	  ../sftp-server/sftp-server.o
+	  sshpty.o
 
-SRCS	= $(OBJS:.o=.c)
+EXTOBJS = sftp-server.o
+
+SRCS	= $(OBJS:.o=.c) ../sftp-server/sftp-server.c
 
 include ../../Makefile.cmd
 include ../Makefile.ssh-common
@@ -88,22 +89,29 @@ POFILE_DIR= ..
 
 all: $(PROG)
 
-$(PROG): $(OBJS) $(MAPFILES) ../libssh/$(MACH)/libssh.a \
+$(PROG): $(OBJS) $(EXTOBJS) $(MAPFILES) ../libssh/$(MACH)/libssh.a \
 	../libopenbsd-compat/$(MACH)/libopenbsd-compat.a
-	$(LINK.c) $(OBJS) -o $@ $(LDLIBS) $(DYNFLAGS)
+	$(LINK.c) $(OBJS) $(EXTOBJS) -o $@ $(LDLIBS) $(DYNFLAGS)
 	$(POST_PROCESS)
 
-install: all $(DIRS) $(ROOTLIBSSHPROG) $(ROOTLIBSSH)
+%.o : ../sftp-server/%.c
+	$(COMPILE.c) -o $@ $<
+	$(POST_PROCESS_O)
+
+install: all $(DIRS) $(ROOTLIBSSHPROG) $(ROOTLIBSSH) $(ROOTLIBSUNSSH)
 
 
 $(ROOTLIBSSHPROG)/%: %
+	$(INS.file)
+
+$(ROOTLIBSUNSSHPROG)/%: %
 	$(INS.file)
 
 $(DIRS):
 	$(INS.dir)
 
 clean:
-	$(RM) -f $(OBJS) $(PROG)
+	$(RM) $(OBJS) $(EXTOBJS)
 
 lint:	lint_SRCS
 

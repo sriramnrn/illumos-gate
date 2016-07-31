@@ -273,6 +273,8 @@
 @ MSG_USD_RUNPATH	"   unused search path=%s  (RUNPATH/RPATH from \
 			 file %s)\n"
 
+@ MSG_CAP_IGN_UNKCAP	"ignoring unknown capability: %s"
+
 @ _END_
 
 # The following strings represent reserved words, files, pathnames and symbols.
